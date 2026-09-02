@@ -23,10 +23,23 @@ and it lives in `src/shell-head.html`.
 
 ## Testing without touching the kids' live data
 
-`index.html` talks to the real database. To poke at the UI safely, build a copy with the Firebase
-config stripped out of `shell-head.html` — the app falls back to local-only mode (it says so on the
-player-selection screen) and reads/writes nothing but `localStorage`. Seed a state with
-`localStorage.setItem('kumon-progress:<name>', JSON.stringify({level, paper, bossCleared, history, wallet}))`.
+`index.html` talks to the real database. For UI work run the harness instead:
+
+    node harness.mjs     # -> http://localhost:5174
+
+It builds the same app with the Firebase config stripped and the PIN gate off, so it runs local-only
+(the player-selection screen says so) and reads/writes nothing but `localStorage`. Seed a state from
+the browser console with
+`localStorage.setItem('kumon-progress:<name>', JSON.stringify({level, paper, bossCleared, history, wallet}))`
+and reload. Note `loadProgress` still runs its migrations on whatever you seed — for level A it will
+backfill the SEED_SYNC passes, so seed a later level if you want the numbers left alone.
+
+## Streak ladder
+
+One ladder, `STREAK_TIERS` (4 / 9 / 14 / 18 right in a row), drives everything that reacts to an
+in-session streak: the combo shout and its colour, the pet's charge animation (`.petcharge-1…4`, each
+bigger, brighter and faster) and the question sheet's glow (`.sheet-hot-1…4`). Change the thresholds
+there and all three move together.
 
 ## Data
 

@@ -52,13 +52,17 @@ function randReducedFrac(maxD) {
   return [1, 2];
 }
 
-// combo tiers, arcade style — only shows from 3 hits onward
-function comboTier(s) {
-  if (s < 5) return { label: "COMBO!", color: "#35E0FF" };
-  if (s < 8) return { label: "SUPER COMBO!", color: "#8A5CFF" };
-  if (s < 12) return { label: "HYPER COMBO!", color: "#FF2DA8" };
-  return { label: "ULTRA COMBO!!", color: "#FFB020" };
-}
+// in-session hot streak, 4 levels — lights at 4, 9, 14 and 18 right in a row.
+// One ladder drives everything that reacts to a streak: the pet's charge glow, the
+// sheet glow and the combo shout, so they always step up together.
+const STREAK_TIERS = [
+  { at: 4, label: "COMBO!", color: "#35E0FF" },
+  { at: 9, label: "SUPER COMBO!", color: "#8A5CFF" },
+  { at: 14, label: "HYPER COMBO!", color: "#FF2DA8" },
+  { at: 18, label: "ULTRA COMBO!!", color: "#FFB020" },
+];
+const streakTier = (s) => STREAK_TIERS.reduce((n, t, i) => (s >= t.at ? i + 1 : n), 0); // 0 = cold
+const comboTier = (s) => STREAK_TIERS[Math.max(0, streakTier(s) - 1)];
 
 // ---------- curriculum ----------
 // tier = Math.ceil(paper / 20) → 1..5 difficulty steps inside a level
@@ -720,7 +724,7 @@ function playWrong() {
 
 // ---------- shared settings (admin panel), synced via cloud ----------
 const ADMIN_PIN = "2026";
-const BUILD_TAG = "v1.14 · 2 Sep";
+const BUILD_TAG = "v1.15 · 2 Sep";
 
 // ---------- full screen ----------
 const fsSupported = () => typeof document !== "undefined" && !!(document.fullscreenEnabled || document.webkitFullscreenEnabled) && !(window.navigator && window.navigator.standalone);
@@ -1447,7 +1451,7 @@ export default function AutoMathtics() {
     if (kind === "correct") {
       const ns = streak + 1;
       setStreak(ns);
-      setFlash({ kind, text: `⭐ Correct! ${ansStr}`, combo: ns >= 3 ? ns : 0 });
+      setFlash({ kind, text: `⭐ Correct! ${ansStr}`, combo: streakTier(ns) ? ns : 0 });
       // every 5th question closes a paper — bigger jingle instead of the blip
       if ((qIdx + 1) % Q_PER_PAPER === 0) { playPaperDone(); setPaperBurst((n) => n + 1); } else playCorrect();
     } else if (kind === "incorrect") {
@@ -1647,7 +1651,7 @@ export default function AutoMathtics() {
 
       {/* ---------- user select ---------- */}
       {screen === "users" && (
-        <div style={{ ...st.card, ...st.userSelectCard }} className="player-select-shell">
+        <div style={{ ...st.card, ...st.userSelectCard }} className="player-select-shell screen">
           <div style={st.kicker} className="selection-kicker">AUTOMATHTICS · MATH GRID</div>
           <h1 style={st.title} className="selection-title">PLAYER SELECTION</h1>
           <div style={st.subtle} className="selection-subtitle">who's on a mission today?</div>
@@ -1695,7 +1699,7 @@ export default function AutoMathtics() {
 
       {/* ---------- admin PIN gate ---------- */}
       {screen === "kidPin" && pendingUser && (
-        <div style={{ ...st.card, maxWidth: 420 }}>
+        <div style={{ ...st.card, maxWidth: 420 }} className="screen">
           <img src={pendingUser.avatar} alt="" style={{ width: 84, height: 84, borderRadius: "50%", objectFit: "cover", border: `3px solid ${pendingUser.color}`, boxShadow: `0 0 28px ${pendingUser.color}66`, display: "block", margin: "4px auto 10px" }} />
           <div style={st.kicker}>{pendingUser.name.toUpperCase()} · ENTER PIN</div>
           <div style={{ display: "flex", justifyContent: "center", gap: 14, margin: "14px 0 6px" }} aria-label="PIN" className={pinErr ? "shake" : ""}>
@@ -1708,7 +1712,7 @@ export default function AutoMathtics() {
             {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((k) => (
               <button key={k} style={st.key} onClick={() => kidPinPress(String(k))}>{k}</button>
             ))}
-            <button style={{ ...st.key, ...st.keyBack }} onClick={() => { setPinErr(false); setPin(pin.slice(0, -1)); }}>⌫</button>
+            <button className="padkey" style={{ ...st.key, ...st.keyBack }} onClick={() => { setPinErr(false); setPin(pin.slice(0, -1)); }}>⌫</button>
             <button style={st.key} onClick={() => kidPinPress("0")}>0</button>
             <span></span>
           </div>
@@ -1717,7 +1721,7 @@ export default function AutoMathtics() {
       )}
 
       {screen === "changePin" && user && prog && (
-        <div style={{ ...st.card, maxWidth: 420 }}>
+        <div style={{ ...st.card, maxWidth: 420 }} className="screen">
           <div style={st.kicker}>{user.name.toUpperCase()} · 🔑 CHANGE PIN</div>
           <h1 style={{ ...st.title, fontSize: 20 }}>{cpStep === 0 ? "Enter your current PIN" : cpStep === 1 ? "Choose a new PIN" : "Type the new PIN again"}</h1>
           <div style={{ display: "flex", justifyContent: "center", gap: 14, margin: "14px 0 6px" }} aria-label="PIN">
@@ -1730,7 +1734,7 @@ export default function AutoMathtics() {
             {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((k) => (
               <button key={k} style={st.key} onClick={() => changePinPress(String(k))}>{k}</button>
             ))}
-            <button style={{ ...st.key, ...st.keyBack }} onClick={() => { setPinErr(false); setPin(pin.slice(0, -1)); }}>⌫</button>
+            <button className="padkey" style={{ ...st.key, ...st.keyBack }} onClick={() => { setPinErr(false); setPin(pin.slice(0, -1)); }}>⌫</button>
             <button style={st.key} onClick={() => changePinPress("0")}>0</button>
             <span></span>
           </div>
@@ -1739,7 +1743,7 @@ export default function AutoMathtics() {
       )}
 
       {screen === "adminPin" && (
-        <div style={st.card}>
+        <div style={st.card} className="screen">
           <div style={st.kicker}>AUTOMATHTICS · RESTRICTED</div>
           <h1 style={st.title}>ADMIN ACCESS</h1>
           <div style={{ ...st.inputBox, letterSpacing: 10, fontSize: 30 }} aria-label="PIN">
@@ -1750,7 +1754,7 @@ export default function AutoMathtics() {
             {[7, 8, 9, 4, 5, 6, 1, 2, 3].map((k) => (
               <button key={k} style={st.key} onClick={() => { if (pin.length < 4) { setPinErr(false); setPin(pin + k); } }}>{k}</button>
             ))}
-            <button style={{ ...st.key, ...st.keyBack }} onClick={() => setPin(pin.slice(0, -1))}>⌫</button>
+            <button className="padkey" style={{ ...st.key, ...st.keyBack }} onClick={() => setPin(pin.slice(0, -1))}>⌫</button>
             <button style={st.key} onClick={() => { if (pin.length < 4) { setPinErr(false); setPin(pin + "0"); } }}>0</button>
             <button
               style={{ ...st.key, color: "#2DFFB3", borderColor: "#2DFFB3" }}
@@ -1771,7 +1775,7 @@ export default function AutoMathtics() {
 
       {/* ---------- admin panel ---------- */}
       {screen === "admin" && draft && (
-        <div style={st.card}>
+        <div style={st.card} className="screen">
           <div style={st.kicker}>AUTOMATHTICS · ADMIN PANEL</div>
           <h1 style={st.title}>TIME CONTROL</h1>
           <p style={{ ...st.introText, textAlign: "left" }}>
@@ -1934,7 +1938,7 @@ export default function AutoMathtics() {
       {/* ---------- home ---------- */}
       {screen === "home" && prog && (
         <>
-          <header style={st.header}>
+          <header style={st.header} className="screen">
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <span style={{ position: "relative", display: "inline-block" }} className={prog.wallet && prog.wallet.ring === "ring_pulse" ? "ringpulse" : ""}>
                 <img src={user.avatar} alt="" style={{ width: 40, height: 40, borderRadius: "50%", objectFit: "cover", border: `2px solid ${prog.wallet && prog.wallet.ring === "ring_halo" ? "#FFB020" : user.color}`, display: "block" }} />
@@ -1952,7 +1956,7 @@ export default function AutoMathtics() {
             </span>
           </header>
 
-          <div style={{ ...st.card, ...(prog.wallet && prog.wallet.activeBg && BG_STYLES[prog.wallet.activeBg] ? { background: BG_STYLES[prog.wallet.activeBg] } : {}) }}>
+          <div className="screen" style={{ ...st.card, ...(prog.wallet && prog.wallet.activeBg && BG_STYLES[prog.wallet.activeBg] ? { background: BG_STYLES[prog.wallet.activeBg] } : {}) }}>
             {prog.paper > PAPERS_PER_LEVEL ? (
               <p style={st.introText}>🏆 All levels complete! Incredible work. Tap below to practice any papers again.</p>
             ) : (
@@ -2076,7 +2080,7 @@ export default function AutoMathtics() {
 
       {/* ---------- how-to ---------- */}
       {screen === "howto" && (
-        <div style={st.card}>
+        <div style={st.card} className="screen">
           <div style={st.kicker}>LEVEL {LEVELS[levelIdx].id} · HOW TO</div>
           <h2 style={{ ...st.title, fontSize: 22, marginBottom: 12 }}>{HOWTO[levelIdx].title}</h2>
 
@@ -2110,14 +2114,14 @@ export default function AutoMathtics() {
 
       {/* ---------- session ---------- */}
       {screen === "session" && q && (
-        <div style={st.playArea}>
+        <div style={st.playArea} className="screen">
           <div style={st.statusRow}>
             <span style={{ ...st.qCount, display: "inline-flex", alignItems: "center", gap: 7 }}>
               <span className={prog.wallet && prog.wallet.ring === "ring_pulse" ? "ringpulse" : ""} style={{ display: "inline-block", borderRadius: "50%", ...(prog.wallet && prog.wallet.ring === "ring_halo" ? { boxShadow: "0 0 0 2px rgba(255,176,32,.35), 0 0 10px 2px rgba(255,176,32,.55)" } : {}) }}>
                 <img src={user.avatar} alt="" style={{ width: 22, height: 22, borderRadius: "50%", objectFit: "cover", border: `1.5px solid ${prog.wallet && prog.wallet.ring === "ring_halo" ? "#FFB020" : user.color}`, display: "block" }} />
               </span>
               {sessionMode === "boss" ? `👑 CHECK POINT T${prog.bossCleared + 1}` : sessionMode === "scan" ? "🧠 SCAN" : `Paper ${curPaper}`} · {qIdx + 1}/{qs.length}
-              {petEmoji && <span className={streak >= 3 ? "petcharge" : ""} style={{ marginLeft: 4, fontSize: 16 }} aria-hidden="true">{petEmoji}</span>}
+              {petEmoji && <span className={streakTier(streak) ? "petcharge petcharge-" + streakTier(streak) : "petsway"} style={{ marginLeft: 4, fontSize: 16 }} aria-hidden="true">{petEmoji}</span>}
             </span>
             <span style={{ ...st.clock, color: timerColor }}>⏱ {timeLeft}s</span>
           </div>
@@ -2140,12 +2144,13 @@ export default function AutoMathtics() {
             ))}
           </div>
 
-          <div style={st.sheet}>
+          <div style={st.sheet} className={"sheet" + (streakTier(streak) ? " sheet-hot-" + streakTier(streak) : "")}>
             <div style={st.marginLine} aria-hidden="true" />
-            <div style={{ textAlign: "center" }}>
+            {/* keyed so each new question slides in instead of snapping */}
+            <div key={qIdx} className="qin" style={{ textAlign: "center" }}>
               <QuestionView q={q} />
             </div>
-            <div style={st.inputBox} aria-label="your answer">
+            <div style={{ ...st.inputBox, borderStyle: input === "" ? "dashed" : "solid", boxShadow: input === "" ? "none" : "0 0 16px rgba(53,224,255,.32)" }} aria-label="your answer">
               {input === "" ? (
                 <span style={{ color: "#9BB2C6" }}>answer…</span>
               ) : rtlInput ? (
@@ -2162,16 +2167,16 @@ export default function AutoMathtics() {
           <div style={st.padWrap}>
             <div style={st.pad}>
               {PAD_KEYS.map((k) => (
-                <button key={k} style={st.key} onClick={() => pressKey(String(k))}>{k}</button>
+                <button key={k} className="padkey" style={st.key} onClick={() => pressKey(String(k))}>{k}</button>
               ))}
-              <button style={st.key} onClick={() => pressKey("0")}>0</button>
+              <button className="padkey" style={st.key} onClick={() => pressKey("0")}>0</button>
               {isFractionLevel ? (
                 <>
-                  <button style={{ ...st.key, ...st.keySlash }} onClick={() => pressKey("/")} aria-label="fraction bar">∕</button>
-                  <button style={{ ...st.key, ...st.keyBack }} onClick={pressBackspace} aria-label="backspace">⌫</button>
+                  <button className="padkey" style={{ ...st.key, ...st.keySlash }} onClick={() => pressKey("/")} aria-label="fraction bar">∕</button>
+                  <button className="padkey" style={{ ...st.key, ...st.keyBack }} onClick={pressBackspace} aria-label="backspace">⌫</button>
                 </>
               ) : (
-                <button style={{ ...st.key, ...st.keyBack, gridColumn: "span 2" }} onClick={pressBackspace} aria-label="backspace">⌫</button>
+                <button className="padkey" style={{ ...st.key, ...st.keyBack, gridColumn: "span 2" }} onClick={pressBackspace} aria-label="backspace">⌫</button>
               )}
             </div>
             <div style={st.actionCol}>
@@ -2191,7 +2196,7 @@ export default function AutoMathtics() {
         const owned = (id) => (w.inventory || []).includes(id);
         const equipped = (it) => it.kind === "shield" ? false : w[KIND_SLOT[it.kind]] === it.id;
         return (
-          <div style={st.card}>
+          <div style={st.card} className="screen">
             <div style={st.kicker}>🛒 GRID SHOP · {user.name.toUpperCase()}</div>
             <div style={{ display: "flex", gap: 10, justifyContent: "center", margin: "10px 0 6px", flexWrap: "wrap" }}>
               <span style={{ border: "1.5px solid #35E0FF", borderRadius: 10, padding: "6px 14px", fontFamily: "Consolas, monospace", fontWeight: 800, color: "#EAF2FF" }}>⚡ {bal.gcBal}</span>
@@ -2207,7 +2212,7 @@ export default function AutoMathtics() {
                 const afford = bal.gcBal >= it.cost;
                 const shieldCount = it.kind === "shield" ? (w.shields || 0) : 0;
                 return (
-                  <div key={it.id} style={{ background: "#0B0E23", border: `1.5px solid ${equipped(it) ? "#2DFFB3" : own ? "#8A5CFF" : afford ? "#2A3170" : "#1A1F45"}`, borderRadius: 12, padding: "10px 10px 12px", textAlign: "center", opacity: !own && !afford ? 0.55 : 1 }}>
+                  <div key={it.id} className="shopitem" style={{ background: "#0B0E23", border: `1.5px solid ${equipped(it) ? "#2DFFB3" : own ? "#8A5CFF" : afford ? "#2A3170" : "#1A1F45"}`, borderRadius: 12, padding: "10px 10px 12px", textAlign: "center", opacity: !own && !afford ? 0.55 : 1 }}>
                     <div style={{ fontSize: 26 }}>{it.emoji}</div>
                     <div style={{ fontSize: 12.5, fontWeight: 700, color: "#EAF2FF", minHeight: 32 }}>{it.name}{it.kind === "shield" && shieldCount > 0 ? ` (×${shieldCount})` : ""}</div>
                     {it.kind === "shield" ? (
@@ -2313,7 +2318,7 @@ export default function AutoMathtics() {
         const energy = energyFor(glyph, passed, prog.bossCleared >= 5);
         const [exitX, exitY] = pointAt(glyph.route, 1);
         return (
-          <div style={st.card}>
+          <div style={st.card} className="screen">
             <div style={st.kicker}>🗺 LEVEL {LEVELS[levelIdx].id} ROUTE · {user.name.toUpperCase()}</div>
             <div className="tronmap" style={{ background: "#070A1E", border: "1px solid #2A3170", borderRadius: 14, padding: "16px 10px 10px", margin: "12px 0", position: "relative", overflow: "hidden" }}>
               <svg viewBox="-18 -18 236 276" role="img"
@@ -2447,7 +2452,7 @@ export default function AutoMathtics() {
 
       {/* ---------- restore from save code ---------- */}
       {screen === "restore" && user && (
-        <div style={st.card}>
+        <div style={st.card} className="screen">
           <div style={st.kicker}>📥 RESTORE · {user.name.toUpperCase()}</div>
           <p style={{ ...st.introText, textAlign: "left" }}>
             Moving progress by hand? On the other device open the admin panel's <b>Log → Copy all</b>, send the text
@@ -2470,7 +2475,7 @@ export default function AutoMathtics() {
 
       {/* ---------- log file viewer ---------- */}
       {screen === "log" && prog && (
-        <div style={st.card}>
+        <div style={st.card} className="screen">
           <div style={st.kicker}>📄 LOG FILE · {user.name.toUpperCase()}</div>
           <p style={{ ...st.introText, textAlign: "center" }}>
             Progress syncs automatically through the cloud — this log is your readable record and
@@ -2493,7 +2498,7 @@ export default function AutoMathtics() {
 
       {/* ---------- summary ---------- */}
       {screen === "summary" && lastSummary && (
-        <div style={st.card}>
+        <div style={st.card} className="screen">
           {lastSummary.finishedAll ? (
             <h2 style={{ margin: "0 0 4px", color: "#8E24AA" }}>🏆 ALL LEVELS COMPLETE!</h2>
           ) : lastSummary.leveledUp ? (
@@ -2676,6 +2681,7 @@ const st = {
     border: `2px dashed ${cyan}`, borderRadius: 10, background: voidBg,
     display: "flex", alignItems: "center", justifyContent: "center",
     fontFamily: monoFont, fontWeight: 800, fontSize: 28, color: mint,
+    transition: "box-shadow .28s ease, border-color .28s ease",
   },
   padWrap: { display: "flex", gap: 8, marginTop: 10, alignItems: "stretch" },
   pad: { flex: 1, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 },
@@ -2749,7 +2755,27 @@ const css = `
 html { min-height: 100%; background: #07091A; scroll-behavior: smooth; }
 body { min-height: 100vh; margin: 0; background: #07091A; overflow-x: hidden; }
 #root { min-height: 100vh; }
-button { -webkit-tap-highlight-color: transparent; transition: transform .22s ease, filter .22s ease, box-shadow .22s ease, background-color .22s ease; }
+body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; text-rendering: optimizeLegibility; }
+button { -webkit-tap-highlight-color: transparent; transition: transform .22s cubic-bezier(.2,.8,.2,1), filter .22s ease, box-shadow .22s ease, background-color .22s ease, border-color .22s ease, opacity .22s ease; }
+@media (hover: hover) and (pointer: fine) {
+  button:not(.player-card):not(:disabled):hover { transform: translateY(-1px); filter: brightness(1.1) saturate(1.05); }
+}
+/* every screen glides in instead of snapping — the class is on each screen's root, and each root
+   only mounts when its screen is shown, so a screen change is exactly one run of this */
+@keyframes screenIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+.screen { animation: screenIn .36s cubic-bezier(.16,1,.3,1) both; }
+/* question swap: the old one is gone, the new one slides in from the right */
+@keyframes qIn { from { opacity: 0; transform: translateX(14px); } to { opacity: 1; transform: none; } }
+.qin { animation: qIn .26s cubic-bezier(.16,1,.3,1) both; }
+.padkey:active { transform: scale(.93) !important; filter: brightness(1.25); transition-duration: .06s; }
+.shopitem { transition: transform .28s cubic-bezier(.2,.8,.2,1), box-shadow .28s ease, border-color .28s ease; }
+@media (hover: hover) and (pointer: fine) { .shopitem:hover { transform: translateY(-3px); box-shadow: 0 10px 28px rgba(0,0,0,.35); } }
+/* the question sheet warms up as the streak climbs — same ladder as the pet and the combo shout */
+.sheet { transition: box-shadow .5s ease, border-color .5s ease; }
+.sheet-hot-1 { border-color: #35E0FF !important; box-shadow: 0 0 22px rgba(53,224,255,.22) !important; }
+.sheet-hot-2 { border-color: #8A5CFF !important; box-shadow: 0 0 26px rgba(138,92,255,.3) !important; }
+.sheet-hot-3 { border-color: #FF2DA8 !important; box-shadow: 0 0 30px rgba(255,45,168,.36) !important; }
+.sheet-hot-4 { border-color: #FFB020 !important; box-shadow: 0 0 36px rgba(255,176,32,.42), 0 0 70px rgba(255,176,32,.18) !important; }
 .app-page::before {
   content: "";
   position: fixed;
@@ -3029,10 +3055,29 @@ button:focus-visible { outline: 3px solid #35E0FF; outline-offset: 2px; }
 button:not(.player-card):active { transform: translateY(1px); }
 body { background: #07091A; }
 
-@keyframes petBob { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-4px)} }
-.petidle { display:inline-block; animation: petBob 2.2s ease-in-out infinite; }
-@keyframes petCharge { 0%,100%{transform:scale(1); filter:drop-shadow(0 0 2px #35E0FF)} 50%{transform:scale(1.25); filter:drop-shadow(0 0 10px #FF2DA8)} }
-.petcharge { display:inline-block; animation: petCharge .8s ease-in-out infinite; }
+/* pet idle: a slow sway with one small hop every cycle — alive, not busy */
+@keyframes petIdle {
+  0%   { transform: translateY(0) rotate(0) scale(1); }
+  22%  { transform: translateY(-3px) rotate(-4deg) scale(1); }
+  44%  { transform: translateY(0) rotate(0) scale(1); }
+  66%  { transform: translateY(-3px) rotate(4deg) scale(1); }
+  84%  { transform: translateY(0) rotate(0) scale(1); }
+  88%  { transform: translateY(0) rotate(0) scale(1.1, .88); }
+  92%  { transform: translateY(-7px) rotate(0) scale(.95, 1.08); }
+  96%  { transform: translateY(0) rotate(0) scale(1.05, .95); }
+  100% { transform: translateY(0) rotate(0) scale(1); }
+}
+.petidle { display:inline-block; transform-origin: 50% 92%; animation: petIdle 5.6s ease-in-out infinite; }
+/* in-session, cold: just the sway — small and slow so it never pulls the eye off the question */
+@keyframes petSway { 0%,100%{transform:translateY(0) rotate(0)} 50%{transform:translateY(-2px) rotate(4deg)} }
+.petsway { display:inline-block; transform-origin: 50% 92%; animation: petSway 2.8s ease-in-out infinite; }
+/* in-session, hot: four charge levels, each bigger, brighter and faster than the last */
+@keyframes petCharge { 0%,100%{transform:scale(1); filter:drop-shadow(0 0 2px var(--pc-a))} 50%{transform:scale(var(--pc-scale)); filter:drop-shadow(0 0 var(--pc-glow) var(--pc-b))} }
+.petcharge { display:inline-block; animation: petCharge var(--pc-dur) ease-in-out infinite; }
+.petcharge-1 { --pc-a:#35E0FF; --pc-b:#35E0FF; --pc-scale:1.12; --pc-glow:6px;  --pc-dur:1.05s; }
+.petcharge-2 { --pc-a:#35E0FF; --pc-b:#8A5CFF; --pc-scale:1.18; --pc-glow:9px;  --pc-dur:.88s; }
+.petcharge-3 { --pc-a:#8A5CFF; --pc-b:#FF2DA8; --pc-scale:1.25; --pc-glow:12px; --pc-dur:.72s; }
+.petcharge-4 { --pc-a:#FF2DA8; --pc-b:#FFB020; --pc-scale:1.32; --pc-glow:16px; --pc-dur:.58s; }
 @keyframes ringPulse { 0%,100%{box-shadow:0 0 4px 1px rgba(53,224,255,.5)} 50%{box-shadow:0 0 14px 4px rgba(255,45,168,.7)} }
 .ringpulse { border-radius:50%; animation: ringPulse 1.8s ease-in-out infinite; }
 .bgmode-bg_space { background: radial-gradient(ellipse at 50% 115%, #0A0F33 0%, #05071C 52%, #020310 100%) !important; }
