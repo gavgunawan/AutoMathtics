@@ -1,0 +1,23 @@
+{
+  "name": "automathtics",
+  "version": "1.14.0",
+  "private": true,
+  "description": "AutoMathtics — the math grid. Builds to a single index.html for GitHub Pages.",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gavgunawan/AutoMathtics.git"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "firebase": "12.18.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}
