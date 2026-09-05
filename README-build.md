@@ -34,6 +34,21 @@ the browser console with
 and reload. Note `loadProgress` still runs its migrations on whatever you seed — for level A it will
 backfill the SEED_SYNC passes, so seed a later level if you want the numbers left alone.
 
+## Sync — nothing a device recorded can be erased by another
+
+Every save is stamped (`savedAt`, `savedBy`) and every history row written since v1.17 carries `ts`.
+`mergeProgress(a, b)` unions two snapshots of the same kid: history by row identity (`rowKey`), ordered
+newest-first by `ts` with pre-stamp rows after; furthest `level`/`paper`/`bossCleared`; inventory,
+purchases, redemptions and shield days unioned; spend never below the ledger; equipped looks from
+whichever snapshot saved last. It runs in three places — `loadProgress` (cloud + local merged, never
+picked), the `subscribeCloud` listener (incoming cloud value merged into current state, and the union
+pushed back up if local knew more), and `cloudSave`, which is a `runTransaction` merging with whatever
+is on the server at that instant. `sameProgress` compares ignoring the stamp, key order and the
+nulls/empty arrays Firebase drops — it must, or the listener would ping-pong writes.
+
+Known soft spot: a redemption Dad rejected (removed + refunded) can be re-added by a device that still
+holds it; the admin panel just rejects it again.
+
 ## Session modes — the "Next session" rule
 
 `beginSession` starts a **normal** session unless a check point is due (`bossDue`). Only `reallyStart`

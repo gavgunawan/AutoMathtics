@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 import { initializeApp } from "firebase/app";
-import { getDatabase, ref as dbRef, get as dbGet, set as dbSet, onValue } from "firebase/database";
+import { getDatabase, ref as dbRef, get as dbGet, set as dbSet, onValue, runTransaction } from "firebase/database";
 
 // ================= AUTOMATHTICS — THE MATH GRID =================
 // Papers 1–100 per level · session = 5 papers · one
@@ -472,7 +472,10 @@ async function cloudLoad(name) {
 async function cloudSave(name, data) {
   if (!fbdb) { if (reportSync) reportSync({ mode: "local" }); return false; }
   try {
-    await dbSet(dbRef(fbdb, cloudPath(name)), data);
+    // Merged with whatever is on the server at the moment of writing — never a blind overwrite.
+    // A device that slept through other devices' saves used to write its stale snapshot back and
+    // erase their passes; now its write can only ever add to the record.
+    await runTransaction(dbRef(fbdb, cloudPath(name)), (server) => (server && typeof server === "object" ? mergeProgress(data, server) : data));
     if (reportSync) reportSync({ mode: "cloud", at: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) });
     return true;
   } catch (e) {
@@ -480,6 +483,84 @@ async function cloudSave(name, data) {
     return false;
   }
 }
+
+// ---------- two-way merge: no device may erase what another one recorded ----------
+const deviceId = () => {
+  try {
+    let id = localStorage.getItem("kumon-device");
+    if (!id) { id = Math.random().toString(36).slice(2, 8); localStorage.setItem("kumon-device", id); }
+    return id;
+  } catch (e) { return "?"; }
+};
+const uniq = (arr) => [...new Set(arr)];
+// identity of a history row — the same event written by two devices produces the same key
+const rowKey = (r) => [r.date, r.when, r.papers, r.passed ? 1 : 0, r.correct, r.total, r.quit ? "q" : "", r.restart ? "r" : "", r.atQ, r.shield ? "s" : "", r.boss ? "b" : "", r.scan ? "c" : ""].join("|");
+function mergeHistory(a, b) {
+  const seen = new Set(); const out = [];
+  const push = (r) => { const k = rowKey(r); if (!seen.has(k)) { seen.add(k); out.push(r); } };
+  // rows with a timestamp (v1.17+) order by it, newest first
+  [...a, ...b].filter((r) => typeof r.ts === "number").sort((x, y) => y.ts - x.ts).forEach(push);
+  // rows without one predate the stamp, so they belong after. The longer legacy list is the fuller
+  // record; the other side's strays go in front of it — a stray is most likely a recent unsynced row.
+  const la = a.filter((r) => typeof r.ts !== "number"), lb = b.filter((r) => typeof r.ts !== "number");
+  const [lead, other] = la.length >= lb.length ? [la, lb] : [lb, la];
+  const leadKeys = new Set(lead.map(rowKey));
+  other.filter((r) => !leadKeys.has(rowKey(r))).forEach(push);
+  lead.forEach(push);
+  return out;
+}
+const mergeSpent = (a, b, ledger) => {
+  const x = a || 0, y = b || 0;
+  return x < 0 || y < 0 ? Math.min(x, y) : Math.max(x, y, ledger);
+};
+function mergeProgress(x, y) {
+  if (!x) return y; if (!y) return x;
+  // the snapshot saved last leads: its equipped looks and other choices win ties
+  const [lead, other] = (x.savedAt || 0) >= (y.savedAt || 0) ? [x, y] : [y, x];
+  const lw = lead.wallet || {}, ow = other.wallet || {};
+  const level = Math.max(lead.level || 0, other.level || 0);
+  const here = [lead, other].filter((p) => (p.level || 0) === level); // paper/boss only compare within the furthest level
+  const paper = Math.max(...here.map((p) => p.paper || 1));
+  const bossCleared = Math.max(...here.map((p) => p.bossCleared || 0));
+  const seenP = new Set();
+  const purchases = [...(lw.purchases || []), ...(ow.purchases || [])].filter((r) => { const k = r.id + "|" + r.when + "|" + r.cost; if (seenP.has(k)) return false; seenP.add(k); return true; });
+  const redById = new Map();
+  [...(ow.redemptions || []), ...(lw.redemptions || [])].forEach((r) => { const prev = redById.get(r.id); redById.set(r.id, prev && prev.status === "approved" ? prev : r); });
+  const redemptions = [...redById.values()];
+  const wallet = {
+    ...ow, ...lw, // lead's slots and flags win; anything only the other side has survives
+    inventory: uniq([...(lw.inventory || []), ...(ow.inventory || [])]),
+    // spend can only go up: whichever is higher, and never less than the ledger says. A NEGATIVE spent
+    // is the TestBot sandbox's free-balance trick and must survive a merge untouched.
+    gcSpent: mergeSpent(lw.gcSpent, ow.gcSpent, purchases.reduce((s, r) => s + (r.cost || 0), 0)),
+    rpSpent: mergeSpent(lw.rpSpent, ow.rpSpent, redemptions.filter((r) => r.status !== "rejected").reduce((s, r) => s + (r.cost || 0), 0)),
+    shields: Math.max(lw.shields || 0, ow.shields || 0),
+    shieldDays: uniq([...(lw.shieldDays || []), ...(ow.shieldDays || [])]).sort(),
+    redemptions, purchases,
+    lastScanWeek: [lw.lastScanWeek, ow.lastScanWeek].filter(Boolean).sort().pop() || null,
+    egg: [lw.egg, ow.egg].filter(Boolean).sort((a, b) => ((a.bought || "") < (b.bought || "") ? 1 : -1))[0] || null,
+  };
+  ["histRepair2", "streakFix1", "sessionFix4", "purchasesInit"].forEach((f) => { if (lw[f] || ow[f]) wallet[f] = true; });
+  return { ...other, ...lead, level, paper, bossCleared, wallet, history: trimHistory(mergeHistory(lead.history || [], other.history || [])) };
+}
+// equality that ignores the save stamp, key order, and the nulls / empty arrays Firebase drops
+const normalize = (v) => {
+  if (Array.isArray(v)) return v.map(normalize);
+  if (v && typeof v === "object") {
+    const o = {};
+    Object.keys(v).sort().forEach((k) => {
+      if (k === "savedAt" || k === "savedBy") return;
+      const n = normalize(v[k]);
+      if (n === null || n === undefined) return;
+      if (Array.isArray(n) && n.length === 0) return;
+      if (n && typeof n === "object" && !Array.isArray(n) && Object.keys(n).length === 0) return;
+      o[k] = n;
+    });
+    return o;
+  }
+  return v;
+};
+const sameProgress = (a, b) => JSON.stringify(normalize(a)) === JSON.stringify(normalize(b));
 function subscribeCloud(name, cb) {
   if (!fbdb) return () => {};
   try {
@@ -857,8 +938,8 @@ function playWrong() {
 
 // ---------- shared settings (admin panel), synced via cloud ----------
 const ADMIN_PIN = "2026";
-const BUILD_TAG = "v1.16 · 5 Sep";
-const BUILD_ID = "am-build-116"; // ASCII-only twin of BUILD_TAG, searched for in the live index.html
+const BUILD_TAG = "v1.17 · 5 Sep";
+const BUILD_ID = "am-build-117"; // ASCII-only twin of BUILD_TAG, searched for in the live index.html
 
 // ---------- full screen ----------
 const fsSupported = () => typeof document !== "undefined" && !!(document.fullscreenEnabled || document.webkitFullscreenEnabled) && !(window.navigator && window.navigator.standalone);
@@ -920,9 +1001,14 @@ function testSeed() {
 }
 
 async function loadProgress(name) {
-  // cloud is the source of truth; local cache covers offline; seed covers first run
-  let p = (await cloudLoad(name)) || localLoad(name) || freshProgress();
+  // Cloud and local are MERGED, never picked. Cloud used to win outright, so a pass saved on a device
+  // whose cloud write never landed (iPhone put to sleep a second after the summary) was thrown away
+  // the next time the app opened. Now it comes back and gets pushed up.
+  const cloud = await cloudLoad(name);
+  const local = localLoad(name);
+  let p = cloud && local ? mergeProgress(cloud, local) : cloud || local || freshProgress();
   if (!p || !Array.isArray(p.history)) p = freshProgress();
+  const recovered = !!(cloud && local) && !sameProgress(p, cloud);
 
   // TestBot sandbox: preloaded rich vault (negative "spent" = free balance),
   // mid-level position so bosses/heatmap/scan states are all reachable
@@ -930,7 +1016,7 @@ async function loadProgress(name) {
     p = testSeed();
   }
 
-  let changed = false;
+  let changed = recovered;
 
   // migration: older entries had no date stamp
   p.history.forEach((h) => {
@@ -1077,7 +1163,7 @@ async function loadProgress(name) {
     if (p.wallet.shields > 0 && !days.has(yest) && days.has(dayBefore)) {
       p.wallet.shields -= 1;
       p.wallet.shieldDays = [...(p.wallet.shieldDays || []), yest];
-      p.history.unshift({ date: yest, when: yest + " 🛡️", levelIdx: p.level, levelId: LEVELS[p.level].id, papers: "—", shield: true });
+      p.history.unshift({ date: yest, ts: Date.now(), when: yest + " 🛡️", levelIdx: p.level, levelId: LEVELS[p.level].id, papers: "—", shield: true });
       changed = true;
     }
   } catch (e) {}
@@ -1088,8 +1174,9 @@ async function loadProgress(name) {
 }
 
 async function saveProgress(name, data) {
-  localSave(name, data);           // instant, never fails silently on us
-  return cloudSave(name, data);    // resolves true when the cloud write landed
+  const stamped = { ...data, savedAt: Date.now(), savedBy: deviceId() };
+  localSave(name, stamped);           // instant, never fails silently on us
+  return cloudSave(name, stamped);    // resolves true when the cloud write landed
 }
 
 // ---------- small render pieces ----------// ---------- small render pieces ----------
@@ -1239,6 +1326,7 @@ export default function AutoMathtics() {
   const [screen, setScreen] = useState("users"); // users | home | howto | session | summary
   const [user, setUser] = useState(null);
   const [prog, setProg] = useState(null);
+  useEffect(() => { progRef.current = prog; }, [prog]);
   const [loading, setLoading] = useState(false);
 
   const [saveWarn, setSaveWarn] = useState(false);
@@ -1294,6 +1382,7 @@ export default function AutoMathtics() {
   const [results, setResults] = useState([]); // 'correct' | 'incorrect' | 'timeout'
   const [streak, setStreak] = useState(0);
   const [crateDrop, setCrateDrop] = useState(null);
+  const progRef = useRef(null); // current prog for the cloud listener, without re-subscribing on every change
   const [staleBuild, setStaleBuild] = useState(false);
   // iPhone home-screen apps can hang on to an old index.html for days, and an old build is exactly what
   // let the kids fight check points that weren't due. Peek at the live file whenever the app comes to
@@ -1456,8 +1545,13 @@ export default function AutoMathtics() {
     // live: if another device saves this kid's progress, update here instantly
     const unsub = subscribeCloud(user.name, (v) => {
       if (v && Array.isArray(v.history)) {
-        setProg((cur) => (JSON.stringify(cur) === JSON.stringify(v) ? cur : v));
-        localSave(user.name, v);
+        const cur = progRef.current;
+        const merged = cur ? mergeProgress(cur, v) : v;
+        if (cur && sameProgress(merged, cur)) return;
+        localSave(user.name, merged);
+        // this device knew things the cloud didn't (a save that never landed) — push the union back up
+        if (!sameProgress(merged, v)) saveProgress(user.name, merged);
+        setProg(merged);
       }
     });
     return unsub;
@@ -1588,7 +1682,7 @@ export default function AutoMathtics() {
     // means Q8 went wrong. Restarts never affect the wallet or streak.
     const now = new Date();
     const entry = {
-      date: todayISO(),
+      date: todayISO(), ts: Date.now(),
       when: now.toLocaleDateString() + " " + now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       levelIdx, levelId: LEVELS[levelIdx].id,
       papers: sessionMode === "boss" ? `👑 CHECK POINT T${prog.bossCleared + 1}` : sessionMode === "scan" ? "🧠 SYSTEM SCAN" : `${startPaper}–${startPaper + PAPERS_PER_SESSION - 1}`,
@@ -1604,7 +1698,7 @@ export default function AutoMathtics() {
     // Log the quit with where the kid stopped, then return to the home page
     const now = new Date();
     const entry = {
-      date: todayISO(),
+      date: todayISO(), ts: Date.now(),
       when: now.toLocaleDateString() + " " + now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       levelIdx, levelId: LEVELS[levelIdx].id,
       papers: sessionMode === "boss" ? `👑 CHECK POINT T${prog.bossCleared + 1}` : sessionMode === "scan" ? "🧠 SYSTEM SCAN" : `${startPaper}–${startPaper + PAPERS_PER_SESSION - 1}`,
@@ -1679,7 +1773,7 @@ export default function AutoMathtics() {
     const mode = sessionMode;
     const bossTier = prog.bossCleared + 1;
     const entry = {
-      date: todayISO(),
+      date: todayISO(), ts: Date.now(),
       when: now.toLocaleDateString() + " " + now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       levelIdx,
       levelId: LEVELS[levelIdx].id,
@@ -1761,7 +1855,7 @@ export default function AutoMathtics() {
     let note = "";
     if (item.startsWith("cp")) {
       const n = parseInt(item.slice(2), 10);
-      p.history = trimHistory([{ date, when, levelIdx: lv, levelId: LEVELS[lv].id, papers: `👑 CHECK POINT T${n}`, correct: 25, incorrect: 0, timeout: 0, total: 25, passed: true, mins: "—", boss: true }, ...p.history]);
+      p.history = trimHistory([{ date, when, ts: Date.parse(date + "T12:00:00") || Date.now(), levelIdx: lv, levelId: LEVELS[lv].id, papers: `👑 CHECK POINT T${n}`, correct: 25, incorrect: 0, timeout: 0, total: 25, passed: true, mins: "—", boss: true }, ...p.history]);
       if (lv === p.level) {
         if (p.paper < n * 20 + 1) p.paper = n * 20 + 1;      // ticking a crown implies its tier is done
         p.bossCleared = Math.max(p.bossCleared || 0, n);
@@ -1773,7 +1867,7 @@ export default function AutoMathtics() {
       note = `👑 CHECK POINT T${n} credited` + note;
     } else {
       const [s, e] = item.split("–").map((x) => parseInt(x, 10));
-      p.history = trimHistory([{ date, when, levelIdx: lv, levelId: LEVELS[lv].id, papers: item, correct: 25, incorrect: 0, timeout: 0, total: 25, passed: true, mins: "—" }, ...p.history]);
+      p.history = trimHistory([{ date, when, ts: Date.parse(date + "T12:00:00") || Date.now(), levelIdx: lv, levelId: LEVELS[lv].id, papers: item, correct: 25, incorrect: 0, timeout: 0, total: 25, passed: true, mins: "—" }, ...p.history]);
       if (lv === p.level) {
         if (e + 1 > p.paper) p.paper = e + 1;                 // progress moves to where it's ticked (never backward)
       } else if (lv > p.level) {
