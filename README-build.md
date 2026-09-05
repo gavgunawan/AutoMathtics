@@ -34,6 +34,32 @@ the browser console with
 and reload. Note `loadProgress` still runs its migrations on whatever you seed — for level A it will
 backfill the SEED_SYNC passes, so seed a later level if you want the numbers left alone.
 
+## Session modes — the "Next session" rule
+
+`beginSession` starts a **normal** session unless a check point is due (`bossDue`). Only `reallyStart`
+— used by Restart and the how-to's start button — re-runs the current `sessionMode`, and `startRun`
+hard-gates boss/scan regardless of who asked. Before v1.16, "Next session" went through `reallyStart`,
+so after a cleared check point it launched another check point (a tier that wasn't due yet) and after
+a weekly scan it launched scan after scan. Passing those phantom check points bumped `bossCleared`,
+which the load-time clamp then reverted while voiding the pass row — the coins vanished with it.
+
+## Shop
+
+`SHOP_ITEMS` + `KIND_SLOT` define everything; `SHOP_SECTIONS` groups it for display. Item flags:
+`big` (SUPER RARE card + blurb), `consumable` (crate/egg — never in inventory), `hatch` (egg pets,
+hidden until owned), `unlock` (earned pets — locked card with live progress from `unlockProgress`),
+`legend` (tag colour). `applyEarned(p)` hands over anything the record says has been earned and runs on
+every pass and on every load; `LEGEND_SINCE` is the date the legendary pass-run chase starts counting
+from (passes before it neither count nor break the run). A Surprise Box rolls one unowned cosmetic from
+`CRATE_KINDS` (rare kinds at a third the weight) and auto-equips it. An egg records the pass count at
+purchase and hatches `EGG_PASSES` passes later into a random unowned `HATCH_POOL` pet.
+
+Looks are read on the home header, session status row, timer bar, combo shout, map (theme colours +
+vehicle riding the lit tip), summary (vehicle launch, unlock/hatch banners) and the player-select cards
+(read from `localStorage` since no progress is loaded yet there). The stale-build banner fetches the
+live `index.html` with `cache: "no-store"` whenever the app comes to the front and offers a reload if
+`BUILD_ID` (ASCII twin of `BUILD_TAG`) isn't in it — never mid-session.
+
 ## Streak ladder
 
 One ladder, `STREAK_TIERS` (4 / 9 / 14 / 18 right in a row), drives everything that reacts to an

@@ -62,7 +62,12 @@ const STREAK_TIERS = [
   { at: 18, label: "ULTRA COMBO!!", color: "#FFB020" },
 ];
 const streakTier = (s) => STREAK_TIERS.reduce((n, t, i) => (s >= t.at ? i + 1 : n), 0); // 0 = cold
-const comboTier = (s) => STREAK_TIERS[Math.max(0, streakTier(s) - 1)];
+// the shout's colour comes from the tier; its words from the equipped pack (SHOUT_PACKS, defined with the shop)
+const comboTier = (s, packId) => {
+  const t = Math.max(0, streakTier(s) - 1);
+  const pack = (packId && SHOUT_PACKS[packId]) || null;
+  return { label: pack ? pack.labels[t] : STREAK_TIERS[t].label, color: STREAK_TIERS[t].color, cls: pack ? pack.cls : "" };
+};
 
 // ---------- curriculum ----------
 // tier = Math.ceil(paper / 20) → 1..5 difficulty steps inside a level
@@ -567,20 +572,148 @@ function isoWeek(d) {
 const SHOP_ITEMS = [
   { id: "ring_pulse", kind: "ring", emoji: "⭕", name: "Pulse ring", cost: 300 },
   { id: "ring_halo", kind: "ring", emoji: "✨", name: "Holo halo", cost: 450 },
+  { id: "ring_prestige", kind: "ring", emoji: "💠", name: "Prestige frame", cost: 4000, big: true, blurb: "a spinning rainbow holo-frame with an orbiting spark — on your face everywhere it shows" },
   { id: "bg_symbols", kind: "bg", emoji: "🧮", name: "Falling symbols bg", cost: 250 },
   { id: "bg_city", kind: "bg", emoji: "🌆", name: "Neon city bg", cost: 350 },
   { id: "bg_space", kind: "bg", emoji: "🌌", name: "Deep space bg", cost: 500 },
   { id: "pet_drone", kind: "pet", emoji: "🤖", name: "Pixel drone", cost: 500 },
   { id: "pet_cat", kind: "pet", emoji: "🐈‍⬛", name: "Neon cat", cost: 800 },
   { id: "pet_dragon", kind: "pet", emoji: "🐉", name: "Volt dragon", cost: 1200 },
+  // egg pets — only ever hatched, never sold; hidden until owned
+  { id: "pet_fox", kind: "pet", emoji: "🦊", name: "Neon fox", cost: 0, hatch: true },
+  { id: "pet_octo", kind: "pet", emoji: "🐙", name: "Glitch octopus", cost: 0, hatch: true },
+  { id: "pet_unicorn", kind: "pet", emoji: "🦄", name: "Chrome unicorn", cost: 0, hatch: true },
+  { id: "pet_turtle", kind: "pet", emoji: "🐢", name: "Turbo turtle", cost: 0, hatch: true },
+  // earned pets — the shop shows them locked with the condition and live progress
+  { id: "pet_legend", kind: "pet", emoji: "🐲", name: "Storm Dragon", cost: 0, legend: "legendary", unlock: { type: "passRun", n: 5, text: "pass 5 sessions in a row" } },
+  { id: "pet_semilegend", kind: "pet", emoji: "🦅", name: "Thunder Hawk", cost: 0, legend: "semi", unlock: { type: "dayRun", n: 10, text: "practise 10 days in a row" } },
+  { id: "fit_hat", kind: "outfit", emoji: "🎩", name: "Top hat", cost: 150 },
+  { id: "fit_shades", kind: "outfit", emoji: "🕶️", name: "Cool shades", cost: 150 },
+  { id: "fit_bow", kind: "outfit", emoji: "🎀", name: "Big bow", cost: 150 },
+  { id: "fit_scarf", kind: "outfit", emoji: "🧣", name: "Racing scarf", cost: 200 },
+  { id: "fit_crown", kind: "outfit", emoji: "👑", name: "Tiny crown", cost: 300 },
   { id: "fx_confetti", kind: "fx", emoji: "🎊", name: "Confetti bolts fx", cost: 250 },
   { id: "fx_lightning", kind: "fx", emoji: "🌩️", name: "Lightning storm fx", cost: 300 },
   { id: "fx_goldrain", kind: "fx", emoji: "💰", name: "Gold rain fx", cost: 300 },
   { id: "snd_retro", kind: "snd", emoji: "🕹️", name: "Retro arcade sounds", cost: 200 },
   { id: "snd_space", kind: "snd", emoji: "🛸", name: "Space bleeps sounds", cost: 200 },
+  { id: "shout_kapow", kind: "shout", emoji: "💥", name: "KAPOW pack", cost: 250 },
+  { id: "shout_turbo", kind: "shout", emoji: "🚀", name: "Turbo pack", cost: 250 },
+  { id: "shout_robot", kind: "shout", emoji: "🤖", name: "Robot pack", cost: 250 },
+  { id: "shout_dino", kind: "shout", emoji: "🦖", name: "Dino pack", cost: 250 },
+  { id: "tbar_bolt", kind: "timer", emoji: "⚡", name: "Lightning fuse", cost: 200 },
+  { id: "tbar_lava", kind: "timer", emoji: "🌋", name: "Lava flow", cost: 200 },
+  { id: "tbar_rainbow", kind: "timer", emoji: "🌈", name: "Rainbow road", cost: 200 },
+  { id: "tbar_pixel", kind: "timer", emoji: "🟩", name: "Pixel blocks", cost: 200 },
+  { id: "title_runner", kind: "title", emoji: "🏷️", name: "GRID RUNNER", cost: 100 },
+  { id: "title_ninja", kind: "title", emoji: "🥷", name: "MATH NINJA", cost: 150 },
+  { id: "title_speed", kind: "title", emoji: "💨", name: "SPEED DEMON", cost: 150 },
+  { id: "title_combo", kind: "title", emoji: "🔥", name: "COMBO MASTER", cost: 150 },
+  { id: "title_time", kind: "title", emoji: "⏳", name: "TIME LORD", cost: 150 },
+  { id: "title_dragon", kind: "title", emoji: "🐉", name: "DRAGON TAMER", cost: 200 },
+  { id: "nfx_rainbow", kind: "namefx", emoji: "🌈", name: "Rainbow name", cost: 300 },
+  { id: "nfx_glitch", kind: "namefx", emoji: "👾", name: "Glitch name", cost: 350 },
+  { id: "nfx_gold", kind: "namefx", emoji: "✨", name: "Gold shimmer name", cost: 300 },
+  { id: "map_lava", kind: "map", emoji: "🔥", name: "Lava route", cost: 400 },
+  { id: "map_ice", kind: "map", emoji: "❄️", name: "Ice route", cost: 400 },
+  { id: "map_matrix", kind: "map", emoji: "🟢", name: "Matrix route", cost: 400 },
+  { id: "map_gold", kind: "map", emoji: "✨", name: "Gold circuit", cost: 500 },
+  { id: "veh_bike", kind: "vehicle", emoji: "🏍️", name: "Hover bike", cost: 2200, big: true, blurb: "parks on your home screen, rides your map route, roars off every time you pass" },
+  { id: "veh_rocket", kind: "vehicle", emoji: "🚀", name: "Star rocket", cost: 2500, big: true, blurb: "parks on your home screen, rides your map route, blasts off every time you pass" },
+  { id: "veh_mech", kind: "vehicle", emoji: "🦾", name: "Mech suit", cost: 3000, big: true, blurb: "the biggest thing in the garage — home screen, map route, and a launch on every pass" },
+  { id: "base_deck", kind: "base", emoji: "🛰️", name: "Command Deck", cost: 3000, big: true, blurb: "your whole home screen becomes a starship bridge — live radar, HUD corners, scanlines" },
   { id: "shield", kind: "shield", emoji: "🛡️", name: "Streak shield", cost: 400 },
+  { id: "crate", kind: "crate", emoji: "🎁", name: "Surprise Box", cost: 300, consumable: true, blurb: "one random new look you don't have yet — could be rare!" },
+  { id: "egg", kind: "egg", emoji: "🥚", name: "Mystery Egg", cost: 900, consumable: true, blurb: "keep it warm for 5 passes and it hatches into a pet nobody can buy" },
 ];
-const KIND_SLOT = { pet: "activePet", fx: "activeFx", snd: "activeSnd", bg: "activeBg", ring: "ring" };
+const KIND_SLOT = {
+  pet: "activePet", fx: "activeFx", snd: "activeSnd", bg: "activeBg", ring: "ring",
+  outfit: "activeOutfit", shout: "activeShout", timer: "activeTimer", title: "activeTitle",
+  namefx: "activeNameFx", map: "activeMap", vehicle: "activeVehicle", base: "activeBase",
+};
+// what a Surprise Box can hold, and which of those roll rarely
+const CRATE_KINDS = ["outfit", "shout", "timer", "title", "namefx", "map"];
+const CRATE_RARE = ["namefx", "map"];
+const HATCH_POOL = ["pet_fox", "pet_octo", "pet_unicorn", "pet_turtle"];
+const EGG_PASSES = 5;
+// the legendary chase starts fresh from this date — passes before it neither count nor break the run.
+// Both kids already had 5+ passes in a row when this shipped; without a start date it would just be handed over.
+const LEGEND_SINCE = "2026-09-06";
+const SHOP_SECTIONS = [
+  [["crate", "egg"], "🎁 SURPRISES", "#FFB020", "a box is a random new look · an egg hatches into a pet you can't buy"],
+  [["pet"], "🐉 CYBER PETS", "#8A5CFF", null],
+  [["outfit"], "👒 PET OUTFITS", "#FF2DA8", "your pet wears it everywhere"],
+  [["ring"], "⭕ AVATAR RINGS", "#35E0FF", null],
+  [["bg"], "🌆 BACKGROUNDS", "#FF2DA8", null],
+  [["fx"], "🎆 SPLASH FX", "#FFB020", null],
+  [["snd"], "🎵 SOUND PACKS", "#2DFFB3", null],
+  [["shout"], "🔥 COMBO SHOUTS", "#FF2DA8", "what the screen yells at 4 · 9 · 14 · 18 in a row"],
+  [["timer"], "⏱️ TIMER BARS", "#35E0FF", null],
+  [["title"], "🏷️ TITLES", "#FFB020", "shows under your name"],
+  [["namefx"], "✨ NAME FX", "#8A5CFF", null],
+  [["map"], "🗺️ MAP THEMES", "#2DFFB3", "recolours your level route"],
+  [["vehicle"], "🚀 GARAGE", "#FFB020", "home screen · map route · launches on every pass"],
+  [["base"], "🛰️ BASE UPGRADE", "#35E0FF", null],
+  [["shield"], "🛡️ UTILITY", "#EAF2FF", null],
+];
+const SHOUT_PACKS = {
+  shout_kapow: { labels: ["POW!", "KAPOW!", "BOOM!!", "KA-BLAMMO!!!"], cls: "shout-kapow" },
+  shout_turbo: { labels: ["TURBO!", "OVERDRIVE!", "HYPERDRIVE!", "WARP SPEED!!"], cls: "shout-turbo" },
+  shout_robot: { labels: ["NICE.HUMAN", "IMPRESSIVE", "MAXIMUM.POWER", "LEGENDARY.EXE"], cls: "shout-robot" },
+  shout_dino: { labels: ["RAWR!", "MEGA RAWR!", "ULTRA RAWR!", "T-REX MODE!!"], cls: "shout-dino" },
+};
+const MAP_THEMES = {
+  map_lava: { lit: "#FF5A2D", cps: ["#FFB020", "#FF7A2D", "#FF5A2D", "#FF2D55", "#FF2DA8"], grid: "rgba(255,90,45,.07)" },
+  map_ice: { lit: "#8FE9FF", cps: ["#EAF2FF", "#B8F1FF", "#8FE9FF", "#5CC8FF", "#8A9BFF"], grid: "rgba(143,233,255,.08)" },
+  map_matrix: { lit: "#2DFF6B", cps: ["#B6FFB0", "#7CFF8A", "#2DFF6B", "#00D95F", "#2DFFB3"], grid: "rgba(45,255,107,.07)" },
+  map_gold: { lit: "#FFD54F", cps: ["#FFF3B0", "#FFE082", "#FFD54F", "#FFB020", "#FF8F00"], grid: "rgba(255,213,79,.08)" },
+};
+const ledgerRow = (it, cost, how) => {
+  const d = new Date();
+  return { id: it.id, emoji: it.emoji, name: how ? `${it.name} (${how})` : it.name, cost, date: todayISO(), when: d.toLocaleDateString() + " " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) };
+};
+// consecutive session passes, newest first. Quits and restarts are ignored; a fail breaks the run.
+function passRun(history, since) {
+  let n = 0;
+  for (const h of history) {
+    if (h.quit || h.restart || typeof h.total !== "number") continue;
+    if (since && h.date && h.date < since) continue;
+    if (h.passed) n++; else break;
+  }
+  return n;
+}
+function unlockProgress(item, p) {
+  const u = item.unlock; if (!u) return null;
+  const have = u.type === "passRun" ? passRun(p.history, LEGEND_SINCE)
+    : u.type === "dayRun" ? computeEconomy(p.history, p.wallet && p.wallet.shieldDays).liveRun : 0;
+  return { have: Math.min(have, u.n), need: u.n, done: have >= u.n };
+}
+// hand over anything the record says has been earned: legendary pets, and an egg kept warm long enough
+function applyEarned(p) {
+  const w = { ...p.wallet, inventory: [...((p.wallet && p.wallet.inventory) || [])], purchases: [...((p.wallet && p.wallet.purchases) || [])] };
+  const out = { ...p, wallet: w };
+  const granted = [];
+  SHOP_ITEMS.filter((it) => it.unlock).forEach((it) => {
+    if (w.inventory.includes(it.id)) return;
+    const u = unlockProgress(it, out);
+    if (u && u.done) { w.inventory.push(it.id); w.activePet = it.id; w.purchases.unshift(ledgerRow(it, 0, "earned")); granted.push(it); }
+  });
+  let hatched = null;
+  if (w.egg && !w.egg.hatched) {
+    const passes = computeEconomy(out.history, w.shieldDays).passes;
+    if (passes - w.egg.passesAt >= EGG_PASSES) {
+      const pool = HATCH_POOL.filter((id) => !w.inventory.includes(id));
+      const id = pool.length ? pool[Math.floor(Math.random() * pool.length)] : HATCH_POOL[0];
+      const pick = SHOP_ITEMS.find((s) => s.id === id);
+      if (!w.inventory.includes(id)) w.inventory.push(id);
+      w.activePet = id;
+      w.egg = { ...w.egg, hatched: true, into: id, hatchedOn: todayISO() };
+      w.purchases.unshift(ledgerRow(pick, 0, "hatched"));
+      hatched = pick;
+    }
+  }
+  return { p: out, granted, hatched };
+}
 const FX_SETS = {
   default: ["⚡", "🪙", "🪙"],
   fx_confetti: ["🎊", "⚡", "🪙"],
@@ -724,7 +857,8 @@ function playWrong() {
 
 // ---------- shared settings (admin panel), synced via cloud ----------
 const ADMIN_PIN = "2026";
-const BUILD_TAG = "v1.15 · 2 Sep";
+const BUILD_TAG = "v1.16 · 5 Sep";
+const BUILD_ID = "am-build-116"; // ASCII-only twin of BUILD_TAG, searched for in the live index.html
 
 // ---------- full screen ----------
 const fsSupported = () => typeof document !== "undefined" && !!(document.fullscreenEnabled || document.webkitFullscreenEnabled) && !(window.navigator && window.navigator.standalone);
@@ -1159,6 +1293,26 @@ export default function AutoMathtics() {
   const [timeLeft, setTimeLeft] = useState(30);
   const [results, setResults] = useState([]); // 'correct' | 'incorrect' | 'timeout'
   const [streak, setStreak] = useState(0);
+  const [crateDrop, setCrateDrop] = useState(null);
+  const [staleBuild, setStaleBuild] = useState(false);
+  // iPhone home-screen apps can hang on to an old index.html for days, and an old build is exactly what
+  // let the kids fight check points that weren't due. Peek at the live file whenever the app comes to
+  // the front; if it isn't this build, offer a reload (never mid-session — see the banner).
+  useEffect(() => {
+    if (typeof window === "undefined" || !/^https?:$/.test(window.location.protocol)) return;
+    let stop = false;
+    const check = async () => {
+      try {
+        const res = await fetch(window.location.pathname || "/", { cache: "no-store" });
+        const html = await res.text();
+        if (!stop && res.ok && html.length > 2000 && !html.includes(BUILD_ID)) setStaleBuild(true);
+      } catch (e) {}
+    };
+    check();
+    const onVis = () => { if (document.visibilityState === "visible") check(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { stop = true; document.removeEventListener("visibilitychange", onVis); };
+  }, []);
   const [flash, setFlash] = useState(null);
   const [sessionStart, setSessionStart] = useState(0);
   const [lastSummary, setLastSummary] = useState(null);
@@ -1199,6 +1353,19 @@ export default function AutoMathtics() {
   const qSecs = (q) => scaledSecs(q && typeof q.qLevel === "number" ? q.qLevel : levelIdx, tierOf(q ? q.paper : startPaper), user);
   const petEmoji = prog && prog.wallet && prog.wallet.activePet
     ? (SHOP_ITEMS.find((it) => it.id === prog.wallet.activePet) || {}).emoji : null;
+  // everything else the wallet can dress the screens with
+  const wItem = (slot) => (prog && prog.wallet && prog.wallet[slot] ? SHOP_ITEMS.find((it) => it.id === prog.wallet[slot]) || null : null);
+  const petItem = wItem("activePet");
+  const outfitEmoji = (wItem("activeOutfit") || {}).emoji || null;
+  const vehicleEmoji = (wItem("activeVehicle") || {}).emoji || null;
+  const titleText = (wItem("activeTitle") || {}).name || null;
+  const nameFxClass = prog && prog.wallet && prog.wallet.activeNameFx ? "namefx-" + prog.wallet.activeNameFx.replace("nfx_", "") : "";
+  const ringClass = (w) => { const r = w && w.ring; return r === "ring_pulse" ? "ringpulse" : r === "ring_prestige" ? "ringprestige" : ""; };
+  const isDeck = !!prog && !!prog.wallet && prog.wallet.activeBase === "base_deck";
+  const timerSkin = prog && prog.wallet && prog.wallet.activeTimer ? prog.wallet.activeTimer : null;
+  const mapTheme = prog && prog.wallet && prog.wallet.activeMap ? MAP_THEMES[prog.wallet.activeMap] || null : null;
+  const eggState = prog && prog.wallet && prog.wallet.egg && !prog.wallet.egg.hatched
+    ? { have: Math.max(0, Math.min(EGG_PASSES, computeEconomy(prog.history, prog.wallet.shieldDays).passes - prog.wallet.egg.passesAt)), need: EGG_PASSES } : null;
   const fxSet = FX_SETS[(prog && prog.wallet && prog.wallet.activeFx) || "default"] || FX_SETS.default;
   // System Scan: weekly (resets Monday), Level B+, and only once the first tier of the
   // CURRENT level (papers 1–20) is passed — no recap of a brand-new topic at B1/C1/D1.
@@ -1209,22 +1376,40 @@ export default function AutoMathtics() {
     try {
       const bal = balances(prog);
       if (bal.gcBal < item.cost) { setShopMsg(`Need ⚡${item.cost - bal.gcBal} more for ${item.name}`); return; }
-      const w = { ...prog.wallet, inventory: [...(prog.wallet.inventory || [])] };
+      const w = { ...prog.wallet, inventory: [...(prog.wallet.inventory || [])], purchases: [...(prog.wallet.purchases || [])] };
+      let msg = `✓ ${item.emoji} ${item.name} — bought & equipped!`;
+      let drop = null;
       if (item.kind === "shield") {
         if ((w.shields || 0) >= 2) { setShopMsg("Already holding 2 shields (max)"); return; }
         w.shields = (w.shields || 0) + 1;
+        msg = `✓ 🛡️ Streak shield — holding ${w.shields}`;
+      } else if (item.kind === "crate") {
+        // one cosmetic you don't own yet; rare kinds roll a third as often
+        const pool = SHOP_ITEMS.filter((it) => CRATE_KINDS.includes(it.kind) && !w.inventory.includes(it.id) && !it.unlock);
+        if (!pool.length) { setShopMsg("🎁 Nothing left to find — you own every surprise!"); return; }
+        const weighted = pool.flatMap((it) => Array(CRATE_RARE.includes(it.kind) ? 1 : 3).fill(it));
+        drop = weighted[Math.floor(Math.random() * weighted.length)];
+        w.inventory.push(drop.id);
+        w[KIND_SLOT[drop.kind]] = drop.id;
+        msg = `🎁 Surprise Box → ${drop.emoji} ${drop.name}!${CRATE_RARE.includes(drop.kind) ? " ✨ RARE!" : ""}`;
+      } else if (item.kind === "egg") {
+        if (w.egg && !w.egg.hatched) { setShopMsg("🥚 You're already keeping an egg warm — pass more sessions!"); return; }
+        if (!HATCH_POOL.some((id) => !w.inventory.includes(id))) { setShopMsg("🥚 Your nest is full — every egg pet is already yours!"); return; }
+        w.egg = { passesAt: bal.passes, hatched: false, bought: todayISO() };
+        msg = `🥚 Mystery Egg — keep it warm: it hatches after ${EGG_PASSES} passes`;
       } else {
         if (w.inventory.includes(item.id)) { setShopMsg(`${item.name} already owned — tap EQUIP`); return; }
-        w.inventory = [...w.inventory, item.id];
+        w.inventory.push(item.id);
         w[KIND_SLOT[item.kind]] = item.id; // auto-equip on purchase
         if (item.kind === "snd") soundPack = item.id;
       }
       w.gcSpent = (w.gcSpent || 0) + item.cost;
-      const nowD = new Date();
-      w.purchases = [{ id: item.id, emoji: item.emoji, name: item.name, cost: item.cost, date: todayISO(), when: nowD.toLocaleDateString() + " " + nowD.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) }, ...(w.purchases || [])].slice(0, 200);
+      w.purchases.unshift(ledgerRow(drop ? { ...item, name: `${item.name} → ${drop.emoji} ${drop.name}` } : item, item.cost));
+      w.purchases = w.purchases.slice(0, 120);
       const np = { ...prog, wallet: w };
       setProg(np); saveProgress(user.name, np);
-      setShopMsg(`✓ ${item.emoji} ${item.name} — bought & equipped!`);
+      setShopMsg(msg);
+      setCrateDrop(drop ? { ...drop, key: Date.now() } : null);
       playKaching();
     } catch (err) {
       setShopMsg("⚠ shop error: " + (err && err.message ? err.message : String(err)));
@@ -1315,7 +1500,10 @@ export default function AutoMathtics() {
 
   async function chooseUser(u) {
     setLoading(true);
-    const p = await loadProgress(u.name);
+    let p = await loadProgress(u.name);
+    // anything earned while this device wasn't looking — a run that crossed the line elsewhere, an egg due to hatch
+    const earned = applyEarned(p);
+    if (earned.granted.length || earned.hatched) { p = earned.p; saveProgress(u.name, p); }
     setLoading(false);
     if (u.test) { enterAs(u, p); return; } // sandbox has no PIN
     setPendingUser(u); setPendingProg(p);
@@ -1360,15 +1548,22 @@ export default function AutoMathtics() {
   function beginSession() {
     if (bossDue(prog)) { startRun("boss"); return; }
     if (prog.paper === 1 && !levelDoneHistory(prog)) {
+      setSessionMode("session"); // the how-to's start button starts a normal session, whatever ran last
       openHowTo(true);
       return;
     }
-    reallyStart();
+    startRun("session");
   }
 
+  // Only Restart and the how-to's start button re-run the CURRENT mode. "Next session" used to come
+  // through here too, so after a cleared check point it launched another check point (a tier that
+  // wasn't due yet) and after a weekly scan it launched scan after scan.
   function reallyStart() { startRun(sessionMode === "boss" ? "boss" : sessionMode === "scan" ? "scan" : "session"); }
 
   function startRun(mode) {
+    // hard gates, whoever asked for the mode
+    if (mode === "boss" && !bossDue(prog)) mode = "session";
+    if (mode === "scan" && !scanAvailable) mode = "session";
     setSessionMode(mode);
     const list =
       mode === "boss" ? buildBossQs(levelIdx, (prog.bossCleared + 1) * 20)
@@ -1511,11 +1706,14 @@ export default function AutoMathtics() {
         np.paper = Math.min(nextPaper, PAPERS_PER_LEVEL + 1); // boss 5 gates the level-up
       }
     }
+    // earned pets: a legendary run, or an egg kept warm long enough
+    const earnedNow = passed ? applyEarned(np) : { p: np, granted: [], hatched: null };
+    np = earnedNow.p;
     const before = balances(prog);
     const after = balances(np);
     setProg(np);
     setLastSummary({
-      ...entry, leveledUp, mode,
+      ...entry, leveledUp, mode, granted: earnedNow.granted, hatched: earnedNow.hatched,
       finishedAll: np.paper > PAPERS_PER_LEVEL && np.bossCleared >= 5 && np.level === LEVELS.length - 1,
       gcNow: after.gc - before.gc,
       rpNow: after.rp - before.rp,
@@ -1648,6 +1846,9 @@ export default function AutoMathtics() {
       {prog && prog.wallet && screen !== "users" && prog.wallet.activeBg === "bg_symbols" && <MatrixDecor />}
       {prog && prog.wallet && screen !== "users" && prog.wallet.activeBg === "bg_city" && <CityDecor />}
       <style>{css}</style>
+      {staleBuild && screen !== "session" && (
+        <button className="stale-banner" onClick={() => window.location.reload()}>⬆ New AutoMathtics version ready — tap to update</button>
+      )}
 
       {/* ---------- user select ---------- */}
       {screen === "users" && (
@@ -1656,7 +1857,7 @@ export default function AutoMathtics() {
           <h1 style={st.title} className="selection-title">PLAYER SELECTION</h1>
           <div style={st.subtle} className="selection-subtitle">who's on a mission today?</div>
           <div style={st.userRow} className="player-grid">
-            {USERS.map((u) => (
+            {USERS.map((u) => { const lw = (localLoad(u.name) || {}).wallet || {}; const lwItem = (slot) => (lw[slot] ? SHOP_ITEMS.find((it) => it.id === lw[slot]) || {} : {}); return (
               <button
                 key={u.name}
                 className="player-card"
@@ -1668,16 +1869,17 @@ export default function AutoMathtics() {
               >
                 <span className="player-card-grid" aria-hidden="true"></span>
                 <span className="player-avatar-frame" style={{ borderColor: u.color, boxShadow: `0 0 0 1px ${u.color}66, 0 0 44px ${u.color}55` }}>
+                  {lw.ring === "ring_prestige" && <span className="frame-prestige" aria-hidden="true" />}
                   <img src={u.avatar} alt={u.name} style={{ ...st.userAvatar, border: `3px solid ${u.color}` }} className="player-avatar" />
                 </span>
-                <span style={st.userName} className="player-name">{u.name.toUpperCase()}</span>
+                <span style={st.userName} className={"player-name" + (lw.activeNameFx ? " namefx-" + lw.activeNameFx.replace("nfx_", "") : "")}>{u.name.toUpperCase()}</span>
                 <span className="player-meta">
                   <span className="status-dot" style={{ background: u.color, boxShadow: `0 0 12px ${u.color}` }}></span>
-                  MISSION READY
+                  {lwItem("activeTitle").name || "MISSION READY"}{lwItem("activePet").emoji ? ` · ${lwItem("activePet").emoji}${lwItem("activeOutfit").emoji || ""}` : ""}{lwItem("activeVehicle").emoji ? ` ${lwItem("activeVehicle").emoji}` : ""}
                 </span>
                 <span className="player-enter">ENTER GRID <span aria-hidden="true">→</span></span>
               </button>
-            ))}
+            ); })}
           </div>
           {loading && <div style={st.subtle} className="selection-loading">Loading progress…</div>}
           <div style={st.subtle} className="selection-sync">
@@ -1940,12 +2142,21 @@ export default function AutoMathtics() {
         <>
           <header style={st.header} className="screen">
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ position: "relative", display: "inline-block" }} className={prog.wallet && prog.wallet.ring === "ring_pulse" ? "ringpulse" : ""}>
+              <span style={{ position: "relative", display: "inline-block", "--orb": "26px" }} className={ringClass(prog.wallet)}>
                 <img src={user.avatar} alt="" style={{ width: 40, height: 40, borderRadius: "50%", objectFit: "cover", border: `2px solid ${prog.wallet && prog.wallet.ring === "ring_halo" ? "#FFB020" : user.color}`, display: "block" }} />
               </span>
-              {petEmoji && <span className="petidle" style={{ fontSize: 26 }} aria-hidden="true">{petEmoji}</span>}
+              {petEmoji && (
+                <span className={"petidle petwrap" + (petItem && petItem.legend ? " petlegend" : "")} style={{ fontSize: 26 }} aria-hidden="true" title={petItem ? petItem.name : ""}>
+                  {petEmoji}{outfitEmoji && <span className="petfit">{outfitEmoji}</span>}
+                </span>
+              )}
+              {eggState && (
+                <span className="eggwrap" title={`Mystery Egg — hatches after ${EGG_PASSES} passes`} aria-label={`egg, ${eggState.have} of ${eggState.need} passes`}>
+                  🥚<span className="eggcount">{eggState.have}/{eggState.need}</span>
+                </span>
+              )}
               <div style={{ flex: 1 }}>
-                <div style={st.kicker}>{user.name.toUpperCase()} · LEVEL {LEVELS[levelIdx].id}</div>
+                <div style={st.kicker}><span className={nameFxClass}>{user.name.toUpperCase()}</span> · LEVEL {LEVELS[levelIdx].id}{titleText && <span className="titlechip">{titleText}</span>}</div>
                 <h1 style={st.title}>{LEVELS[levelIdx].name}</h1>
               </div>
             </div>
@@ -1956,7 +2167,10 @@ export default function AutoMathtics() {
             </span>
           </header>
 
-          <div className="screen" style={{ ...st.card, ...(prog.wallet && prog.wallet.activeBg && BG_STYLES[prog.wallet.activeBg] ? { background: BG_STYLES[prog.wallet.activeBg] } : {}) }}>
+          <div className={"screen" + (isDeck ? " base-deck" : "")} style={{ ...st.card, position: "relative", ...(prog.wallet && prog.wallet.activeBg && BG_STYLES[prog.wallet.activeBg] ? { background: BG_STYLES[prog.wallet.activeBg] } : {}), ...(vehicleEmoji || isDeck ? { paddingTop: 48 } : {}) }}>
+            {isDeck && <span className="deck-radar" aria-hidden="true" />}
+            {isDeck && <div className="deck-ticker"><b>◉</b> COMMAND DECK ONLINE · {user.name.toUpperCase()} · LEVEL {LEVELS[levelIdx].id} · ALL SYSTEMS GO</div>}
+            {vehicleEmoji && <span className="vehicle" aria-hidden="true" title={(wItem("activeVehicle") || {}).name || ""}>{vehicleEmoji}</span>}
             {prog.paper > PAPERS_PER_LEVEL ? (
               <p style={st.introText}>🏆 All levels complete! Incredible work. Tap below to practice any papers again.</p>
             ) : (
@@ -2117,24 +2331,24 @@ export default function AutoMathtics() {
         <div style={st.playArea} className="screen">
           <div style={st.statusRow}>
             <span style={{ ...st.qCount, display: "inline-flex", alignItems: "center", gap: 7 }}>
-              <span className={prog.wallet && prog.wallet.ring === "ring_pulse" ? "ringpulse" : ""} style={{ display: "inline-block", borderRadius: "50%", ...(prog.wallet && prog.wallet.ring === "ring_halo" ? { boxShadow: "0 0 0 2px rgba(255,176,32,.35), 0 0 10px 2px rgba(255,176,32,.55)" } : {}) }}>
+              <span className={ringClass(prog.wallet)} style={{ display: "inline-block", borderRadius: "50%", "--orb": "16px", ...(prog.wallet && prog.wallet.ring === "ring_halo" ? { boxShadow: "0 0 0 2px rgba(255,176,32,.35), 0 0 10px 2px rgba(255,176,32,.55)" } : {}) }}>
                 <img src={user.avatar} alt="" style={{ width: 22, height: 22, borderRadius: "50%", objectFit: "cover", border: `1.5px solid ${prog.wallet && prog.wallet.ring === "ring_halo" ? "#FFB020" : user.color}`, display: "block" }} />
               </span>
               {sessionMode === "boss" ? `👑 CHECK POINT T${prog.bossCleared + 1}` : sessionMode === "scan" ? "🧠 SCAN" : `Paper ${curPaper}`} · {qIdx + 1}/{qs.length}
-              {petEmoji && <span className={streakTier(streak) ? "petcharge petcharge-" + streakTier(streak) : "petsway"} style={{ marginLeft: 4, fontSize: 16 }} aria-hidden="true">{petEmoji}</span>}
+              {petEmoji && <span className={(streakTier(streak) ? "petcharge petcharge-" + streakTier(streak) : "petsway") + " petwrap"} style={{ marginLeft: 4, fontSize: 16 }} aria-hidden="true">{petEmoji}{outfitEmoji && <span className="petfit">{outfitEmoji}</span>}</span>}
             </span>
             <span style={{ ...st.clock, color: timerColor }}>⏱ {timeLeft}s</span>
           </div>
           <div style={st.timerTrack}>
-            <div style={{ ...st.timerFill, width: `${timerPct}%`, background: timerColor }} />
+            <div className={timerSkin && timeLeft > 8 ? "tbar tbar-" + timerSkin : "tbar"} style={{ ...st.timerFill, width: `${timerPct}%`, background: timerColor }} />
           </div>
 
           {paperBurst > 0 && <MoneySplash key={"pb" + paperBurst} mini fxSet={fxSet} />}
           <div style={st.flashSlot}>
             {flash && (flash.combo ? (
               <div style={{ ...st.flash, ...st.comboWrap }}>
-                <span key={flash.combo} className="combo" style={{ ...st.combo, color: comboTier(flash.combo).color }}>
-                  🔥 {flash.combo} {comboTier(flash.combo).label}
+                <span key={flash.combo} className={"combo " + comboTier(flash.combo, prog.wallet && prog.wallet.activeShout).cls} style={{ ...st.combo, color: comboTier(flash.combo, prog.wallet && prog.wallet.activeShout).color }}>
+                  🔥 {flash.combo} {comboTier(flash.combo, prog.wallet && prog.wallet.activeShout).label}
                 </span>
               </div>
             ) : (
@@ -2203,33 +2417,64 @@ export default function AutoMathtics() {
               <span style={{ border: "1.5px solid #FFB020", borderRadius: 10, padding: "6px 14px", fontFamily: "Consolas, monospace", fontWeight: 800, color: "#EAF2FF" }}>🏆 {bal.rpBal}</span>
             </div>
             <div style={{ minHeight: 20, margin: "0 0 8px", fontSize: 13, fontWeight: 700, color: shopMsg && shopMsg.startsWith("✓") ? "#2DFFB3" : shopMsg && shopMsg.startsWith("⚠") ? "#FF3B5C" : "#FFB020" }} className={shopMsg ? "pop2" : ""} key={shopMsg}>{shopMsg || ""}</div>
-            {[["ring", "⭕ AVATAR RINGS", "#35E0FF"], ["bg", "🌆 BACKGROUNDS", "#FF2DA8"], ["pet", "🐉 CYBER PETS", "#8A5CFF"], ["fx", "🎆 SPLASH FX", "#FFB020"], ["snd", "🎵 SOUND PACKS", "#2DFFB3"], ["shield", "🛡️ UTILITY", "#EAF2FF"]].map(([kind, label, gcol]) => (
-              <div key={kind} style={{ margin: "0 0 14px", textAlign: "left" }}>
-                <div style={{ fontSize: 11, letterSpacing: 2, color: gcol, fontFamily: "'Orbitron', sans-serif", margin: "0 0 6px" }}>{label}</div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8 }}>
-              {SHOP_ITEMS.filter((it) => it.kind === kind).map((it) => {
+            {crateDrop && (
+              <div key={crateDrop.key} className="crate-reveal" role="status">
+                <span className="crate-box" aria-hidden="true">🎁</span>
+                <span className="crate-item" aria-hidden="true">{crateDrop.emoji}</span>
+                <span className="crate-name">{crateDrop.name}!{CRATE_RARE.includes(crateDrop.kind) ? " ✨ rare" : ""}</span>
+              </div>
+            )}
+            {SHOP_SECTIONS.map(([kinds, label, gcol, note]) => {
+              const items = SHOP_ITEMS.filter((it) => kinds.includes(it.kind) && (!it.hatch || owned(it.id)));
+              if (!items.length) return null;
+              return (
+              <div key={label} style={{ margin: "0 0 14px", textAlign: "left" }}>
+                <div style={{ fontSize: 11, letterSpacing: 2, color: gcol, fontFamily: "'Orbitron', sans-serif", margin: "0 0 6px" }}>
+                  {label}{note && <span style={{ marginLeft: 8, letterSpacing: 0, fontFamily: "'Rajdhani', sans-serif", color: "#8A93C9", fontSize: 11 }}>{note}</span>}
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fit, minmax(${items.some((it) => it.big) ? 190 : 140}px, 1fr))`, gap: 8 }}>
+              {items.map((it) => {
                 const own = owned(it.id);
                 const afford = bal.gcBal >= it.cost;
                 const shieldCount = it.kind === "shield" ? (w.shields || 0) : 0;
+                const up = it.unlock ? unlockProgress(it, prog) : null;
+                const eggLive = it.kind === "egg" && w.egg && !w.egg.hatched;
+                const crateLeft = it.kind === "crate" ? SHOP_ITEMS.filter((s) => CRATE_KINDS.includes(s.kind) && !owned(s.id) && !s.unlock).length : 0;
+                const accent = it.unlock ? (own ? "#FFB020" : "#8A5CFF") : equipped(it) ? "#2DFFB3" : own ? "#8A5CFF" : it.big ? "#FFB020" : afford ? "#2A3170" : "#1A1F45";
+                const dimmed = !own && !it.unlock && !afford && !it.consumable;
+                const equipBtn = <button style={{ ...st.tinyBtn, width: "100%", color: equipped(it) ? "#2DFFB3" : it.unlock ? "#FFB020" : "#8A5CFF", borderColor: equipped(it) ? "#2DFFB3" : it.unlock ? "#FFB020" : "#8A5CFF" }} onClick={() => equipItem(it)}>{equipped(it) ? "✓ EQUIPPED" : "EQUIP"}</button>;
+                const buyBtn = (extra) => <button style={{ ...st.tinyBtn, width: "100%", opacity: afford ? 1 : 0.55, ...(it.big || it.kind === "crate" ? { color: "#FFB020", borderColor: "#FFB020" } : {}) }} onClick={() => buyItem(it)}>⚡{it.cost} {extra || "BUY"}</button>;
+                const tag = it.big ? "SUPER RARE" : it.legend === "legendary" ? "LEGENDARY" : it.legend === "semi" ? "SEMI-LEGENDARY" : null;
                 return (
-                  <div key={it.id} className="shopitem" style={{ background: "#0B0E23", border: `1.5px solid ${equipped(it) ? "#2DFFB3" : own ? "#8A5CFF" : afford ? "#2A3170" : "#1A1F45"}`, borderRadius: 12, padding: "10px 10px 12px", textAlign: "center", opacity: !own && !afford ? 0.55 : 1 }}>
-                    <div style={{ fontSize: 26 }}>{it.emoji}</div>
+                  <div key={it.id} className="shopitem" style={{ background: it.big ? "linear-gradient(160deg, #161A3E, #0B0E23)" : "#0B0E23", border: `1.5px solid ${accent}`, borderRadius: 12, padding: tag ? "14px 10px 12px" : "10px 10px 12px", textAlign: "center", position: "relative", opacity: dimmed ? 0.55 : it.unlock && !own ? 0.88 : 1, ...(it.big ? { boxShadow: `0 0 18px ${accent}44` } : {}) }}>
+                    {tag && <div style={{ position: "absolute", top: -8, left: "50%", transform: "translateX(-50%)", fontSize: 9, letterSpacing: 2, padding: "2px 8px", borderRadius: 999, background: it.legend === "semi" ? "#8A5CFF" : "#FFB020", color: "#1B0F2E", fontWeight: 900, fontFamily: "'Orbitron', sans-serif", whiteSpace: "nowrap" }}>{tag}</div>}
+                    <div style={{ fontSize: it.big ? 34 : 26, filter: it.unlock && !own ? "grayscale(1) brightness(.55)" : it.legend ? "drop-shadow(0 0 8px #FFB020)" : "none" }}>{it.emoji}</div>
                     <div style={{ fontSize: 12.5, fontWeight: 700, color: "#EAF2FF", minHeight: 32 }}>{it.name}{it.kind === "shield" && shieldCount > 0 ? ` (×${shieldCount})` : ""}</div>
-                    {it.kind === "shield" ? (
-                      shieldCount >= 2
-                        ? <div style={{ fontSize: 11.5, color: "#8A93C9", fontWeight: 700 }}>MAX HELD</div>
-                        : <button style={{ ...st.tinyBtn, width: "100%", opacity: afford ? 1 : 0.55 }} onClick={() => buyItem(it)}>⚡{it.cost} BUY</button>
-                    ) : own ? (
-                      <button style={{ ...st.tinyBtn, width: "100%", color: equipped(it) ? "#2DFFB3" : "#8A5CFF", borderColor: equipped(it) ? "#2DFFB3" : "#8A5CFF" }} onClick={() => equipItem(it)}>{equipped(it) ? "✓ EQUIPPED" : "EQUIP"}</button>
-                    ) : (
-                      <button style={{ ...st.tinyBtn, width: "100%", opacity: afford ? 1 : 0.55 }} onClick={() => buyItem(it)}>⚡{it.cost} BUY</button>
-                    )}
+                    {it.blurb && <div style={{ fontSize: 11, color: "#8A93C9", margin: "0 0 8px", lineHeight: 1.35 }}>{it.blurb}</div>}
+                    {it.unlock ? (
+                      own ? equipBtn : <div style={{ fontSize: 11.5, color: "#8A93C9", fontWeight: 700, lineHeight: 1.45 }}>🔒 {it.unlock.text}<br /><span style={{ color: "#EAF2FF", fontFamily: "Consolas, monospace", fontSize: 13 }}>{up ? `${up.have}/${up.need}` : ""}</span></div>
+                    ) : it.hatch ? (
+                      equipBtn
+                    ) : it.kind === "egg" ? (
+                      eggLive
+                        ? <div style={{ fontSize: 11.5, color: "#FFB020", fontWeight: 700 }}>🥚 keeping warm · {eggState ? `${eggState.have}/${eggState.need}` : ""} passes</div>
+                        : !HATCH_POOL.some((id) => !owned(id))
+                          ? <div style={{ fontSize: 11.5, color: "#8A93C9", fontWeight: 700 }}>NEST FULL — every egg pet hatched</div>
+                          : buyBtn()
+                    ) : it.kind === "crate" ? (
+                      crateLeft === 0
+                        ? <div style={{ fontSize: 11.5, color: "#8A93C9", fontWeight: 700 }}>ALL FOUND — you own every surprise</div>
+                        : buyBtn(`OPEN · ${crateLeft} left`)
+                    ) : it.kind === "shield" ? (
+                      shieldCount >= 2 ? <div style={{ fontSize: 11.5, color: "#8A93C9", fontWeight: 700 }}>MAX HELD</div> : buyBtn()
+                    ) : own ? equipBtn : buyBtn()}
                   </div>
                 );
               })}
                 </div>
               </div>
-            ))}
+              );
+            })}
             <div style={{ ...st.logTitle, margin: "18px 0 6px", color: "#FFB020" }}>🎁 REWARD STORE · spend 🏆</div>
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               {(settings.rewards || []).filter((r) => !r.hidden || bal.rpBal >= r.cost).map((r) => {
@@ -2317,10 +2562,14 @@ export default function AutoMathtics() {
         const gPath = routeD(glyph.route);
         const energy = energyFor(glyph, passed, prog.bossCleared >= 5);
         const [exitX, exitY] = pointAt(glyph.route, 1);
+        const cpColors = mapTheme ? mapTheme.cps : CP_COLORS;
+        const litColor = mapTheme ? mapTheme.lit : user.color;
+        // the vehicle rides a touch ahead of the lit tip so it never sits on top of a check point's crown
+        const [vehX, vehY] = pointAt(glyph.route, Math.min(0.985, Math.max(0.03, energy) + 0.04));
         return (
           <div style={st.card} className="screen">
             <div style={st.kicker}>🗺 LEVEL {LEVELS[levelIdx].id} ROUTE · {user.name.toUpperCase()}</div>
-            <div className="tronmap" style={{ background: "#070A1E", border: "1px solid #2A3170", borderRadius: 14, padding: "16px 10px 10px", margin: "12px 0", position: "relative", overflow: "hidden" }}>
+            <div className="tronmap" style={{ background: "#070A1E", border: "1px solid #2A3170", borderRadius: 14, padding: "16px 10px 10px", margin: "12px 0", position: "relative", overflow: "hidden", "--grid": mapTheme ? mapTheme.grid : "rgba(53,224,255,.06)" }}>
               <svg viewBox="-18 -18 236 276" role="img"
                 aria-label={`Level ${LEVELS[levelIdx].id} route — ${prog.bossCleared} of 5 check points cleared, ${passed} of ${PAPERS_PER_LEVEL} papers passed`}
                 style={{ display: "block", width: "100%", maxWidth: 320, margin: "0 auto" }}>
@@ -2336,7 +2585,7 @@ export default function AutoMathtics() {
                 ))}
                 <path d={gPath} fill="none" stroke="#161C42" strokeWidth="9" strokeLinecap="round" strokeLinejoin="round" />
                 {/* lit only as far as this level has actually been driven */}
-                <path d={gPath} fill="none" stroke={user.color} strokeWidth="9" strokeLinecap="round" strokeLinejoin="round"
+                <path d={gPath} fill="none" stroke={litColor} strokeWidth="9" strokeLinecap="round" strokeLinejoin="round"
                   filter="url(#amNeon)" opacity="0.55" strokeDasharray={`${gLen * energy} ${gLen}`} />
                 <path d={gPath} fill="none" stroke="#EAF2FF" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"
                   strokeDasharray={`${gLen * energy} ${gLen}`} />
@@ -2354,7 +2603,7 @@ export default function AutoMathtics() {
                 </g>
                 {[1, 2, 3, 4, 5].map((t) => {
                   const [cx, cy] = pointAt(glyph.route, cpAt(glyph, t));
-                  const col = CP_COLORS[t - 1];
+                  const col = cpColors[t - 1];
                   const cleared = prog.bossCleared >= t;
                   const due = !cleared && prog.paper > (t - 1) * 20;
                   const open = cleared || due;
@@ -2366,11 +2615,14 @@ export default function AutoMathtics() {
                     </g>
                   );
                 })}
+                {vehicleEmoji && (
+                  <text x={vehX} y={vehY + 8} textAnchor="middle" fontSize="22" className="mapveh" filter="url(#amNeon)" aria-hidden="true">{vehicleEmoji}</text>
+                )}
               </svg>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 4 }}>
               {[1, 2, 3, 4, 5].map((t) => {
-                const col = CP_COLORS[t - 1];
+                const col = cpColors[t - 1];
                 const cleared = prog.bossCleared >= t;
                 const due = !cleared && prog.paper > (t - 1) * 20;
                 const open = cleared || due;
@@ -2535,6 +2787,19 @@ export default function AutoMathtics() {
           )}
           {lastSummary.passed && petEmoji && (
             <div style={{ fontSize: 44 }} className="pop2" aria-hidden="true">{petEmoji}</div>
+          )}
+          {lastSummary.passed && vehicleEmoji && (
+            <div className="launch" aria-hidden="true">{vehicleEmoji}</div>
+          )}
+          {(lastSummary.granted || []).map((it) => (
+            <div key={it.id} className="pop2" style={{ ...st.earnBox, display: "block", maxWidth: 440, margin: "10px auto 0", fontSize: 16, color: "#FFB020", borderColor: "#FFB020" }}>
+              🌟 {it.legend === "legendary" ? "LEGENDARY" : "SEMI-LEGENDARY"} UNLOCKED — {it.emoji} {it.name} joins you!
+            </div>
+          ))}
+          {lastSummary.hatched && (
+            <div className="pop2" style={{ ...st.earnBox, display: "block", maxWidth: 440, margin: "10px auto 0", fontSize: 16, color: "#2DFFB3", borderColor: "#2DFFB3" }}>
+              🐣 Your egg hatched — {lastSummary.hatched.emoji} {lastSummary.hatched.name}!
+            </div>
           )}
           {lastSummary.bossNext && (
             <div style={{ ...st.warn, color: "#FFB020", fontSize: 14 }}>👑 CHECK POINT unlocked — clear it to enter the next tier!</div>
@@ -3121,7 +3386,95 @@ body { background: #07091A; }
 @keyframes gatePulse { 0%,100%{ transform: scale(1); } 50%{ transform: scale(1.12); } }
 .cpdue { transform-box: fill-box; transform-origin: center; animation: gatePulse 1.6s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .cpdue { animation: none; } }
+
+/* ---------- v1.16 shop looks ---------- */
+.stale-banner { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); z-index: 60; background: #FFB020; color: #1B0F2E; border: none; border-radius: 999px; padding: 8px 16px; font: 800 12px 'Orbitron', sans-serif; letter-spacing: .04em; box-shadow: 0 8px 30px rgba(0,0,0,.5); cursor: pointer; }
+
+/* pet outfit: a small badge riding the pet's shoulder */
+.petwrap { position: relative; display: inline-block; }
+.petfit { position: absolute; top: -.32em; right: -.36em; font-size: .58em; line-height: 1; filter: drop-shadow(0 0 3px rgba(0,0,0,.9)); }
+.petlegend { filter: drop-shadow(0 0 5px #FFB020) drop-shadow(0 0 12px rgba(255,45,168,.6)); }
+.eggwrap { position: relative; display: inline-block; font-size: 24px; animation: eggRock 3.4s ease-in-out infinite; transform-origin: 50% 90%; }
+.eggcount { position: absolute; bottom: -6px; left: 50%; transform: translateX(-50%); font: 700 9px 'JetBrains Mono', monospace; color: #FFB020; background: #0B0E23; border: 1px solid #FFB020; border-radius: 999px; padding: 1px 5px; white-space: nowrap; }
+@keyframes eggRock { 0%,100%{transform:rotate(0)} 8%{transform:rotate(-8deg)} 16%{transform:rotate(7deg)} 24%{transform:rotate(-4deg)} 30%{transform:rotate(0)} }
+
+/* titles + name fx */
+.titlechip { display: inline-block; margin-left: 8px; padding: 2px 8px; border-radius: 999px; border: 1px solid #FFB020; color: #FFB020; font-size: 9px; letter-spacing: .18em; box-shadow: 0 0 10px rgba(255,176,32,.35); vertical-align: middle; }
+.namefx-rainbow, .namefx-gold { background-clip: text; -webkit-background-clip: text; color: transparent !important; -webkit-text-fill-color: transparent; }
+.namefx-rainbow { background-image: linear-gradient(90deg, #FF2DA8, #FFB020, #2DFFB3, #35E0FF, #8A5CFF, #FF2DA8); background-size: 300% 100%; animation: nfxRainbow 4s linear infinite; }
+@keyframes nfxRainbow { to { background-position: 300% 0; } }
+.namefx-gold { background-image: linear-gradient(100deg, #B8860B 0%, #FFD54F 35%, #FFF6C8 50%, #FFD54F 65%, #B8860B 100%); background-size: 250% 100%; animation: nfxGold 3s ease-in-out infinite; }
+@keyframes nfxGold { 0%,100% { background-position: 0 0; } 50% { background-position: 100% 0; } }
+.namefx-glitch { animation: nfxGlitch 2.8s steps(1) infinite; }
+@keyframes nfxGlitch {
+  0%, 89%, 100% { text-shadow: none; transform: none; }
+  90% { text-shadow: -2px 0 #35E0FF, 2px 0 #FF2DA8; transform: translateX(1px); }
+  92% { text-shadow: 2px 0 #35E0FF, -2px 0 #FF2DA8; transform: translateX(-1px) skewX(-6deg); }
+  94% { text-shadow: -1px 0 #35E0FF, 1px 0 #FF2DA8; transform: none; }
+  96% { text-shadow: 3px 0 #35E0FF, -3px 0 #FF2DA8; transform: translateY(-1px); }
+}
+
+/* timer bar skins — the red "hurry" colour still wins under 8s (the class is dropped then) */
+.tbar-tbar_bolt { background: repeating-linear-gradient(135deg, #35E0FF 0 9px, #EAF2FF 9px 13px) !important; background-size: 36px 100% !important; animation: tbarSlide .55s linear infinite; box-shadow: 0 0 12px #35E0FF; }
+.tbar-tbar_lava { background: linear-gradient(90deg, #FF2D55, #FF7A2D, #FFB020, #FF7A2D, #FF2D55) !important; background-size: 200% 100% !important; animation: tbarSlow 1.6s linear infinite; box-shadow: 0 0 14px rgba(255,122,45,.8); }
+.tbar-tbar_rainbow { background: linear-gradient(90deg, #FF2DA8, #FFB020, #2DFFB3, #35E0FF, #8A5CFF, #FF2DA8) !important; background-size: 300% 100% !important; animation: tbarSlow 2.4s linear infinite; box-shadow: 0 0 12px rgba(255,255,255,.35); }
+.tbar-tbar_pixel { background: repeating-linear-gradient(90deg, #2DFFB3 0 10px, #0B0E23 10px 13px) !important; box-shadow: 0 0 10px rgba(45,255,179,.7); border-radius: 2px !important; }
+@keyframes tbarSlide { to { background-position: 36px 0; } }
+@keyframes tbarSlow { to { background-position: 200% 0; } }
+
+/* combo shout packs */
+.shout-kapow { font-family: 'Rajdhani', sans-serif !important; font-style: normal !important; transform: rotate(-4deg); letter-spacing: .04em !important; }
+.shout-turbo { font-style: italic !important; letter-spacing: .2em !important; }
+.shout-robot { font-family: 'JetBrains Mono', monospace !important; font-style: normal !important; text-transform: none !important; letter-spacing: .1em !important; }
+.shout-dino { font-family: 'Rajdhani', sans-serif !important; font-style: normal !important; letter-spacing: .02em !important; }
+
+/* garage: parked on the home screen, riding the map, launching on a pass */
+.vehicle { position: absolute; top: 8px; right: 12px; font-size: 34px; line-height: 1; pointer-events: none; animation: vehHover 3.2s ease-in-out infinite; filter: drop-shadow(0 6px 10px rgba(53,224,255,.35)); }
+.vehicle::after { content: ""; position: absolute; left: 50%; bottom: -7px; width: 24px; height: 8px; transform: translateX(-50%); border-radius: 50%; background: radial-gradient(#35E0FF, transparent 70%); animation: vehThrust .45s ease-in-out infinite alternate; }
+@keyframes vehHover { 0%,100% { transform: translateY(0) rotate(-6deg); } 50% { transform: translateY(-6px) rotate(-3deg); } }
+@keyframes vehThrust { from { opacity: .35; transform: translateX(-50%) scaleX(.7); } to { opacity: .9; transform: translateX(-50%) scaleX(1.2); } }
+.mapveh { transform-box: fill-box; transform-origin: center; animation: mapVehBob 1.6s ease-in-out infinite; }
+@keyframes mapVehBob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+.launch { display: inline-block; font-size: 44px; line-height: 1; animation: launchUp 1.7s cubic-bezier(.5,0,.3,1) .35s both; filter: drop-shadow(0 0 10px #35E0FF); }
+@keyframes launchUp { 0% { transform: translateY(0) scale(1); opacity: 1; } 18% { transform: translateY(5px) scale(.96); } 100% { transform: translateY(-170px) scale(1.15); opacity: 0; } }
+
+/* base upgrade: command deck */
+.base-deck { background: linear-gradient(160deg, rgba(8,14,42,.98), rgba(5,8,26,.98)) !important; border-color: rgba(53,224,255,.7) !important; box-shadow: 0 0 0 1px rgba(53,224,255,.25), 0 24px 70px rgba(0,0,0,.5), inset 0 0 70px rgba(53,224,255,.06) !important; }
+.base-deck::before { content: ""; position: absolute; inset: 7px; pointer-events: none; border-radius: 12px;
+  background:
+    linear-gradient(#35E0FF, #35E0FF) top left / 22px 2px no-repeat, linear-gradient(#35E0FF, #35E0FF) top left / 2px 22px no-repeat,
+    linear-gradient(#35E0FF, #35E0FF) top right / 22px 2px no-repeat, linear-gradient(#35E0FF, #35E0FF) top right / 2px 22px no-repeat,
+    linear-gradient(#35E0FF, #35E0FF) bottom left / 22px 2px no-repeat, linear-gradient(#35E0FF, #35E0FF) bottom left / 2px 22px no-repeat,
+    linear-gradient(#35E0FF, #35E0FF) bottom right / 22px 2px no-repeat, linear-gradient(#35E0FF, #35E0FF) bottom right / 2px 22px no-repeat;
+  opacity: .85; filter: drop-shadow(0 0 4px #35E0FF); }
+.base-deck::after { content: ""; position: absolute; inset: 0; pointer-events: none; border-radius: inherit; background: repeating-linear-gradient(0deg, rgba(255,255,255,.028) 0 1px, transparent 1px 4px); }
+.deck-radar { position: absolute; top: 10px; left: 14px; width: 42px; height: 42px; border-radius: 50%; pointer-events: none; overflow: hidden; border: 1px solid rgba(53,224,255,.5);
+  background: radial-gradient(circle, transparent 58%, rgba(53,224,255,.16) 59%, transparent 61%), radial-gradient(circle, transparent 30%, rgba(53,224,255,.16) 31%, transparent 33%), rgba(53,224,255,.05); }
+.deck-radar::before { content: ""; position: absolute; inset: 0; border-radius: 50%; background: conic-gradient(from 0deg, rgba(53,224,255,.6), transparent 30%); animation: spinRing 2.6s linear infinite; }
+.deck-radar::after { content: ""; position: absolute; width: 4px; height: 4px; border-radius: 50%; background: #2DFFB3; top: 13px; left: 26px; box-shadow: 0 0 6px #2DFFB3; animation: blip 2.6s ease-in-out infinite; }
+.deck-ticker { position: relative; z-index: 1; font: 700 9.5px 'JetBrains Mono', monospace; letter-spacing: .2em; color: #35E0FF; opacity: .9; margin: 0 0 8px; text-align: center; }
+.deck-ticker b { animation: blink 1.1s steps(1) infinite; }
+@keyframes spinRing { to { transform: rotate(360deg); } }
+@keyframes blip { 0%,60%,100% { opacity: .15; } 70% { opacity: 1; } }
+@keyframes blink { 50% { opacity: .2; } }
+
+/* prestige frame: spinning rainbow ring + an orbiting spark; --orb is the orbit radius per size */
+.ringprestige { position: relative; border-radius: 50%; isolation: isolate; }
+.ringprestige::before { content: ""; position: absolute; inset: -5px; border-radius: 50%; z-index: -1; background: conic-gradient(from 0deg, #35E0FF, #8A5CFF, #FF2DA8, #FFB020, #2DFFB3, #35E0FF); animation: spinRing 3s linear infinite; box-shadow: 0 0 18px rgba(138,92,255,.65); }
+.ringprestige::after { content: "✦"; position: absolute; left: 50%; top: 50%; margin: -6px 0 0 -5px; font-size: 10px; line-height: 1; color: #fff; text-shadow: 0 0 6px #fff, 0 0 12px #35E0FF; animation: orbit 2.2s linear infinite; }
+@keyframes orbit { from { transform: rotate(0deg) translateY(calc(-1 * var(--orb, 26px))); } to { transform: rotate(360deg) translateY(calc(-1 * var(--orb, 26px))); } }
+.frame-prestige { position: absolute; inset: -12px; border-radius: 50%; z-index: -1; background: conic-gradient(from 0deg, #35E0FF, #8A5CFF, #FF2DA8, #FFB020, #2DFFB3, #35E0FF); animation: spinRing 3.5s linear infinite; box-shadow: 0 0 40px rgba(138,92,255,.7); }
+.player-avatar-frame { isolation: isolate; }
+
+/* surprise box reveal */
+.crate-reveal { display: inline-flex; align-items: center; gap: 12px; margin: 0 auto 12px; padding: 10px 18px; border: 1.5px solid #FFB020; border-radius: 14px; background: #0B0E23; box-shadow: 0 0 22px rgba(255,176,32,.35); animation: fadeSlide .3s ease-out; }
+.crate-box { font-size: 30px; line-height: 1; animation: crateShake .9s ease-in-out; }
+.crate-item { font-size: 34px; line-height: 1; opacity: 0; animation: cratePop .5s cubic-bezier(.2,1.4,.4,1) .9s forwards; }
+.crate-name { font: 800 14px 'Orbitron', sans-serif; color: #FFB020; opacity: 0; animation: fadeSlide .3s ease-out 1.1s forwards; }
+@keyframes crateShake { 0%,100% { transform: rotate(0); } 20% { transform: rotate(-14deg); } 40% { transform: rotate(12deg); } 60% { transform: rotate(-10deg); } 80% { transform: rotate(8deg); } }
+@keyframes cratePop { from { transform: scale(.2); opacity: 0; } 70% { transform: scale(1.3); opacity: 1; } to { transform: scale(1); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .crate-item, .crate-name { opacity: 1; } }
 .tronmap::before { content:""; position:absolute; inset:0; pointer-events:none; opacity:.5;
-  background-image: linear-gradient(rgba(53,224,255,.06) 1px, transparent 1px), linear-gradient(90deg, rgba(53,224,255,.06) 1px, transparent 1px);
+  background-image: linear-gradient(var(--grid, rgba(53,224,255,.06)) 1px, transparent 1px), linear-gradient(90deg, var(--grid, rgba(53,224,255,.06)) 1px, transparent 1px);
   background-size: 22px 22px; mask-image: linear-gradient(to top, black 30%, transparent); -webkit-mask-image: linear-gradient(to top, black 30%, transparent); }
 `;
