@@ -18,6 +18,10 @@ const gate = "if (u.test) { enterAs(u, p); return; } // sandbox has no PIN";
 let src = fs.readFileSync(r("src", "automathtics-src.jsx"), "utf8");
 if (!src.includes(gate)) throw new Error("PIN-gate anchor not found — harness.mjs needs updating");
 src = src.replace(gate, "if (true) { enterAs(u, p); return; } // HARNESS: PIN gate off");
+// the admin gate too — the harness is local-only, so there is nothing behind it to protect
+const adminGate = "if (pin === ADMIN_PIN) {";
+if (!src.includes(adminGate)) throw new Error("admin-gate anchor not found — harness.mjs needs updating");
+src = src.replace(adminGate, "if (true) { // HARNESS: admin gate off");
 fs.writeFileSync(path.join(tmp, "automathtics-src.jsx"), src, "utf8");
 fs.copyFileSync(r("src", "automathtics-entry.jsx"), path.join(tmp, "automathtics-entry.jsx"));
 

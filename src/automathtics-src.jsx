@@ -95,6 +95,66 @@ const USERS = [
   { name: "Geralt", age: "6.5 yo", mult: 1.3, emoji: "🐺", color: "#35E0FF", avatar: AVATAR_GERALT },
 ];
 
+// ---------- players added from the selection screen ----------
+// They live in settings.players as { name, age, emoji, color, mult, joined } and join the built-in
+// USERS as the roster. Their progress node and PIN work exactly like the built-ins' — the name is the key.
+const RESERVED_NAMES = ["allison", "geralt", "testbot", "settings", "players", "admin"];
+const PLAYER_EMOJI = ["🦊", "🐼", "🦁", "🐸", "🐨", "🦄", "🐙", "🦖", "🐧", "🐯", "🐺", "🐲", "🚀", "👾", "🤖", "⚡"];
+const PLAYER_COLORS = ["#FF2DA8", "#35E0FF", "#2DFFB3", "#FFB020", "#8A5CFF", "#FF5A2D"];
+const makeAvatar = (emoji, color) => "data:image/svg+xml;utf8," + encodeURIComponent(
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"><rect width="120" height="120" fill="#07091A"/><circle cx="60" cy="60" r="56" fill="#0B0E23" stroke="${color}" stroke-width="3"/><text x="60" y="80" font-size="58" text-anchor="middle">${emoji}</text></svg>`);
+const playerToUser = (p) => ({
+  name: p.name, age: p.age || "new player", mult: typeof p.mult === "number" ? p.mult : 1.0,
+  emoji: p.emoji || "⚡", color: p.color || "#35E0FF", avatar: makeAvatar(p.emoji || "⚡", p.color || "#35E0FF"), added: true,
+});
+const validPlayerName = (n, roster) => {
+  const s = String(n || "").trim();
+  if (!/^[A-Za-z][A-Za-z0-9]{1,11}$/.test(s)) return "2–12 letters or digits, starting with a letter";
+  if (RESERVED_NAMES.includes(s.toLowerCase()) || roster.some((u) => u.name.toLowerCase() === s.toLowerCase())) return "that name is already taken";
+  return null;
+};
+// a brand-new player starts at paper 1 with nothing carried over (freshProgress is the 2026 carry-over for the built-ins)
+const newPlayerProgress = (pin) => ({ level: 0, paper: 1, bossCleared: 0, history: [], wallet: { ...FRESH_WALLET(), purchasesInit: true, histRepair2: true }, pin });
+
+// the quick guide every new player walks through (and anyone can re-read from the home screen)
+const GUIDE_SLIDES = [
+  { emoji: "⚡🏆", title: "Two kinds of loot", lines: [
+    "⚡ Grid Coins — spend them in the 🛒 Shop on pets, looks, surprise boxes and vehicles.",
+    "🏆 Reward Points — save them for real-life prizes in the 🎁 Reward Store.",
+    "You earn both at the same time. Every time.",
+  ] },
+  { emoji: "📝", title: "How you earn", lines: [
+    "A session is 5 papers · 25 questions · one at a time, on a timer.",
+    "Score 25/25 and you pass: +⚡50 +🏆100, and the next papers unlock.",
+    "Miss one? No loot — same papers again next time. You've got this.",
+  ] },
+  { emoji: "👑🧠", title: "Double loot", lines: [
+    "Every 20 papers there's a 👑 CHECK POINT: 25 questions from that whole tier. Clear it → ×2 loot and the next tier opens.",
+    "From Level B, once a week, a 🧠 SYSTEM SCAN mixes everything you've learnt → ×2 loot.",
+    "Practise 3 days in a row → bonus +⚡50 +🏆100. Keep the chain alive!",
+  ] },
+  { emoji: "🛒", title: "Spending ⚡ Grid Coins", lines: [
+    "Tap 🛒 Shop on your home screen.",
+    "Pets ride along with you, outfits dress them, backgrounds and rings change your look.",
+    "🎁 Surprise Box = a random new thing. 🥚 Mystery Egg = hatches after 5 passes.",
+  ] },
+  { emoji: "🎁", title: "Cashing in 🏆 Reward Points", lines: [
+    "The 🎁 Reward Store is at the bottom of the Shop — real prizes set up by Dad.",
+    "Tap REDEEM → it goes to Dad to approve. Points come off once he says yes.",
+    "Some prizes have a daily limit. Big ones take a while to save for — worth it.",
+  ] },
+  { emoji: "🗺", title: "See how you're doing", lines: [
+    "🗺 Map — your level is drawn as its letter: check points, your route so far, trophies for finished levels.",
+    "Your home screen shows the papers passed on each check point and your log at the bottom.",
+    "The heatmap on the map shows which tiers are fast and right, and which need practice.",
+  ] },
+  { emoji: "🚀", title: "Ready?", lines: [
+    "Level A starts at paper 1. The first session shows you how the questions work.",
+    "Your PIN keeps your progress yours. Dad can reset it if you forget.",
+    "Progress saves to the cloud — any device, same you. Go get 'em!",
+  ] },
+];
+
 const PAPERS_PER_LEVEL = 100;
 const PAPERS_PER_SESSION = 5;
 const Q_PER_PAPER = 5;
@@ -938,8 +998,8 @@ function playWrong() {
 
 // ---------- shared settings (admin panel), synced via cloud ----------
 const ADMIN_PIN = "2026";
-const BUILD_TAG = "v1.17 · 5 Sep";
-const BUILD_ID = "am-build-117"; // ASCII-only twin of BUILD_TAG, searched for in the live index.html
+const BUILD_TAG = "v1.18 · 5 Sep";
+const BUILD_ID = "am-build-118"; // ASCII-only twin of BUILD_TAG, searched for in the live index.html
 
 // ---------- full screen ----------
 const fsSupported = () => typeof document !== "undefined" && !!(document.fullscreenEnabled || document.webkitFullscreenEnabled) && !(window.navigator && window.navigator.standalone);
@@ -1352,6 +1412,12 @@ export default function AutoMathtics() {
   const [cpStep, setCpStep] = useState(0);   // change-PIN: 0 old, 1 new, 2 confirm
   const [cpNew, setCpNew] = useState("");
   const [cpMsg, setCpMsg] = useState(null);
+  // add-player wizard + guide
+  const [npName, setNpName] = useState("");
+  const [npEmoji, setNpEmoji] = useState(PLAYER_EMOJI[0]);
+  const [npColor, setNpColor] = useState(PLAYER_COLORS[2]);
+  const [npErr, setNpErr] = useState(null);
+  const [guideIdx, setGuideIdx] = useState(0);
   const [creditMsg, setCreditMsg] = useState(null);
   useEffect(() => {
     const on = () => setIsFs(fsActive());
@@ -1439,6 +1505,8 @@ export default function AutoMathtics() {
     return Math.min(100, Math.max(10, v)) / 100;
   };
   const scaledSecs = (lvlIdx, tier, u) => Math.max(5, Math.round(secondsFor(lvlIdx, tier, u.mult) * scaleFor(u.name)));
+  // everyone who can play on this family's grid: the built-ins plus players added from the selection screen
+  const roster = [...USERS, ...(((settings && settings.players) || []).map(playerToUser))];
   const qSecs = (q) => scaledSecs(q && typeof q.qLevel === "number" ? q.qLevel : levelIdx, tierOf(q ? q.paper : startPaper), user);
   const petEmoji = prog && prog.wallet && prog.wallet.activePet
     ? (SHOP_ITEMS.find((it) => it.id === prog.wallet.activePet) || {}).emoji : null;
@@ -1614,6 +1682,48 @@ export default function AutoMathtics() {
       if (next === kidPinOf(pendingProg)) { enterAs(pendingUser, pendingProg); setPin(""); }
       else { setPinErr(true); setTimeout(() => setPin(""), 350); }
     }
+  }
+
+  // ----- add-player wizard: name & look → PIN twice → created, entered, guided -----
+  function openNewPlayer() {
+    setNpName(""); setNpEmoji(PLAYER_EMOJI[Math.floor(Math.random() * PLAYER_EMOJI.length)]); setNpColor(PLAYER_COLORS[Math.floor(Math.random() * PLAYER_COLORS.length)]);
+    setNpErr(null); setScreen("newPlayer");
+  }
+  function newPlayerNext() {
+    const err = validPlayerName(npName, roster);
+    if (err) { setNpErr(err); return; }
+    setNpErr(null); setPin(""); setCpNew(""); setCpStep(1); setPinErr(false); setScreen("newPin");
+  }
+  function newPinPress(k) {
+    if (pin.length >= 4) return;
+    const next = pin + k;
+    setPinErr(false); setPin(next);
+    if (next.length < 4) return;
+    setTimeout(() => setPin(""), 250);
+    if (cpStep === 1) { setCpNew(next); setCpStep(2); }
+    else if (next === cpNew) { createPlayer(next); }
+    else { setPinErr(true); setCpStep(1); setCpNew(""); }
+  }
+  async function createPlayer(pinCode) {
+    const name = npName.trim();
+    const rec = { name, age: "new player", emoji: npEmoji, color: npColor, mult: 1.0, joined: todayISO() };
+    const u = playerToUser(rec);
+    setLoading(true);
+    // the roster lives in settings so every device (and the admin panel) sees the new player at once
+    const ns = { ...settings, players: [...((settings && settings.players) || []).filter((p) => p.name.toLowerCase() !== name.toLowerCase()), rec] };
+    setSettings(ns);
+    await saveSettings(ns);
+    const p = newPlayerProgress(pinCode);
+    await saveProgress(name, p);
+    setLoading(false);
+    setPin(""); setCpNew(""); setCpStep(0);
+    enterAs(u, p);
+    setGuideIdx(0); setScreen("guide");
+  }
+  function removePlayer(name) {
+    // only the roster entry goes; the progress node stays in the cloud in case it was a mistake
+    const ns = { ...settings, players: ((settings && settings.players) || []).filter((p) => p.name !== name) };
+    setSettings(ns); if (draft) setDraft({ ...draft, players: ns.players }); saveSettings(ns);
   }
 
   function changePinPress(k) {
@@ -1951,7 +2061,7 @@ export default function AutoMathtics() {
           <h1 style={st.title} className="selection-title">PLAYER SELECTION</h1>
           <div style={st.subtle} className="selection-subtitle">who's on a mission today?</div>
           <div style={st.userRow} className="player-grid">
-            {USERS.map((u) => { const lw = (localLoad(u.name) || {}).wallet || {}; const lwItem = (slot) => (lw[slot] ? SHOP_ITEMS.find((it) => it.id === lw[slot]) || {} : {}); return (
+            {roster.map((u) => { const lw = (localLoad(u.name) || {}).wallet || {}; const lwItem = (slot) => (lw[slot] ? SHOP_ITEMS.find((it) => it.id === lw[slot]) || {} : {}); return (
               <button
                 key={u.name}
                 className="player-card"
@@ -1981,6 +2091,7 @@ export default function AutoMathtics() {
               ? "☁ cloud sync ON — progress is shared across all devices"
               : "⚠ running local-only — Firebase not configured yet"}
           </div>
+          <button className="add-player" type="button" onClick={openNewPlayer} disabled={loading}>➕ Add player</button>
           <div style={{ ...st.subtle, fontSize: 10, opacity: 0.6 }}>{BUILD_TAG}</div>
           <div style={{ display: "flex", gap: 10, justifyContent: "center", alignItems: "center", marginTop: 16 }}>
             <button
@@ -2038,6 +2149,94 @@ export default function AutoMathtics() {
         </div>
       )}
 
+      {/* ---------- add player: name & look ---------- */}
+      {screen === "newPlayer" && (
+        <div style={{ ...st.card, maxWidth: 460 }} className="screen">
+          <div style={st.kicker}>NEW PLAYER</div>
+          <h1 style={{ ...st.title, fontSize: 22 }}>Who's joining the grid?</h1>
+          <div style={{ display: "flex", alignItems: "center", gap: 14, justifyContent: "center", margin: "10px 0 14px" }}>
+            <img src={makeAvatar(npEmoji, npColor)} alt="" style={{ width: 72, height: 72, borderRadius: "50%", border: `3px solid ${npColor}`, boxShadow: `0 0 24px ${npColor}66` }} />
+            <input value={npName} onChange={(e) => { setNpName(e.target.value.replace(/[^A-Za-z0-9]/g, "").slice(0, 12)); setNpErr(null); }}
+              placeholder="your name" maxLength={12} autoFocus aria-label="player name" onKeyDown={(e) => { if (e.key === "Enter") newPlayerNext(); }}
+              style={{ flex: "0 1 200px", background: "#10142E", border: `1.5px solid ${npColor}`, borderRadius: 12, color: "#EAF2FF", padding: "10px 12px", fontFamily: "'Orbitron', sans-serif", fontWeight: 700, fontSize: 18, letterSpacing: 1, textAlign: "center", outline: "none" }} />
+          </div>
+          <div style={{ ...st.logTitle, margin: "6px 0 6px" }}>PICK YOUR ICON</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center" }}>
+            {PLAYER_EMOJI.map((e) => (
+              <button key={e} type="button" className="pick" aria-label={e} aria-pressed={npEmoji === e}
+                style={{ fontSize: 22, width: 44, height: 44, borderRadius: 10, background: "#0B0E23", border: `2px solid ${npEmoji === e ? npColor : "#2A3170"}`, boxShadow: npEmoji === e ? `0 0 14px ${npColor}66` : "none" }}
+                onClick={() => setNpEmoji(e)}>{e}</button>
+            ))}
+          </div>
+          <div style={{ ...st.logTitle, margin: "14px 0 6px" }}>PICK YOUR COLOUR</div>
+          <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
+            {PLAYER_COLORS.map((c) => (
+              <button key={c} type="button" className="pick" aria-label={c} aria-pressed={npColor === c}
+                style={{ width: 34, height: 34, borderRadius: "50%", background: c, border: `3px solid ${npColor === c ? "#EAF2FF" : "transparent"}`, boxShadow: `0 0 14px ${c}88` }}
+                onClick={() => setNpColor(c)} />
+            ))}
+          </div>
+          <div style={{ minHeight: 22, margin: "12px 0 0", fontSize: 13, fontWeight: 700, color: "#FF3B5C" }}>{npErr || ""}</div>
+          <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap", marginTop: 6 }}>
+            <button style={st.primaryBtn} onClick={newPlayerNext}>Next → choose a PIN</button>
+            <button style={st.ghostBtn} onClick={() => setScreen("users")}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* ---------- add player: PIN ---------- */}
+      {screen === "newPin" && (
+        <div style={{ ...st.card, maxWidth: 420 }} className="screen">
+          <div style={st.kicker}>{npName.trim().toUpperCase()} · 🔑 YOUR PIN</div>
+          <h1 style={{ ...st.title, fontSize: 20 }}>{cpStep === 1 ? "Choose a 4-digit PIN" : "Type it once more"}</h1>
+          <p style={{ ...st.introText, fontSize: 13 }}>It keeps your progress yours. Pick one you'll remember — Dad can reset it if you forget.</p>
+          <div style={{ display: "flex", justifyContent: "center", gap: 14, margin: "14px 0 6px" }} aria-label="PIN">
+            {[0, 1, 2, 3].map((i) => (
+              <span key={i} style={{ width: 16, height: 16, borderRadius: "50%", border: `2px solid ${pinErr ? "#FF3B5C" : npColor}`, background: i < pin.length ? (pinErr ? "#FF3B5C" : npColor) : "transparent", boxShadow: i < pin.length ? `0 0 10px ${npColor}` : "none", transition: "background .12s" }}></span>
+            ))}
+          </div>
+          <div style={{ minHeight: 20, fontSize: 13, fontWeight: 700, color: "#FF3B5C" }}>{pinErr ? "✗ PINs didn't match — choose again" : ""}</div>
+          {loading && <div style={{ ...st.subtle, color: "#2DFFB3", fontWeight: 700 }}>Creating your player…</div>}
+          <div style={{ ...st.pad, maxWidth: 260, margin: "8px auto 0" }}>
+            {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((k) => (
+              <button key={k} className="padkey" style={st.key} onClick={() => newPinPress(String(k))} disabled={loading}>{k}</button>
+            ))}
+            <button className="padkey" style={{ ...st.key, ...st.keyBack }} onClick={() => { setPinErr(false); setPin(pin.slice(0, -1)); }}>⌫</button>
+            <button className="padkey" style={st.key} onClick={() => newPinPress("0")} disabled={loading}>0</button>
+            <span></span>
+          </div>
+          <button style={{ ...st.ghostBtn, marginTop: 16 }} onClick={() => { setPin(""); setCpStep(0); setCpNew(""); setPinErr(false); setScreen("newPlayer"); }}>← Back</button>
+        </div>
+      )}
+
+      {/* ---------- quick guide: loot, earning, redeeming, progress ---------- */}
+      {screen === "guide" && user && (() => {
+        const g = GUIDE_SLIDES[Math.min(guideIdx, GUIDE_SLIDES.length - 1)];
+        const last = guideIdx >= GUIDE_SLIDES.length - 1;
+        return (
+          <div style={{ ...st.card, maxWidth: 520 }} className="screen">
+            <div style={st.kicker}>🎓 QUICK GUIDE · {user.name.toUpperCase()}</div>
+            <div style={{ display: "flex", gap: 6, justifyContent: "center", margin: "6px 0 10px" }} aria-label={`step ${guideIdx + 1} of ${GUIDE_SLIDES.length}`}>
+              {GUIDE_SLIDES.map((_, i) => <span key={i} style={{ width: i === guideIdx ? 22 : 8, height: 8, borderRadius: 99, background: i <= guideIdx ? user.color : "#2A3170", transition: "width .25s, background .25s" }} />)}
+            </div>
+            <div key={guideIdx} className="qin">
+              <div style={{ fontSize: 46, lineHeight: 1.1, margin: "4px 0 6px" }} aria-hidden="true">{g.emoji}</div>
+              <h2 style={{ ...st.title, fontSize: 22, marginBottom: 10 }}>{g.title}</h2>
+              <div style={st.howBox}>
+                {g.lines.map((L, i) => <div key={i} className="fade" style={{ ...st.howLine, animationDelay: `${i * 0.12}s` }}>• {L}</div>)}
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap", marginTop: 12 }}>
+              {guideIdx > 0 && <button style={st.ghostBtn} onClick={() => setGuideIdx(guideIdx - 1)}>← Back</button>}
+              {last
+                ? <button style={st.primaryBtn} onClick={() => setScreen("home")}>Let's go ▶</button>
+                : <button style={st.primaryBtn} onClick={() => setGuideIdx(guideIdx + 1)}>Next →</button>}
+              {!last && <button style={{ ...st.tinyBtn }} onClick={() => setScreen("home")}>skip</button>}
+            </div>
+          </div>
+        );
+      })()}
+
       {screen === "adminPin" && (
         <div style={st.card} className="screen">
           <div style={st.kicker}>AUTOMATHTICS · RESTRICTED</div>
@@ -2057,8 +2256,8 @@ export default function AutoMathtics() {
               onClick={() => {
                 if (pin === ADMIN_PIN) {
                   setDraft({ ...settings }); setSettingsSaved(false); setScreen("admin");
-                  Promise.all(USERS.map((u) => loadProgress(u.name))).then((ps) => {
-                    const m = {}; USERS.forEach((u, i) => { m[u.name.toLowerCase()] = ps[i]; }); setAdminKids(m);
+                  Promise.all(roster.map((u) => loadProgress(u.name))).then((ps) => {
+                    const m = {}; roster.forEach((u, i) => { m[u.name.toLowerCase()] = ps[i]; }); setAdminKids(m);
                   });
                 }
                 else { setPinErr(true); setPin(""); }
@@ -2078,7 +2277,7 @@ export default function AutoMathtics() {
             Slide to shrink each player's per-question time. 100% = the built-in time,
             70% means a 50-second question becomes 35 seconds. Applies instantly on every device.
           </p>
-          {USERS.map((u) => {
+          {roster.map((u) => {
             const key = u.name.toLowerCase() + "Scale";
             const val = Math.min(100, Math.max(10, draft[key] ?? 100));
             const baseNow = secondsFor(0, 3, u.mult);
@@ -2103,7 +2302,7 @@ export default function AutoMathtics() {
           })}
           <div style={{ textAlign: "left", margin: "0 0 16px" }}>
             <div style={{ ...st.logTitle, marginBottom: 6 }}>PLAYER DATA</div>
-            {USERS.map((u) => (
+            {roster.map((u) => (
               <div key={u.name} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", background: "#0B0E23", border: `1.5px solid ${u.color}`, borderRadius: 12, marginBottom: 8 }}>
                 <img src={u.avatar} alt="" style={{ width: 30, height: 30, borderRadius: "50%", objectFit: "cover", border: `2px solid ${u.color}` }} />
                 <b style={{ color: u.color, fontFamily: "'Orbitron', sans-serif", fontSize: 13, letterSpacing: 1 }}>{u.name.toUpperCase()}</b>
@@ -2113,8 +2312,19 @@ export default function AutoMathtics() {
                 </div>
               </div>
             ))}
+            <div style={{ ...st.logTitle, margin: "10px 0 6px", color: "#FFB020" }}>➕ ADDED PLAYERS</div>
+            {((settings && settings.players) || []).length === 0 && <div style={{ ...st.subtle, textAlign: "left" }}>none yet — players added from the selection screen appear here, with their own time slider, log, PIN reset and manual update above</div>}
+            {((settings && settings.players) || []).map((p) => (
+              <div key={"ap" + p.name} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", background: "#0B0E23", border: `1px dashed ${p.color || "#2A3170"}`, borderRadius: 12, marginBottom: 8 }}>
+                <span style={{ fontSize: 22 }}>{p.emoji}</span>
+                <b style={{ color: p.color, fontFamily: "'Orbitron', sans-serif", fontSize: 13, letterSpacing: 1 }}>{p.name.toUpperCase()}</b>
+                <span style={{ fontSize: 11, color: "#8A93C9" }}>joined {p.joined || "—"}</span>
+                <button style={{ ...st.tinyBtn, marginLeft: "auto", color: "#FF3B5C", borderColor: "#FF3B5C" }} title="Remove from the roster (progress stays in the cloud)"
+                  onClick={() => { if (window.confirm(`Remove ${p.name} from the player list? Their progress stays saved and comes back if you add the same name again.`)) removePlayer(p.name); }}>✕ remove</button>
+              </div>
+            ))}
             <div style={{ ...st.logTitle, margin: "10px 0 6px", color: "#2DFFB3" }}>✍️ MANUAL UPDATE</div>
-            {USERS.map((u) => {
+            {roster.map((u) => {
               const key = u.name.toLowerCase();
               const k = adminKids[key];
               const form = credit[key] || {};
@@ -2190,7 +2400,7 @@ export default function AutoMathtics() {
 
           <div style={{ textAlign: "left", margin: "0 0 16px" }}>
             <div style={{ ...st.logTitle, marginBottom: 6, color: "#2DFFB3" }}>⏳ APPROVALS</div>
-            {USERS.flatMap((u) => (((adminKids[u.name.toLowerCase()] || {}).wallet || {}).redemptions || []).filter((x) => x.status === "pending").map((x) => (
+            {roster.flatMap((u) => (((adminKids[u.name.toLowerCase()] || {}).wallet || {}).redemptions || []).filter((x) => x.status === "pending").map((x) => (
               <div key={u.name + x.id} style={{ display: "flex", alignItems: "center", gap: 8, background: "#0B0E23", border: "1px dashed #2DFFB3", borderRadius: 10, padding: "6px 10px", marginBottom: 6 }}>
                 <img src={u.avatar} alt="" style={{ width: 24, height: 24, borderRadius: "50%", objectFit: "cover", border: `1.5px solid ${u.color}` }} />
                 <span style={{ fontSize: 13, fontWeight: 700, color: "#EAF2FF" }}>{u.name}: {x.emoji} {x.name}</span>
@@ -2201,7 +2411,7 @@ export default function AutoMathtics() {
                 </span>
               </div>
             )))}
-            {USERS.every((u) => !(((adminKids[u.name.toLowerCase()] || {}).wallet || {}).redemptions || []).some((x) => x.status === "pending")) && (
+            {roster.every((u) => !(((adminKids[u.name.toLowerCase()] || {}).wallet || {}).redemptions || []).some((x) => x.status === "pending")) && (
               <div style={{ ...st.subtle, textAlign: "left" }}>no pending redemptions</div>
             )}
           </div>
@@ -2217,7 +2427,8 @@ export default function AutoMathtics() {
             <button
               style={st.primaryBtn}
               onClick={async () => {
-                const s = { ...settings, ...draft };
+                // players are managed live (add from the selection screen, remove above), never through the draft
+                const s = { ...settings, ...draft, players: (settings && settings.players) || [] };
                 setSettings(s);
                 soundOn = s.sound !== false;
                 const ok = await saveSettings(s);
@@ -2332,6 +2543,7 @@ export default function AutoMathtics() {
               <button style={st.ghostBtn} onClick={() => setScreen("shop")}>🛒 Shop</button>
               <button style={st.ghostBtn} onClick={() => setScreen("map")}>🗺 Map</button>
               <button style={st.ghostBtn} onClick={() => openHowTo(false)}>📖 How to</button>
+              <button style={st.ghostBtn} onClick={() => { setGuideIdx(0); setScreen("guide"); }}>🎓 Guide</button>
             </div>
             {scanAvailable && (
               <button style={{ ...st.ghostBtn, marginTop: 8, borderColor: "#8A5CFF", color: "#8A5CFF" }} onClick={() => startRun("scan")}>
@@ -3568,6 +3780,11 @@ body { background: #07091A; }
 @keyframes crateShake { 0%,100% { transform: rotate(0); } 20% { transform: rotate(-14deg); } 40% { transform: rotate(12deg); } 60% { transform: rotate(-10deg); } 80% { transform: rotate(8deg); } }
 @keyframes cratePop { from { transform: scale(.2); opacity: 0; } 70% { transform: scale(1.3); opacity: 1; } to { transform: scale(1); opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .crate-item, .crate-name { opacity: 1; } }
+/* add-player + guide */
+.add-player { position: relative; z-index: 2; margin: 6px auto 4px; padding: 10px 20px; border-radius: 999px; background: rgba(8,10,30,.62); border: 1.5px dashed rgba(138,147,201,.55); color: #EAF2FF; font: 700 13px 'Orbitron', sans-serif; letter-spacing: .08em; cursor: pointer; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+.add-player:hover { border-style: solid; border-color: #2DFFB3; color: #2DFFB3; box-shadow: 0 0 18px rgba(45,255,179,.35); }
+.pick { cursor: pointer; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+.pick:active { transform: scale(.9) !important; }
 .tronmap::before { content:""; position:absolute; inset:0; pointer-events:none; opacity:.5;
   background-image: linear-gradient(var(--grid, rgba(53,224,255,.06)) 1px, transparent 1px), linear-gradient(90deg, var(--grid, rgba(53,224,255,.06)) 1px, transparent 1px);
   background-size: 22px 22px; mask-image: linear-gradient(to top, black 30%, transparent); -webkit-mask-image: linear-gradient(to top, black 30%, transparent); }

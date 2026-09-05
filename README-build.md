@@ -34,6 +34,19 @@ the browser console with
 and reload. Note `loadProgress` still runs its migrations on whatever you seed — for level A it will
 backfill the SEED_SYNC passes, so seed a later level if you want the numbers left alone.
 
+## Players
+
+The built-in `USERS` (Allison, Geralt — photo avatars, a pace multiplier) plus anything in
+`settings.players` (`{ name, age, emoji, color, mult, joined }`) make up the `roster`, which every
+screen and the admin panel iterate. "➕ Add player" on the selection screen runs the wizard: name
+(`validPlayerName` — 2–12 alphanumerics, not a reserved name, not taken), icon, colour → PIN twice →
+`createPlayer` writes the roster entry to settings and a `newPlayerProgress` (paper 1, empty
+history, PIN) to the player's own node, enters them, and shows the quick guide (`GUIDE_SLIDES`; also
+"🎓 Guide" on the home screen). The name is the storage key exactly as for the built-ins, so time
+scale (`<name>Scale`), log, restore, PIN reset, manual credit and redemptions all just work. Admin
+"✕ remove" drops the roster entry only — the progress node stays, and adding the same name again
+picks it back up. The admin Save writes `players` from live settings, never from the draft.
+
 ## Sync — nothing a device recorded can be erased by another
 
 Every save is stamped (`savedAt`, `savedBy`) and every history row written since v1.17 carries `ts`.
