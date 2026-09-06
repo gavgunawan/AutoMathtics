@@ -999,8 +999,8 @@ function playWrong() {
 
 // ---------- shared settings (admin panel), synced via cloud ----------
 const ADMIN_PIN = "2026";
-const BUILD_TAG = "v1.19 · 6 Sep";
-const BUILD_ID = "am-build-119"; // ASCII-only twin of BUILD_TAG, searched for in the live index.html
+const BUILD_TAG = "v1.20 · 6 Sep";
+const BUILD_ID = "am-build-120"; // ASCII-only twin of BUILD_TAG, searched for in the live index.html
 
 // ---------- full screen ----------
 const fsSupported = () => typeof document !== "undefined" && !!(document.fullscreenEnabled || document.webkitFullscreenEnabled) && !(window.navigator && window.navigator.standalone);
@@ -1069,6 +1069,9 @@ const rocketReady = (r) => {
   const min = r.minEach || 0;
   return !min || (r.crew || []).every((n) => ((r.fuel || {})[n] || 0) >= min);
 };
+// a rocket is fuelled with grid coins by default; Dad can build one that takes reward points instead
+const rocketSym = (r) => (r && r.currency === "rp" ? "🏆" : "⚡");
+const ROCKET_AMOUNTS = { gc: [50, 100, 250], rp: [100, 200, 500] };
 const ADMIN_INP = { background: "#10142E", border: "1px solid #2A3170", borderRadius: 8, color: "#EAF2FF", padding: "6px 8px", fontSize: 13, fontFamily: "Consolas, monospace" };
 
 // ---------- progress load/save (cloud-first, local fallback) ----------
@@ -1458,7 +1461,7 @@ export default function AutoMathtics() {
   const [rocketBusy, setRocketBusy] = useState(false);
   const [rocketBoom, setRocketBoom] = useState(0);
   const rocketPrev = useRef(null);
-  const [rk, setRk] = useState({ emoji: "🎬", name: "", goal: "2000", minEach: "300", crew: [] }); // admin build form
+  const [rk, setRk] = useState({ emoji: "🎬", name: "", currency: "gc", goal: "2000", minEach: "300", crew: [] }); // admin build form
   const [creditMsg, setCreditMsg] = useState(null);
   useEffect(() => {
     const on = () => setIsFs(fsActive());
@@ -1779,7 +1782,10 @@ export default function AutoMathtics() {
     const key = user.name.toLowerCase();
     if (!(rocket.crew || []).includes(key)) { setRocketMsg("you're not on this rocket's crew — ask Dad"); return; }
     const bal = balances(prog);
-    if (bal.gcBal < amt) { setRocketMsg(`need ⚡${amt - bal.gcBal} more`); return; }
+    const rp = rocket.currency === "rp";
+    const sym = rocketSym(rocket);
+    const have = rp ? bal.rpBal : bal.gcBal;
+    if (have < amt) { setRocketMsg(`need ${sym}${amt - have} more`); return; }
     setRocketBusy(true);
     const mineBefore = (rocket.fuel || {})[key] || 0;
     const next = await updateRocket((cur) => {
@@ -1791,18 +1797,24 @@ export default function AutoMathtics() {
     });
     setRocketBusy(false);
     if (!next || next.id !== rocket.id || ((next.fuel || {})[key] || 0) < mineBefore + amt) { setRocketMsg("⚠ couldn't reach the rocket — try again"); return; }
-    // the fuel is spent: through the ledger like a shop buy, so balances and merges stay honest
-    const w = { ...prog.wallet, gcSpent: (prog.wallet.gcSpent || 0) + amt,
-      purchases: [ledgerRow({ id: "rocket", emoji: "🚀", name: `Rocket fuel · ${(next.prize && next.prize.name) || "family prize"}` }, amt), ...(prog.wallet.purchases || [])].slice(0, 120) };
+    // the fuel is spent through the kid's own ledger, so balances and merges stay honest:
+    // grid coins go through gcSpent + the purchase log, reward points through rpSpent + an
+    // already-approved redemption (that is the ledger the rp merge floor reads)
+    const label = `Rocket fuel · ${(next.prize && next.prize.name) || "family prize"}`;
+    const w = rp
+      ? { ...prog.wallet, rpSpent: (prog.wallet.rpSpent || 0) + amt,
+          redemptions: [{ id: Date.now() + "", rewardId: "rocket", emoji: "🚀", name: label, cost: amt, date: todayISO(), status: "approved" }, ...(prog.wallet.redemptions || [])].slice(0, 30) }
+      : { ...prog.wallet, gcSpent: (prog.wallet.gcSpent || 0) + amt,
+          purchases: [ledgerRow({ id: "rocket", emoji: "🚀", name: label }, amt), ...(prog.wallet.purchases || [])].slice(0, 120) };
     const np = { ...prog, wallet: w };
     setProg(np); saveProgress(user.name, np);
     setRocket(next);
     if (next.status !== "launched") playKaching();
-    setRocketMsg(next.status === "launched" ? "🚀 LIFT-OFF!" : `⛽ +⚡${amt} in — thanks, ${user.name}!`);
+    setRocketMsg(next.status === "launched" ? "🚀 LIFT-OFF!" : `⛽ +${sym}${amt} in — thanks, ${user.name}!`);
   }
   async function adminRocket(action) {
     if (action === "build") {
-      const r = { id: Date.now() + "", status: "fueling", prize: { emoji: rk.emoji.trim() || "🎁", name: rk.name.trim() }, goal: parseInt(rk.goal, 10) || 0, minEach: parseInt(rk.minEach, 10) || 0, crew: rk.crew, createdOn: todayISO(), createdAt: Date.now(), history: (rocket && rocket.history) || [] };
+      const r = { id: Date.now() + "", status: "fueling", prize: { emoji: rk.emoji.trim() || "🎁", name: rk.name.trim() }, currency: rk.currency === "rp" ? "rp" : "gc", goal: parseInt(rk.goal, 10) || 0, minEach: parseInt(rk.minEach, 10) || 0, crew: rk.crew, createdOn: todayISO(), createdAt: Date.now(), history: (rocket && rocket.history) || [] };
       setRocket(await updateRocket((cur) => (cur && cur.status === "fueling" ? cur : r)));
     } else if (action === "launch") {
       setRocket(await updateRocket((cur) => (cur && cur.status === "fueling" ? { ...cur, status: "launched", launchedAt: Date.now(), launchedOn: todayISO(), forced: true } : cur)));
@@ -2516,8 +2528,8 @@ export default function AutoMathtics() {
             <div style={{ ...st.logTitle, marginBottom: 6, color: "#8A5CFF" }}>🚀 FAMILY ROCKET</div>
             {rocket && rocket.status === "fueling" && rocket.prize ? (
               <>
-                <div style={{ fontSize: 13, color: "#EAF2FF", fontWeight: 700 }}>{rocket.prize.emoji} {rocket.prize.name} · goal ⚡{rocket.goal}{rocket.minEach ? ` · at least ⚡${rocket.minEach} each` : ""} · since {rocket.createdOn}</div>
-                <div style={{ fontSize: 12, color: "#8A93C9", margin: "4px 0 8px", fontFamily: "Consolas, monospace" }}>fuel ⚡{rocketFuel(rocket)} / {rocket.goal} — {(rocket.crew || []).map((n) => `${n} ⚡${(rocket.fuel || {})[n] || 0}`).join(" · ")}</div>
+                <div style={{ fontSize: 13, color: "#EAF2FF", fontWeight: 700 }}>{rocket.prize.emoji} {rocket.prize.name} · goal {rocketSym(rocket)}{rocket.goal}{rocket.minEach ? ` · at least ${rocketSym(rocket)}${rocket.minEach} each` : ""} · since {rocket.createdOn}</div>
+                <div style={{ fontSize: 12, color: "#8A93C9", margin: "4px 0 8px", fontFamily: "Consolas, monospace" }}>fuel {rocketSym(rocket)}{rocketFuel(rocket)} / {rocket.goal} — {(rocket.crew || []).map((n) => `${n} ${rocketSym(rocket)}${(rocket.fuel || {})[n] || 0}`).join(" · ")}</div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   <button style={{ ...st.tinyBtn, color: "#FFB020", borderColor: "#FFB020" }} onClick={() => { if (window.confirm("Launch it now, goal or not? The kids will see it launched and the prize as won.")) adminRocket("launch"); }}>🚀 Launch now</button>
                   <button style={{ ...st.tinyBtn, color: "#FF3B5C", borderColor: "#FF3B5C" }} onClick={() => { if (window.confirm("Scrap this rocket? Fuel already put in is NOT refunded.")) adminRocket("scrap"); }}>🗑 Scrap</button>
@@ -2526,7 +2538,7 @@ export default function AutoMathtics() {
             ) : rocket && rocket.status === "launched" && rocket.prize ? (
               <>
                 <div style={{ fontSize: 13, color: "#FFB020", fontWeight: 800 }}>🎉 LAUNCHED {rocket.launchedOn}{rocket.forced ? " (by you)" : ""} — {rocket.prize.emoji} {rocket.prize.name} is owed to the crew</div>
-                <div style={{ fontSize: 12, color: "#8A93C9", margin: "4px 0 8px", fontFamily: "Consolas, monospace" }}>{(rocket.crew || []).map((n) => `${n} ⚡${(rocket.fuel || {})[n] || 0}`).join(" · ")}</div>
+                <div style={{ fontSize: 12, color: "#8A93C9", margin: "4px 0 8px", fontFamily: "Consolas, monospace" }}>{(rocket.crew || []).map((n) => `${n} ${rocketSym(rocket)}${(rocket.fuel || {})[n] || 0}`).join(" · ")}</div>
                 <button style={{ ...st.tinyBtn, color: "#2DFFB3", borderColor: "#2DFFB3" }} onClick={() => adminRocket("claim")}>✓ Prize delivered — clear the pad</button>
               </>
             ) : (
@@ -2535,8 +2547,12 @@ export default function AutoMathtics() {
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
                   <input value={rk.emoji} onChange={(e) => setRk({ ...rk, emoji: e.target.value.slice(0, 4) })} style={{ ...ADMIN_INP, width: 48, textAlign: "center" }} aria-label="prize emoji" />
                   <input value={rk.name} onChange={(e) => setRk({ ...rk, name: e.target.value.slice(0, 40) })} placeholder="prize, e.g. Movie night" style={{ ...ADMIN_INP, flex: "1 1 160px" }} aria-label="prize name" />
-                  <label style={{ fontSize: 11, color: "#8A93C9" }}>goal ⚡ <input value={rk.goal} onChange={(e) => setRk({ ...rk, goal: e.target.value.replace(/\D/g, "").slice(0, 5) })} style={{ ...ADMIN_INP, width: 64 }} aria-label="goal" /></label>
-                  <label style={{ fontSize: 11, color: "#8A93C9" }}>min each ⚡ <input value={rk.minEach} onChange={(e) => setRk({ ...rk, minEach: e.target.value.replace(/\D/g, "").slice(0, 5) })} style={{ ...ADMIN_INP, width: 56 }} aria-label="minimum per kid, 0 for none" /></label>
+                  <select value={rk.currency} onChange={(e) => setRk({ ...rk, currency: e.target.value, goal: e.target.value === "rp" ? "4000" : "2000", minEach: e.target.value === "rp" ? "600" : "300" })} style={ADMIN_INP} aria-label="fuel type">
+                    <option value="gc">⚡ grid coins</option>
+                    <option value="rp">🏆 reward points</option>
+                  </select>
+                  <label style={{ fontSize: 11, color: "#8A93C9" }}>goal {rk.currency === "rp" ? "🏆" : "⚡"} <input value={rk.goal} onChange={(e) => setRk({ ...rk, goal: e.target.value.replace(/\D/g, "").slice(0, 5) })} style={{ ...ADMIN_INP, width: 64 }} aria-label="goal" /></label>
+                  <label style={{ fontSize: 11, color: "#8A93C9" }}>min each {rk.currency === "rp" ? "🏆" : "⚡"} <input value={rk.minEach} onChange={(e) => setRk({ ...rk, minEach: e.target.value.replace(/\D/g, "").slice(0, 5) })} style={{ ...ADMIN_INP, width: 56 }} aria-label="minimum per kid, 0 for none" /></label>
                 </div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 10, margin: "8px 0", fontSize: 12, color: "#EAF2FF", alignItems: "center" }}>
                   crew:
@@ -2678,7 +2694,8 @@ export default function AutoMathtics() {
               const total = rocketFuel(rocket), goal = rocket.goal || 1, pct = Math.min(100, Math.round((total / goal) * 100));
               const key = user.name.toLowerCase(); const mine = (rocket.fuel || {})[key] || 0; const min = rocket.minEach || 0;
               const launched = rocket.status === "launched";
-              const bal = earn ? earn.gcBal : 0;
+              const rp = rocket.currency === "rp", sym = rocketSym(rocket);
+              const bal = earn ? (rp ? earn.rpBal : earn.gcBal) : 0;
               const onCrew = (rocket.crew || []).includes(key);
               return (
                 <div style={{ position: "relative", margin: "14px 0 0", padding: "10px 12px 12px", borderRadius: 12, background: "#0B0E23", border: `1.5px solid ${launched ? "#FFB020" : "#8A5CFF"}`, boxShadow: launched ? "0 0 22px rgba(255,176,32,.35)" : "0 0 14px rgba(138,92,255,.25)", textAlign: "left" }}>
@@ -2692,8 +2709,8 @@ export default function AutoMathtics() {
                     <span className={launched ? "rocket-fly" : "rocket-ride"} style={{ position: "absolute", top: -9, left: `calc(${pct}% - 12px)`, fontSize: 20, lineHeight: 1, transition: "left .6s cubic-bezier(.2,.8,.2,1)" }} aria-hidden="true">🚀</span>
                   </div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 12px", fontSize: 11.5, color: "#8A93C9", fontFamily: "Consolas, monospace", fontWeight: 700 }}>
-                    <span style={{ color: "#EAF2FF" }}>⚡{total} / {goal}</span>
-                    {(rocket.crew || []).map((n) => { const u = roster.find((x) => x.name.toLowerCase() === n); const f = (rocket.fuel || {})[n] || 0; return <span key={n} style={{ color: u ? u.color : "#8A93C9" }}>{u ? u.name : n} ⚡{f}{min ? (f >= min ? " ✓" : ` / ${min}`) : ""}</span>; })}
+                    <span style={{ color: "#EAF2FF" }}>{sym}{total} / {goal}</span>
+                    {(rocket.crew || []).map((n) => { const u = roster.find((x) => x.name.toLowerCase() === n); const f = (rocket.fuel || {})[n] || 0; return <span key={n} style={{ color: u ? u.color : "#8A93C9" }}>{u ? u.name : n} {sym}{f}{min ? (f >= min ? " ✓" : ` / ${min}`) : ""}</span>; })}
                   </div>
                   {launched ? (
                     <div style={{ marginTop: 8, fontSize: 13.5, fontWeight: 800, color: "#FFB020" }}>🎉 LIFT-OFF! {rocket.prize.emoji} {rocket.prize.name} is yours — Dad hands it over.</div>
@@ -2701,11 +2718,11 @@ export default function AutoMathtics() {
                     <div style={{ marginTop: 8, fontSize: 11.5, color: "#8A93C9" }}>you're not on this rocket's crew — ask Dad</div>
                   ) : (
                     <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                      <span style={{ fontSize: 11.5, color: "#8A93C9" }}>⛽ fuel it:</span>
-                      {[50, 100, 250].map((a) => (
-                        <button key={a} style={{ ...st.tinyBtn, color: "#8A5CFF", borderColor: "#8A5CFF", opacity: bal >= a && !rocketBusy ? 1 : 0.45 }} disabled={bal < a || rocketBusy} onClick={() => fuelRocket(a)}>⚡{a}</button>
+                      <span style={{ fontSize: 11.5, color: "#8A93C9" }}>⛽ fuel it with {rp ? "reward points" : "grid coins"}:</span>
+                      {ROCKET_AMOUNTS[rp ? "rp" : "gc"].map((a) => (
+                        <button key={a} style={{ ...st.tinyBtn, color: rp ? "#FFB020" : "#8A5CFF", borderColor: rp ? "#FFB020" : "#8A5CFF", opacity: bal >= a && !rocketBusy ? 1 : 0.45 }} disabled={bal < a || rocketBusy} onClick={() => fuelRocket(a)}>{sym}{a}</button>
                       ))}
-                      {min > 0 && mine < min && <span style={{ fontSize: 11, color: "#FFB020" }}>everyone needs ⚡{min} in for lift-off</span>}
+                      {min > 0 && mine < min && <span style={{ fontSize: 11, color: "#FFB020" }}>everyone needs {sym}{min} in for lift-off</span>}
                       {rocketMsg && <span key={rocketMsg} className="fade" style={{ fontSize: 11.5, color: "#2DFFB3", fontWeight: 700 }}>{rocketMsg}</span>}
                     </div>
                   )}

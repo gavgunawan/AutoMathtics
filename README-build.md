@@ -55,7 +55,9 @@ panel (prize, goal, minimum per crew member, who's on the crew) and it appears o
 home screen as a gauge with ⚡50/100/250 fuel buttons. Every change is a `runTransaction`
 (`updateRocket`), so two kids fuelling at once can't lose a contribution; `rocketReady` flips it to
 `launched` inside the transaction the moment the tank is full and everyone on the crew has met the
-minimum. A kid's fuel is spending — `gcSpent` plus a ledger row — so balances and merges stay honest,
+minimum. A rocket has a `currency` (`gc` default, or `rp`); fuel buttons, symbols and the balance
+check follow it. A kid's fuel is spending — `gcSpent` plus a purchase row, or for a 🏆 rocket
+`rpSpent` plus an already-approved redemption row (the ledger the rp merge floor reads) — so balances and merges stay honest,
 and it is never refunded (Scrap warns). Admin "Prize delivered" moves the launch into `history` and
 frees the pad for the next one. Offline, the harness keeps the rocket in `localStorage`.
 
