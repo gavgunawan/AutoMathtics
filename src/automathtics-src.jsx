@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref as dbRef, get as dbGet, set as dbSet, onValue, runTransaction } from "firebase/database";
+import { genNavigator, navSecondsFor, NAV_TOPICS } from "./navigator.js";
 
 // ================= AUTOMATHTICS — THE MATH GRID =================
 // Papers 1–100 per level · session = 5 papers · one
@@ -124,8 +125,8 @@ const GUIDE_SLIDES = [
     "You earn both at the same time. Every time.",
   ] },
   { emoji: "📝", title: "How you earn", lines: [
-    "A session is 5 papers · 25 questions · one at a time, on a timer.",
-    "Score 25/25 and you pass: +⚡50 +🏆100, and the next papers unlock.",
+    "A session is 5 papers on a timer, one question at a time. ⚙️ Engine: 25 sums. 🧭 Navigator: 15 word problems.",
+    "Score 100% and you pass: +⚡50 +🏆100, and the next papers unlock. Both tracks to 100 to jump to the next sector.",
     "Miss one? No loot — same papers again next time. You've got this.",
   ] },
   { emoji: "👑🧠", title: "Double loot", lines: [
@@ -159,6 +160,32 @@ const GUIDE_SLIDES = [
 const PAPERS_PER_LEVEL = 100;
 const PAPERS_PER_SESSION = 5;
 const Q_PER_PAPER = 5;
+const Q_PER_PAPER_NAV = 3; // a Navigator paper is 3 word problems: 15 a session, under ten minutes
+
+// ---------- two tracks per sector ----------
+// ⚙️ ENGINE is the original arithmetic track and keeps the original fields (paper, bossCleared).
+// 🧭 NAVIGATOR lives in prog.nav. Same 100 papers, same crowns every 20, same map. Both tracks
+// have to be through — paper 100 and five crowns — before the jump to the next sector.
+const TRACKS = {
+  engine: { id: "engine", emoji: "⚙️", name: "ENGINE", label: "Engine", color: "#35E0FF", qpp: Q_PER_PAPER },
+  nav: { id: "nav", emoji: "🧭", name: "NAVIGATOR", label: "Navigator", color: "#FFB020", qpp: Q_PER_PAPER_NAV },
+};
+const trk = (p, t) => (t === "nav" ? { paper: (p.nav && p.nav.paper) || 1, bossCleared: (p.nav && p.nav.bossCleared) || 0 } : { paper: p.paper, bossCleared: p.bossCleared || 0 });
+const withTrk = (p, t, patch) => (t === "nav" ? { ...p, nav: { ...trk(p, "nav"), ...patch } } : { ...p, ...patch });
+const trackDone = (p, t) => { const x = trk(p, t); return x.paper > PAPERS_PER_LEVEL && x.bossCleared >= 5; };
+const bossDueT = (p, t) => { const x = trk(p, t); return x.bossCleared < Math.min(5, Math.floor((x.paper - 1) / 20)); };
+const jumpTo = (p, level) => ({ ...p, level, paper: 1, bossCleared: 0, nav: { paper: 1, bossCleared: 0 } });
+
+// read a Navigator question aloud (built-in browser speech; nothing leaves the device)
+function speak(text) {
+  try {
+    if (typeof window === "undefined" || !window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(String(text).replace(/___/g, " blank ").replace(/×/g, " times ").replace(/÷/g, " divided by ").replace(/–/g, " to ").replace(/m²/g, " square metres").replace(/cm³/g, " cubic centimetres").replace(/cm²/g, " square centimetres"));
+    u.rate = 0.92;
+    window.speechSynthesis.speak(u);
+  } catch (e) {}
+}
 
 const tierOf = (paper) => Math.min(5, Math.ceil(paper / 20));
 // per-question seconds: level base + 5s per tier step, × user pace
@@ -333,6 +360,22 @@ function buildBossQs(levelIdx, tierEndPaper) {
   return qs;
 }
 
+function buildNavSession(levelIdx, startPaper) {
+  const qs = [];
+  for (let p = startPaper; p < startPaper + PAPERS_PER_SESSION; p++) {
+    for (let i = 0; i < Q_PER_PAPER_NAV; i++) qs.push({ paper: p, track: "nav", ...genNavigator(levelIdx, tierOf(p)) });
+  }
+  return qs;
+}
+function buildNavBossQs(levelIdx, tierEndPaper) {
+  const qs = [];
+  for (let i = 0; i < PAPERS_PER_SESSION * Q_PER_PAPER_NAV; i++) {
+    const p = tierEndPaper - 19 + Math.floor(Math.random() * 20);
+    qs.push({ paper: p, track: "nav", qLevel: levelIdx, ...genNavigator(levelIdx, tierOf(p)) });
+  }
+  return qs;
+}
+
 function buildScanQs(level) {
   const qs = [];
   const push = (li) => {
@@ -348,12 +391,13 @@ function buildScanQs(level) {
 // ---------- answers ----------
 
 function answerToString(ans) {
-  return ans.type === "int" ? fmt(ans.v) : `${ans.n}/${ans.d}`;
+  return ans.type === "int" ? fmt(ans.v) : ans.type === "dec" ? String(ans.v) : ans.type === "choice" ? "" : `${ans.n}/${ans.d}`;
 }
 
 function checkAnswer(input, ans) {
   const s = input.trim();
   if (s === "") return false;
+  if (ans.type === "dec") { const f = parseFloat(s); return Number.isFinite(f) && Math.abs(f - ans.v) < 0.005; }
   if (s.includes("/")) {
     const [pn, pd] = s.split("/").map((x) => parseInt(x, 10));
     if (!Number.isFinite(pn) || !Number.isFinite(pd) || pd === 0) return false;
@@ -555,7 +599,7 @@ const deviceId = () => {
 };
 const uniq = (arr) => [...new Set(arr)];
 // identity of a history row — the same event written by two devices produces the same key
-const rowKey = (r) => [r.date, r.when, r.papers, r.passed ? 1 : 0, r.correct, r.total, r.quit ? "q" : "", r.restart ? "r" : "", r.atQ, r.shield ? "s" : "", r.boss ? "b" : "", r.scan ? "c" : ""].join("|");
+const rowKey = (r) => [r.date, r.when, r.papers, r.passed ? 1 : 0, r.correct, r.total, r.quit ? "q" : "", r.restart ? "r" : "", r.atQ, r.shield ? "s" : "", r.boss ? "b" : "", r.scan ? "c" : "", r.track || "", r.practice ? "p" : ""].join("|");
 function mergeHistory(a, b) {
   const seen = new Set(); const out = [];
   const push = (r) => { const k = rowKey(r); if (!seen.has(k)) { seen.add(k); out.push(r); } };
@@ -583,6 +627,7 @@ function mergeProgress(x, y) {
   const here = [lead, other].filter((p) => (p.level || 0) === level); // paper/boss only compare within the furthest level
   const paper = Math.max(...here.map((p) => p.paper || 1));
   const bossCleared = Math.max(...here.map((p) => p.bossCleared || 0));
+  const nav = { paper: Math.max(...here.map((p) => (p.nav && p.nav.paper) || 1)), bossCleared: Math.max(...here.map((p) => (p.nav && p.nav.bossCleared) || 0)) };
   const seenP = new Set();
   const purchases = [...(lw.purchases || []), ...(ow.purchases || [])].filter((r) => { const k = r.id + "|" + r.when + "|" + r.cost; if (seenP.has(k)) return false; seenP.add(k); return true; });
   const redById = new Map();
@@ -602,7 +647,7 @@ function mergeProgress(x, y) {
     egg: [lw.egg, ow.egg].filter(Boolean).sort((a, b) => ((a.bought || "") < (b.bought || "") ? 1 : -1))[0] || null,
   };
   ["histRepair2", "streakFix1", "sessionFix4", "purchasesInit"].forEach((f) => { if (lw[f] || ow[f]) wallet[f] = true; });
-  return { ...other, ...lead, level, paper, bossCleared, wallet, history: trimHistory(mergeHistory(lead.history || [], other.history || [])) };
+  return { ...other, ...lead, level, paper, bossCleared, nav, wallet, history: trimHistory(mergeHistory(lead.history || [], other.history || [])) };
 }
 // equality that ignores the save stamp, key order, and the nulls / empty arrays Firebase drops
 const normalize = (v) => {
@@ -874,7 +919,7 @@ function logFileText(name, prog) {
   L.push(`AUTOMATHTICS LOG — ${name.toUpperCase()}`);
   L.push(`Updated: ${new Date().toString()}`);
   L.push(`Vault: ⚡${e.gcBal} grid coins · 🏆${e.rpBal} reward points  (earned ⚡${e.gc}/🏆${e.rp} from ${e.passes} passes + ${e.bonuses} streak blocks)`);
-  L.push(`Level ${LEVELS[prog.level].id} (${LEVELS[prog.level].name}) — next papers ${Math.min(prog.paper, 100)}–${Math.min(prog.paper + 4, 100)}`);
+  L.push(`Level ${LEVELS[prog.level].id} (${LEVELS[prog.level].name}) — ⚙️ Engine next papers ${Math.min(prog.paper, 100)}–${Math.min(prog.paper + 4, 100)} · 🧭 Navigator next papers ${Math.min(trk(prog, "nav").paper, 100)}–${Math.min(trk(prog, "nav").paper + 4, 100)}`);
   L.push("");
   L.push("DATE       | LOGGED            | LEVEL/PAPERS  | SCORE | TIME  | RESULT");
   prog.history.forEach((h) => {
@@ -999,8 +1044,8 @@ function playWrong() {
 
 // ---------- shared settings (admin panel), synced via cloud ----------
 const ADMIN_PIN = "2026";
-const BUILD_TAG = "v1.20 · 6 Sep";
-const BUILD_ID = "am-build-120"; // ASCII-only twin of BUILD_TAG, searched for in the live index.html
+const BUILD_TAG = "v2.0 · 6 Sep";
+const BUILD_ID = "am-build-200"; // ASCII-only twin of BUILD_TAG, searched for in the live index.html
 
 // ---------- full screen ----------
 const fsSupported = () => typeof document !== "undefined" && !!(document.fullscreenEnabled || document.webkitFullscreenEnabled) && !(window.navigator && window.navigator.standalone);
@@ -1194,11 +1239,22 @@ async function loadProgress(name) {
     if (typeof p.bossCleared === "number" && p.bossCleared > legit) {
       let surplus = p.bossCleared - legit;
       p.history = p.history.filter((r) => {
-        if (r.boss && r.passed && surplus > 0) { surplus--; return false; } // newest-first: drop the phantom ones
+        if (r.boss && r.passed && r.track !== "nav" && surplus > 0) { surplus--; return false; } // newest-first: drop the phantom ones
         return true;
       });
       p.bossCleared = legit;
       changed = true;
+    }
+  }
+
+  // Navigator track (v2.0): starts at paper 1 of the current sector; same crown guard as Engine
+  if (!p.nav || typeof p.nav.paper !== "number") { p.nav = { paper: 1, bossCleared: 0 }; changed = true; }
+  {
+    const legitN = Math.min(5, Math.floor((Math.max(1, p.nav.paper) - 1) / 20));
+    if ((p.nav.bossCleared || 0) > legitN) {
+      let surplus = p.nav.bossCleared - legitN;
+      p.history = p.history.filter((r) => { if (r.boss && r.passed && r.track === "nav" && surplus > 0) { surplus--; return false; } return true; });
+      p.nav.bossCleared = legitN; changed = true;
     }
   }
 
@@ -1388,6 +1444,16 @@ function Frac({ n, d }) {
 
 function QuestionView({ q }) {
   const d = q.display;
+  if (d.layout === "word") {
+    const parts = d.text.split("___");
+    return (
+      <div style={{ fontFamily: "'Rajdhani', sans-serif", fontWeight: 700, fontSize: "clamp(20px, 5.2vw, 27px)", lineHeight: 1.35, color: "#EAF2FF", textAlign: "left", padding: "0 4px" }}>
+        {parts.map((part, i) => (
+          <React.Fragment key={i}>{part}{i < parts.length - 1 && <span style={{ display: "inline-block", minWidth: 56, borderBottom: "3px solid #35E0FF", margin: "0 4px", verticalAlign: "baseline" }}>&nbsp;</span>}</React.Fragment>
+        ))}
+      </div>
+    );
+  }
   if (d.layout === "stack") {
     const top = String(d.top), bot = String(d.bottom);
     const W = Math.max(top.length, bot.length);
@@ -1518,7 +1584,12 @@ export default function AutoMathtics() {
   const wakeRef = useRef(null);
 
   const levelIdx = prog ? prog.level : 0;
-  const startPaper = prog ? prog.paper : 1;
+  const [track, setTrack] = useState("engine"); // which track the home card / session / how-to act on
+  const [mapTrack, setMapTrack] = useState("engine");
+  const [howTrack, setHowTrack] = useState("engine");
+  const [ttsOn, setTtsOn] = useState(true);
+  const runStartRef = useRef(0); // the paper a running session started at (practice runs pick a random one)
+  const startPaper = prog ? trk(prog, track).paper : 1;
   const earn = prog ? balances(prog) : null;
 
   // ----- cloud sync status + live updates from other devices -----
@@ -1561,9 +1632,10 @@ export default function AutoMathtics() {
     return Math.min(100, Math.max(10, v)) / 100;
   };
   const scaledSecs = (lvlIdx, tier, u) => Math.max(5, Math.round(secondsFor(lvlIdx, tier, u.mult) * scaleFor(u.name)));
+  const scaledSecsT = (lvlIdx, tier, u, t) => Math.max(5, Math.round((t === "nav" ? navSecondsFor(lvlIdx, tier, u.mult) : secondsFor(lvlIdx, tier, u.mult)) * scaleFor(u.name)));
   // everyone who can play on this family's grid: the built-ins plus players added from the selection screen
   const roster = [...USERS, ...(((settings && settings.players) || []).map(playerToUser))];
-  const qSecs = (q) => scaledSecs(q && typeof q.qLevel === "number" ? q.qLevel : levelIdx, tierOf(q ? q.paper : startPaper), user);
+  const qSecs = (q) => scaledSecsT(q && typeof q.qLevel === "number" ? q.qLevel : levelIdx, tierOf(q ? q.paper : startPaper), user, q && q.track === "nav" ? "nav" : "engine");
   const petEmoji = prog && prog.wallet && prog.wallet.activePet
     ? (SHOP_ITEMS.find((it) => it.id === prog.wallet.activePet) || {}).emoji : null;
   // everything else the wallet can dress the screens with
@@ -1658,11 +1730,7 @@ export default function AutoMathtics() {
   }
 
   // boss gate: due whenever a completed tier's crown hasn't been beaten yet
-  const bossDue = (p) => {
-    const tierReached = Math.min(5, Math.floor((p.paper - 1) / 20) + (p.paper > PAPERS_PER_LEVEL ? 0 : 0));
-    const owed = Math.min(5, Math.floor((p.paper - 1) / 20));
-    return p.bossCleared < owed;
-  };
+  const bossDue = (p, t) => bossDueT(p, t || track);
 
   useEffect(() => {
     if (!user) return;
@@ -1693,6 +1761,13 @@ export default function AutoMathtics() {
     return () => { document.removeEventListener("visibilitychange", onVis); releaseWakeLock(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen]);
+
+  useEffect(() => {
+    if (screen !== "session" || !ttsOn) return;
+    const cq = qs[qIdx];
+    if (cq && cq.track === "nav" && cq.read) speak(cq.read);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen, qIdx]);
 
   // ----- countdown -----
   useEffect(() => {
@@ -1853,33 +1928,44 @@ export default function AutoMathtics() {
     }
   }
 
-  const levelDoneHistory = (p) => p.history.some((h) => h.levelIdx === p.level);
+  const levelDoneHistory = (p, t) => p.history.some((h) => h.levelIdx === p.level && (t === "nav" ? h.track === "nav" : h.track !== "nav"));
 
   // ----- session flow -----
-  function beginSession() {
-    if (bossDue(prog)) { startRun("boss"); return; }
-    if (prog.paper === 1 && !levelDoneHistory(prog)) {
+  function beginSession(t) {
+    // called with a track id from the track cards, or with a click event from "Next session" — only a string counts
+    const tr = typeof t === "string" ? t : track;
+    if (tr !== track) setTrack(tr);
+    if (bossDue(prog, tr)) { startRun("boss", tr); return; }
+    if (trk(prog, tr).paper === 1 && !levelDoneHistory(prog, tr) && !trackDone(prog, tr)) {
       setSessionMode("session"); // the how-to's start button starts a normal session, whatever ran last
-      openHowTo(true);
+      openHowTo(true, tr);
       return;
     }
-    startRun("session");
+    startRun("session", tr);
   }
 
   // Only Restart and the how-to's start button re-run the CURRENT mode. "Next session" used to come
   // through here too, so after a cleared check point it launched another check point (a tier that
   // wasn't due yet) and after a weekly scan it launched scan after scan.
-  function reallyStart() { startRun(sessionMode === "boss" ? "boss" : sessionMode === "scan" ? "scan" : "session"); }
+  function reallyStart() { startRun(sessionMode === "boss" ? "boss" : sessionMode === "scan" ? "scan" : "session", track); }
 
-  function startRun(mode) {
+  function startRun(mode, t) {
+    let tr = typeof t === "string" ? t : track;
+    if (mode === "scan") tr = "engine"; // the weekly scan is arithmetic recap — always the Engine track
+    setTrack(tr);
     // hard gates, whoever asked for the mode
-    if (mode === "boss" && !bossDue(prog)) mode = "session";
+    if (mode === "boss" && !bossDue(prog, tr)) mode = "session";
     if (mode === "scan" && !scanAvailable) mode = "session";
+    if (mode === "session" && trackDone(prog, tr)) mode = "practice"; // a finished track replays random papers, no progress
     setSessionMode(mode);
+    const cur = trk(prog, tr);
+    const runStart = mode === "practice" ? 1 + 5 * Math.floor(Math.random() * 20) : cur.paper;
+    runStartRef.current = runStart;
     const list =
-      mode === "boss" ? buildBossQs(levelIdx, (prog.bossCleared + 1) * 20)
+      mode === "boss" ? (tr === "nav" ? buildNavBossQs(levelIdx, (cur.bossCleared + 1) * 20) : buildBossQs(levelIdx, (cur.bossCleared + 1) * 20))
       : mode === "scan" ? buildScanQs(levelIdx)
-      : buildSession(levelIdx, startPaper);
+      : tr === "nav" ? buildNavSession(levelIdx, runStart)
+      : buildSession(levelIdx, runStart);
     setQs(list);
     setQIdx(0);
     setResults([]);
@@ -1890,7 +1976,7 @@ export default function AutoMathtics() {
     qlogRef.current = [];
     qStartRef.current = Date.now();
     const first = list[0];
-    setTimeLeft(scaledSecs(typeof first.qLevel === "number" ? first.qLevel : levelIdx, tierOf(first.paper), user));
+    setTimeLeft(qSecs(first));
     setScreen("session");
   }
 
@@ -1902,7 +1988,7 @@ export default function AutoMathtics() {
       date: todayISO(), ts: Date.now(),
       when: now.toLocaleDateString() + " " + now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       levelIdx, levelId: LEVELS[levelIdx].id,
-      papers: sessionMode === "boss" ? `👑 CHECK POINT T${prog.bossCleared + 1}` : sessionMode === "scan" ? "🧠 SYSTEM SCAN" : `${startPaper}–${startPaper + PAPERS_PER_SESSION - 1}`,
+      track: track === "nav" ? "nav" : undefined, papers: (track === "nav" ? "🧭 " : "") + (sessionMode === "boss" ? `👑 CHECK POINT T${trk(prog, track).bossCleared + 1}` : sessionMode === "scan" ? "🧠 SYSTEM SCAN" : `${startPaper}–${startPaper + PAPERS_PER_SESSION - 1}`),
       restart: true, atQ: qIdx + 1, atPaper: sessionMode === "boss" || sessionMode === "scan" ? null : (qs[qIdx] ? qs[qIdx].paper : startPaper),
     };
     const np = { ...prog, history: trimHistory([entry, ...prog.history]) };
@@ -1918,7 +2004,7 @@ export default function AutoMathtics() {
       date: todayISO(), ts: Date.now(),
       when: now.toLocaleDateString() + " " + now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       levelIdx, levelId: LEVELS[levelIdx].id,
-      papers: sessionMode === "boss" ? `👑 CHECK POINT T${prog.bossCleared + 1}` : sessionMode === "scan" ? "🧠 SYSTEM SCAN" : `${startPaper}–${startPaper + PAPERS_PER_SESSION - 1}`,
+      track: track === "nav" ? "nav" : undefined, papers: (track === "nav" ? "🧭 " : "") + (sessionMode === "boss" ? `👑 CHECK POINT T${trk(prog, track).bossCleared + 1}` : sessionMode === "scan" ? "🧠 SYSTEM SCAN" : `${startPaper}–${startPaper + PAPERS_PER_SESSION - 1}`),
       quit: true, atQ: qIdx + 1, atPaper: sessionMode === "boss" || sessionMode === "scan" ? null : (qs[qIdx] ? qs[qIdx].paper : startPaper),
     };
     const np = { ...prog, history: trimHistory([entry, ...prog.history]) };
@@ -1927,39 +2013,51 @@ export default function AutoMathtics() {
     setScreen("home");
   }
 
-  function openHowTo(thenStart) {
+  function openHowTo(thenStart, t) {
+    setHowTrack(t || track);
     setHowSlide(0);
     setHowLine(1);
     setHowThenStart(!!thenStart);
     setScreen("howto");
   }
+  // Navigator's how-to: how the track works, then what this sector covers
+  const NAV_HOWTO = (lv) => ({
+    title: NAV_TOPICS[lv].title,
+    slides: [
+      { title: "How Navigator works", lines: ["Read the question. Tap 🔊 any time to hear it read out.", "Type a number on the keypad and tap Go — or tap the answer button if there are choices.", "3 questions make a paper, 5 papers make a session: 15 questions, about ten minutes.", "100% unlocks the next papers. A 👑 check point every 20 papers, just like Engine."] },
+      { title: "What's in this sector", lines: NAV_TOPICS[lv].lines },
+    ],
+    tips: ["Read it twice before you answer.", "Ask: what do I have, what do I need to find?", "For which-is-heavier questions, picture the real things.", "Both tracks to 100 to jump to the next sector."],
+  });
+  const howto = howTrack === "nav" ? NAV_HOWTO(levelIdx) : HOWTO[levelIdx];
 
   function howNext() {
-    const slides = HOWTO[levelIdx].slides;
+    const slides = howto.slides;
     if (howLine < slides[howSlide].lines.length) setHowLine(howLine + 1);
     else if (howSlide < slides.length - 1) { setHowSlide(howSlide + 1); setHowLine(1); }
   }
   const howAtEnd = () => {
-    const slides = HOWTO[levelIdx].slides;
+    const slides = howto.slides;
     return howSlide === slides.length - 1 && howLine >= slides[howSlide].lines.length;
   };
 
   function record(kind) {
     const q = qs[qIdx];
-    const ansStr = answerToString(q.answer);
+    const ansStr = q.answer.type === "choice" ? q.display.choices[q.answer.v] : answerToString(q.answer);
+    try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch (e) {}
     const nextResults = [...results, kind];
     setResults(nextResults);
-    // per-question stats feed the fluency heatmap: [tier, seconds, ok, qLevel].
+    // per-question stats feed the fluency heatmap: [tier, seconds, ok, qLevel, isNav].
     // qLevel is required: a SYSTEM SCAN mixes in questions from earlier levels, and without it those
     // easy, fast answers were landing in the current level's tiers and dragging the times down.
-    qlogRef.current.push([tierOf(q.paper), Math.round((Date.now() - qStartRef.current) / 1000), kind === "correct" ? 1 : 0, typeof q.qLevel === "number" ? q.qLevel : levelIdx]);
+    qlogRef.current.push([tierOf(q.paper), Math.round((Date.now() - qStartRef.current) / 1000), kind === "correct" ? 1 : 0, typeof q.qLevel === "number" ? q.qLevel : levelIdx, q.track === "nav" ? 1 : 0]);
     qStartRef.current = Date.now();
     if (kind === "correct") {
       const ns = streak + 1;
       setStreak(ns);
       setFlash({ kind, text: `⭐ Correct! ${ansStr}`, combo: streakTier(ns) ? ns : 0 });
-      // every 5th question closes a paper — bigger jingle instead of the blip
-      if ((qIdx + 1) % Q_PER_PAPER === 0) { playPaperDone(); setPaperBurst((n) => n + 1); } else playCorrect();
+      // the last question of a paper closes it — bigger jingle instead of the blip
+      if ((qIdx + 1) % (q.track === "nav" ? Q_PER_PAPER_NAV : Q_PER_PAPER) === 0) { playPaperDone(); setPaperBurst((n) => n + 1); } else playCorrect();
     } else if (kind === "incorrect") {
       setStreak(0);
       setFlash({ kind, text: `✗ Not quite — it was ${ansStr}` });
@@ -1988,34 +2086,37 @@ export default function AutoMathtics() {
     const elapsed = Math.round((Date.now() - sessionStart) / 1000);
     const now = new Date();
     const mode = sessionMode;
-    const bossTier = prog.bossCleared + 1;
+    const tr = track;
+    const cur = trk(prog, tr);
+    const sp = runStartRef.current || startPaper;
+    const bossTier = cur.bossCleared + 1;
     const entry = {
       date: todayISO(), ts: Date.now(),
       when: now.toLocaleDateString() + " " + now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       levelIdx,
       levelId: LEVELS[levelIdx].id,
-      papers: mode === "boss" ? `👑 CHECK POINT T${bossTier}` : mode === "scan" ? `🧠 SCAN` : `${startPaper}–${startPaper + PAPERS_PER_SESSION - 1}`,
+      papers: (tr === "nav" ? "🧭 " : "") + (mode === "boss" ? `👑 CHECK POINT T${bossTier}` : mode === "scan" ? `🧠 SCAN` : mode === "practice" ? `🔁 ${sp}–${sp + PAPERS_PER_SESSION - 1}` : `${sp}–${sp + PAPERS_PER_SESSION - 1}`),
       correct, incorrect, timeout, total, passed,
       mins: `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}`,
       qlog: qlogRef.current.slice(0, 30),
     };
     if (mode === "boss") entry.boss = true;
     if (mode === "scan") entry.scan = true;
+    if (mode === "practice") entry.practice = true;
+    if (tr === "nav") entry.track = "nav";
 
     let np = { ...prog, wallet: { ...prog.wallet }, history: trimHistory([entry, ...prog.history]) };
     let leveledUp = false;
     if (passed) {
       if (mode === "boss") {
-        np.bossCleared = Math.min(5, prog.bossCleared + 1);
-        if (np.bossCleared >= 5 && prog.paper > PAPERS_PER_LEVEL) {
-          if (prog.level < LEVELS.length - 1) { np.level = prog.level + 1; np.paper = 1; np.bossCleared = 0; leveledUp = true; }
-        }
+        np = withTrk(np, tr, { bossCleared: Math.min(5, cur.bossCleared + 1) });
       } else if (mode === "scan") {
         np.wallet.lastScanWeek = isoWeek(now);
-      } else {
-        const nextPaper = startPaper + PAPERS_PER_SESSION;
-        np.paper = Math.min(nextPaper, PAPERS_PER_LEVEL + 1); // boss 5 gates the level-up
+      } else if (mode !== "practice") {
+        np = withTrk(np, tr, { paper: Math.min(sp + PAPERS_PER_SESSION, PAPERS_PER_LEVEL + 1) }); // crown 5 gates the jump
       }
+      // the jump: both tracks through the sector
+      if (trackDone(np, "engine") && trackDone(np, "nav") && np.level < LEVELS.length - 1) { np = jumpTo(np, np.level + 1); leveledUp = true; }
     }
     // earned pets: a legendary run, or an egg kept warm long enough
     const earnedNow = passed ? applyEarned(np) : { p: np, granted: [], hatched: null };
@@ -2024,14 +2125,15 @@ export default function AutoMathtics() {
     const after = balances(np);
     setProg(np);
     setLastSummary({
-      ...entry, leveledUp, mode, granted: earnedNow.granted, hatched: earnedNow.hatched,
-      finishedAll: np.paper > PAPERS_PER_LEVEL && np.bossCleared >= 5 && np.level === LEVELS.length - 1,
+      ...entry, leveledUp, mode, track: tr, granted: earnedNow.granted, hatched: earnedNow.hatched,
+      trackNowDone: passed && !leveledUp && mode !== "practice" && trackDone(np, tr) && !trackDone(prog, tr),
+      finishedAll: trackDone(np, "engine") && trackDone(np, "nav") && np.level === LEVELS.length - 1,
       gcNow: after.gc - before.gc,
       rpNow: after.rp - before.rp,
       gcBal: after.gcBal,
       rpBal: after.rpBal,
       liveRun: after.liveRun,
-      bossNext: passed && mode !== "boss" && bossDue(np),
+      bossNext: passed && mode !== "boss" && bossDue(np, tr),
     });
     setScreen("summary");
     const ok = await saveProgress(user.name, np);
@@ -2064,39 +2166,45 @@ export default function AutoMathtics() {
     const key = u.name.toLowerCase();
     const form = credit[key] || {};
     const lv = form.level != null ? form.level : (adminKids[key] ? adminKids[key].level : 0);
+    const tr = form.track === "nav" ? "nav" : "engine";
+    const T = TRACKS[tr];
     const item = form.item || "1–5";
     const date = form.date || todayISO();
     const base = adminKids[key] || (await loadProgress(u.name));
-    const p = { ...base, wallet: { ...base.wallet }, history: [...base.history] };
+    let p = { ...base, wallet: { ...base.wallet }, history: [...base.history] };
     const when = date + " (credited by Dad)";
+    const ts = Date.parse(date + "T12:00:00") || Date.now();
+    const total = PAPERS_PER_SESSION * T.qpp;
+    const rowBase = { date, when, ts, levelIdx: lv, levelId: LEVELS[lv].id, correct: total, incorrect: 0, timeout: 0, total, passed: true, mins: "—", ...(tr === "nav" ? { track: "nav" } : {}) };
     let note = "";
+    const cur = trk(p, tr);
     if (item.startsWith("cp")) {
       const n = parseInt(item.slice(2), 10);
-      p.history = trimHistory([{ date, when, ts: Date.parse(date + "T12:00:00") || Date.now(), levelIdx: lv, levelId: LEVELS[lv].id, papers: `👑 CHECK POINT T${n}`, correct: 25, incorrect: 0, timeout: 0, total: 25, passed: true, mins: "—", boss: true }, ...p.history]);
+      p.history = trimHistory([{ ...rowBase, papers: `${tr === "nav" ? "🧭 " : ""}👑 CHECK POINT T${n}`, boss: true }, ...p.history]);
       if (lv === p.level) {
-        if (p.paper < n * 20 + 1) p.paper = n * 20 + 1;      // ticking a crown implies its tier is done
-        p.bossCleared = Math.max(p.bossCleared || 0, n);
-        if (n === 5 && lv < LEVELS.length - 1) { p.level = lv + 1; p.paper = 1; p.bossCleared = 0; note = " → level up to " + LEVELS[lv + 1].id; }
+        p = withTrk(p, tr, { paper: Math.max(cur.paper, n * 20 + 1), bossCleared: Math.max(cur.bossCleared, n) }); // ticking a crown implies its tier is done
       } else if (lv > p.level) {
-        p.level = lv; p.paper = n === 5 ? PAPERS_PER_LEVEL + 1 : n * 20 + 1; p.bossCleared = n;
-        if (n === 5 && lv < LEVELS.length - 1) { p.level = lv + 1; p.paper = 1; p.bossCleared = 0; note = " → level up to " + LEVELS[lv + 1].id; }
+        p = withTrk(jumpTo(p, lv), tr, { paper: n === 5 ? PAPERS_PER_LEVEL + 1 : n * 20 + 1, bossCleared: n });
       }
-      note = `👑 CHECK POINT T${n} credited` + note;
+      note = `${T.emoji} CHECK POINT T${n} credited`;
     } else {
       const [s, e] = item.split("–").map((x) => parseInt(x, 10));
-      p.history = trimHistory([{ date, when, ts: Date.parse(date + "T12:00:00") || Date.now(), levelIdx: lv, levelId: LEVELS[lv].id, papers: item, correct: 25, incorrect: 0, timeout: 0, total: 25, passed: true, mins: "—" }, ...p.history]);
+      p.history = trimHistory([{ ...rowBase, papers: `${tr === "nav" ? "🧭 " : ""}${item}` }, ...p.history]);
       if (lv === p.level) {
-        if (e + 1 > p.paper) p.paper = e + 1;                 // progress moves to where it's ticked (never backward)
+        p = withTrk(p, tr, { paper: Math.max(cur.paper, e + 1) }); // progress moves to where it's ticked, never backward
       } else if (lv > p.level) {
-        p.level = lv; p.paper = e + 1; p.bossCleared = Math.min(5, Math.floor(e / 20)); // grandfather earlier tiers of that level
+        p = withTrk(jumpTo(p, lv), tr, { paper: e + 1, bossCleared: Math.min(5, Math.floor(e / 20)) }); // grandfather earlier tiers
       }
-      note = `${LEVELS[lv].id} ${item} credited`;
+      note = `${T.emoji} ${LEVELS[lv].id} ${item} credited`;
     }
-    p.bossCleared = Math.min(p.bossCleared || 0, 5, Math.floor((Math.max(1, p.paper) - 1) / 20)); // same guard as load
+    // same guards as load: a crown only counts once its tier is done; both tracks through = the jump
+    ["engine", "nav"].forEach((t) => { const x = trk(p, t); p = withTrk(p, t, { bossCleared: Math.min(x.bossCleared, 5, Math.floor((Math.max(1, x.paper) - 1) / 20)) }); });
+    if (trackDone(p, "engine") && trackDone(p, "nav") && p.level < LEVELS.length - 1) { p = jumpTo(p, p.level + 1); note += " → jump to " + LEVELS[p.level].id; }
     await saveProgress(u.name, p);
     setAdminKids({ ...adminKids, [key]: p });
     if (user && user.name.toLowerCase() === key) setProg(p);
-    setCreditMsg(`✓ ${u.name}: ${note} — now ${LEVELS[p.level].id} paper ${Math.min(p.paper, PAPERS_PER_LEVEL)}${p.paper > PAPERS_PER_LEVEL ? " (level end)" : ""} · CP ${p.bossCleared}/5`);
+    const e2 = trk(p, "engine"), n2 = trk(p, "nav");
+    setCreditMsg(`✓ ${u.name}: ${note} — now ${LEVELS[p.level].id} · ⚙️ paper ${Math.min(e2.paper, PAPERS_PER_LEVEL)} CP ${e2.bossCleared}/5 · 🧭 paper ${Math.min(n2.paper, PAPERS_PER_LEVEL)} CP ${n2.bossCleared}/5`);
   }
 
   async function openAdminData(u, target) {
@@ -2130,11 +2238,13 @@ export default function AutoMathtics() {
   const isFractionLevel = levelIdx >= 4;
   // Levels A–D (stacked/column arithmetic + division): kids compute ones-first,
   // so typed digits fill from the RIGHT — first tap is the ones digit.
-  const rtlInput = !isFractionLevel;
+  const rtlInput = !isFractionLevel && !(qs[qIdx] && qs[qIdx].track === "nav");
+  const isDecimalQ = !!(qs[qIdx] && qs[qIdx].answer && qs[qIdx].answer.type === "dec");
   function pressKey(k) {
     if (screen !== "session") return;
     if (input.length >= 12) return;
     if (k === "/" && (input === "" || input.includes("/"))) return;
+    if (k === "." && (input === "" || input.includes("."))) return;
     setInput(rtlInput ? k + input : input + k);
   }
   function pressBackspace() { setInput(rtlInput ? input.slice(1) : input.slice(0, -1)); }
@@ -2142,11 +2252,16 @@ export default function AutoMathtics() {
     if (input.trim() === "") return;
     record(checkAnswer(input, qs[qIdx].answer) ? "correct" : "incorrect");
   }
+  function chooseAnswer(i) {
+    const cq = qs[qIdx];
+    if (!cq || cq.answer.type !== "choice") return;
+    record(i === cq.answer.v ? "correct" : "incorrect");
+  }
 
   const q = qs[qIdx];
   const curPaper = q ? q.paper : startPaper;
-  const qInPaper = q ? (qIdx % Q_PER_PAPER) + 1 : 1;
-  const totalSecs = q && user ? scaledSecs(levelIdx, tierOf(curPaper), user) : 1;
+  const qInPaper = q ? (qIdx % (q.track === "nav" ? Q_PER_PAPER_NAV : Q_PER_PAPER)) + 1 : 1;
+  const totalSecs = q && user ? qSecs(q) : 1;
   const timerPct = Math.max(0, timeLeft / totalSecs) * 100;
   const timerColor = timeLeft <= 8 ? "#FF3B5C" : "#35E0FF";
   const elapsedMin = screen === "session" ? Math.floor((Date.now() - sessionStart) / 60000) : 0;
@@ -2442,7 +2557,11 @@ export default function AutoMathtics() {
               return (
                 <div key={"c" + u.name} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6, padding: "8px 10px", background: "#0B0E23", border: "1px dashed #2DFFB3", borderRadius: 12, marginBottom: 8 }}>
                   <b style={{ color: u.color, fontFamily: "'Orbitron', sans-serif", fontSize: 12, letterSpacing: 1, minWidth: 70 }}>{u.name.toUpperCase()}</b>
-                  <span style={{ fontSize: 11, color: "#8A93C9" }}>{k ? `${LEVELS[k.level].id} · paper ${Math.min(k.paper, PAPERS_PER_LEVEL)} · CP ${k.bossCleared}/5` : "loading…"}</span>
+                  <span style={{ fontSize: 11, color: "#8A93C9" }}>{k ? `${LEVELS[k.level].id} · ⚙️ ${Math.min(k.paper, PAPERS_PER_LEVEL)} CP ${k.bossCleared}/5 · 🧭 ${Math.min(trk(k, "nav").paper, PAPERS_PER_LEVEL)} CP ${trk(k, "nav").bossCleared}/5` : "loading…"}</span>
+                  <select value={form.track || "engine"} onChange={(e) => sel({ track: e.target.value })} style={inp} aria-label="track">
+                    <option value="engine">⚙️ Engine</option>
+                    <option value="nav">🧭 Navigator</option>
+                  </select>
                   <select value={lv} onChange={(e) => sel({ level: parseInt(e.target.value, 10) })} style={inp} aria-label="level">
                     {LEVELS.map((L, i) => <option key={L.id} value={i}>{L.id}</option>)}
                   </select>
@@ -2630,13 +2749,11 @@ export default function AutoMathtics() {
             {isDeck && <span className="deck-radar" aria-hidden="true" />}
             {isDeck && <div className="deck-ticker"><b>◉</b> COMMAND DECK ONLINE · {user.name.toUpperCase()} · LEVEL {LEVELS[levelIdx].id} · ALL SYSTEMS GO</div>}
             {vehicleEmoji && <span className="vehicle" aria-hidden="true" title={(wItem("activeVehicle") || {}).name || ""}>{vehicleEmoji}</span>}
-            {prog.paper > PAPERS_PER_LEVEL ? (
-              <p style={st.introText}>🏆 All levels complete! Incredible work. Tap below to practice any papers again.</p>
+            {trackDone(prog, "engine") && trackDone(prog, "nav") && levelIdx === LEVELS.length - 1 ? (
+              <p style={st.introText}>🏆 All sectors complete — both tracks! Incredible work. Tap a track below to practice any papers again.</p>
             ) : (
               <p style={st.introText}>
-                Today's session: <b>Papers {startPaper}–{Math.min(startPaper + 4, 100)}</b> of 100
-                &nbsp;· {PAPERS_PER_SESSION * Q_PER_PAPER} questions, one at a time, about {Math.round(scaledSecs(levelIdx, tierOf(startPaper), user) * 25 / 60)} min max.
-                Score <b>100%</b> to unlock the next papers!
+                Sector <b>{LEVELS[levelIdx].id}</b> · {LEVELS[levelIdx].name}. Two tracks: <b>⚙️ Engine</b> drills the numbers, <b>🧭 Navigator</b> reads and reasons. Both to 100 to jump.
               </p>
             )}
             <div style={{ display: "flex", gap: 8, justifyContent: "center", margin: "12px 0 4px", flexWrap: "wrap" }}>
@@ -2657,39 +2774,53 @@ export default function AutoMathtics() {
                   : "Pass today to start a 3-day streak (+⚡50 🏆100 bonus)!"}
               {prog.wallet.shields > 0 && ` · 🛡️×${prog.wallet.shields}`}
             </span>
+            {/* two tracks, both through before the jump to the next sector */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 10, margin: "14px 0 0" }}>
+              {["engine", "nav"].map((t) => {
+                const T = TRACKS[t]; const cur = trk(prog, t); const done = trackDone(prog, t); const due = bossDue(prog, t);
+                const passed = Math.min(cur.paper - 1, PAPERS_PER_LEVEL);
+                const liveTier = Math.min(5, Math.floor(passed / 20) + (passed > 0 && passed % 20 === 0 ? 0 : 1));
+                const sp = Math.min(cur.paper, PAPERS_PER_LEVEL);
+                const mins = Math.round((scaledSecsT(levelIdx, tierOf(sp), user, t) * PAPERS_PER_SESSION * T.qpp) / 60);
+                return (
+                  <div key={t} className={"track" + (t === track ? " track-active" : "")} style={{ background: "#0B0E23", border: `1.5px solid ${done ? "#2DFFB3" : T.color}`, borderRadius: 12, padding: "10px 10px 12px", boxShadow: `0 0 14px ${done ? "#2DFFB3" : T.color}22`, textAlign: "left" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ fontSize: 11, letterSpacing: 2, color: done ? "#2DFFB3" : T.color, fontFamily: "'Orbitron', sans-serif" }}>{T.emoji} {T.name}</span>
+                      <span style={{ marginLeft: "auto", fontSize: 10.5, color: "#8A93C9", fontFamily: "Consolas, monospace", fontWeight: 700 }}>{done ? "✓ COMPLETE" : `${PAPERS_PER_SESSION * T.qpp} q · ~${mins} min max`}</span>
+                    </div>
+                    <div style={{ fontSize: 12.5, color: "#EAF2FF", margin: "6px 0 0", minHeight: 18 }}>
+                      {done ? "Sector done — practise any papers while the other track catches up." : due ? <b style={{ color: "#FFB020" }}>👑 CHECK POINT T{cur.bossCleared + 1} is due</b> : <>Next: <b>papers {sp}–{Math.min(sp + 4, PAPERS_PER_LEVEL)}</b> · 100% to unlock</>}
+                    </div>
+                    <div style={{ display: "flex", alignItems: "flex-start", gap: 3, margin: "10px 0 2px" }} aria-label={`${T.label} tier map`}>
+                      {[1, 2, 3, 4, 5].map((n) => {
+                        const tierDone = passed >= n * 20; const bossBeat = cur.bossCleared >= n; const inTier = n === liveTier && !done;
+                        return (
+                          <React.Fragment key={n}>
+                            <span style={{ flex: 1, minWidth: 6, height: 4, marginTop: 10, borderRadius: 99, background: tierDone ? "#2DFFB3" : inTier ? T.color : "#2A3170" }} />
+                            <span style={{ flex: "0 0 auto", display: "inline-flex", flexDirection: "column", alignItems: "center", gap: 2 }} title={`Check point ${n} — papers ${n * 20 - 19}–${n * 20}`}>
+                              <span style={{ width: 24, height: 24, borderRadius: 7, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 12, background: bossBeat ? "#2DFFB3" : "#0B0E23", border: `2px solid ${bossBeat ? "#2DFFB3" : tierDone ? "#FF2DA8" : inTier ? T.color : "#2A3170"}` }}>{bossBeat || tierDone ? "👑" : "🔒"}</span>
+                              <span style={{ fontSize: inTier ? 10.5 : 9.5, lineHeight: 1, whiteSpace: "nowrap", fontFamily: "Consolas, monospace", fontWeight: 700, color: inTier ? T.color : tierDone ? "#2DFFB3" : "#5A64A8" }}>{inTier ? `${passed}/${PAPERS_PER_LEVEL}` : done && n === 5 ? "100/100" : n * 20}</span>
+                            </span>
+                          </React.Fragment>
+                        );
+                      })}
+                    </div>
+                    <button style={{ ...st.primaryBtn, width: "100%", marginTop: 8, padding: "10px 12px", fontSize: 15, ...(due ? { background: "#FFB020", boxShadow: "0 0 18px rgba(255,176,32,0.5)" } : done ? { background: "#1A2B3F", color: "#2DFFB3", boxShadow: "none" } : t === "nav" ? { background: T.color, color: "#1B0F2E", boxShadow: "0 0 18px rgba(255,176,32,0.35)" } : {}) }} onClick={() => beginSession(t)}>
+                      {due ? `👑 CHECK POINT T${cur.bossCleared + 1} ▶` : done ? "🔁 Practice ▶" : `${T.emoji} Start ${T.label} ▶`}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
             {(() => {
-              const passed = Math.min(prog.paper - 1, PAPERS_PER_LEVEL);
-              // the check point that carries the running total: the one just reached, else the one being driven toward
-              const liveTier = Math.min(5, Math.floor(passed / 20) + (passed > 0 && passed % 20 === 0 ? 0 : 1));
+              const e = trackDone(prog, "engine"), n = trackDone(prog, "nav"); const last = levelIdx >= LEVELS.length - 1; const next = last ? null : LEVELS[levelIdx + 1].id;
               return (
-                <div style={{ display: "flex", alignItems: "flex-start", gap: 4, margin: "14px 0 2px" }} aria-label="tier map">
-                  {[1, 2, 3, 4, 5].map((t) => {
-                    const tierDone = passed >= t * 20;
-                    const bossBeat = prog.bossCleared >= t;
-                    const inTier = t === liveTier;
-                    return (
-                      <React.Fragment key={t}>
-                        <span style={{ flex: 1, minWidth: 8, height: 4, marginTop: 11, borderRadius: 99, background: tierDone ? "#2DFFB3" : inTier ? "#35E0FF" : "#2A3170" }} />
-                        <span style={{ flex: "0 0 auto", display: "inline-flex", flexDirection: "column", alignItems: "center", gap: 3 }}
-                          title={`Check point ${t} — papers ${t * 20 - 19}–${t * 20}`}>
-                          <span style={{
-                            width: 26, height: 26, borderRadius: 7, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 13,
-                            background: bossBeat ? "#2DFFB3" : "#0B0E23",
-                            border: `2px solid ${bossBeat ? "#2DFFB3" : tierDone ? "#FF2DA8" : inTier ? "#35E0FF" : "#2A3170"}`,
-                          }}>{bossBeat || tierDone ? "👑" : "🔒"}</span>
-                          {/* the running count lives on the check point it belongs to — no separate progress bar */}
-                          <span style={{
-                            fontSize: inTier ? 11 : 10, lineHeight: 1, whiteSpace: "nowrap", fontFamily: "Consolas, monospace", fontWeight: 700,
-                            color: inTier ? "#35E0FF" : tierDone ? "#2DFFB3" : "#5A64A8",
-                          }}>{inTier ? `${passed}/${PAPERS_PER_LEVEL}` : t * 20}</span>
-                        </span>
-                      </React.Fragment>
-                    );
-                  })}
+                <div style={{ margin: "10px 0 0", padding: "8px 12px", borderRadius: 10, background: e && n ? "#0F2A1E" : "#0B0E23", border: `1px dashed ${e && n ? "#2DFFB3" : "#2A3170"}`, fontSize: 12, color: e && n ? "#2DFFB3" : "#8A93C9", fontWeight: 700, textAlign: "center" }}>
+                  {e && n ? (last ? "🏆 ALL SECTORS COMPLETE" : `⬆ JUMP TO SECTOR ${next} — pass any session to make the jump`)
+                    : `⬆ Jump to Sector ${next || "—"} needs ⚙️ Engine ${e ? "✓" : "to 100 + 5 crowns"} and 🧭 Navigator ${n ? "✓" : "to 100 + 5 crowns"}`}
                 </div>
               );
             })()}
-            <div style={st.subtle}>level {LEVELS[levelIdx].id} · 👑 check point every 20 papers — clear it to enter the next tier</div>
             {rocket && rocket.status !== "claimed" && rocket.prize && (() => {
               const total = rocketFuel(rocket), goal = rocket.goal || 1, pct = Math.min(100, Math.round((total / goal) * 100));
               const key = user.name.toLowerCase(); const mine = (rocket.fuel || {})[key] || 0; const min = rocket.minEach || 0;
@@ -2730,12 +2861,9 @@ export default function AutoMathtics() {
               );
             })()}
             <div style={{ marginTop: 14, display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
-              <button style={{ ...st.primaryBtn, ...(bossDue(prog) ? { background: "#FFB020", boxShadow: "0 0 18px rgba(255,176,32,0.5)" } : {}) }} onClick={beginSession}>
-                {bossDue(prog) ? `👑 CHECK POINT T${prog.bossCleared + 1} ▶` : "Start mission ▶"}
-              </button>
               <button style={st.ghostBtn} onClick={() => setScreen("shop")}>🛒 Shop</button>
-              <button style={st.ghostBtn} onClick={() => setScreen("map")}>🗺 Map</button>
-              <button style={st.ghostBtn} onClick={() => openHowTo(false)}>📖 How to</button>
+              <button style={st.ghostBtn} onClick={() => { setMapTrack(track); setScreen("map"); }}>🗺 Map</button>
+              <button style={st.ghostBtn} onClick={() => openHowTo(false, track)}>📖 How to</button>
               <button style={st.ghostBtn} onClick={() => { setGuideIdx(0); setScreen("guide"); }}>🎓 Guide</button>
             </div>
             {scanAvailable && (
@@ -2794,12 +2922,12 @@ export default function AutoMathtics() {
       {/* ---------- how-to ---------- */}
       {screen === "howto" && (
         <div style={st.card} className="screen">
-          <div style={st.kicker}>LEVEL {LEVELS[levelIdx].id} · HOW TO</div>
-          <h2 style={{ ...st.title, fontSize: 22, marginBottom: 12 }}>{HOWTO[levelIdx].title}</h2>
+          <div style={st.kicker}>{TRACKS[howTrack].emoji} {TRACKS[howTrack].name} · SECTOR {LEVELS[levelIdx].id} · HOW TO</div>
+          <h2 style={{ ...st.title, fontSize: 22, marginBottom: 12 }}>{howto.title}</h2>
 
           <div style={st.howBox}>
-            <div style={st.howSlideTitle}>{HOWTO[levelIdx].slides[howSlide].title}</div>
-            {HOWTO[levelIdx].slides[howSlide].lines.slice(0, howLine).map((L, i) => (
+            <div style={st.howSlideTitle}>{howto.slides[howSlide].title}</div>
+            {howto.slides[howSlide].lines.slice(0, howLine).map((L, i) => (
               <div key={i} className="fade" style={st.howLine}>• {L}</div>
             ))}
           </div>
@@ -2810,7 +2938,7 @@ export default function AutoMathtics() {
             <>
               <div style={st.tipsBox}>
                 <div style={st.howSlideTitle}>💡 Tips & hacks</div>
-                {HOWTO[levelIdx].tips.map((t, i) => (
+                {howto.tips.map((t, i) => (
                   <div key={i} style={st.howLine}>★ {t}</div>
                 ))}
               </div>
@@ -2833,7 +2961,11 @@ export default function AutoMathtics() {
               <span className={ringClass(prog.wallet)} style={{ display: "inline-block", borderRadius: "50%", "--orb": "16px", ...(prog.wallet && prog.wallet.ring === "ring_halo" ? { boxShadow: "0 0 0 2px rgba(255,176,32,.35), 0 0 10px 2px rgba(255,176,32,.55)" } : {}) }}>
                 <img src={user.avatar} alt="" style={{ width: 22, height: 22, borderRadius: "50%", objectFit: "cover", border: `1.5px solid ${prog.wallet && prog.wallet.ring === "ring_halo" ? "#FFB020" : user.color}`, display: "block" }} />
               </span>
-              {sessionMode === "boss" ? `👑 CHECK POINT T${prog.bossCleared + 1}` : sessionMode === "scan" ? "🧠 SCAN" : `Paper ${curPaper}`} · {qIdx + 1}/{qs.length}
+              {TRACKS[track].emoji} {sessionMode === "boss" ? `👑 CHECK POINT T${trk(prog, track).bossCleared + 1}` : sessionMode === "scan" ? "🧠 SCAN" : sessionMode === "practice" ? `Practice ${curPaper}` : `Paper ${curPaper}`} · {qIdx + 1}/{qs.length}
+              {q.track === "nav" && (
+                <button className="tts" type="button" title={ttsOn ? "reads each question aloud — tap to hear it again, hold to mute" : "read aloud is off — tap to hear this one"} aria-label="read the question aloud"
+                  onClick={() => speak(q.read)} onDoubleClick={() => setTtsOn((v) => !v)} style={{ marginLeft: 4 }}>{ttsOn ? "🔊" : "🔈"}</button>
+              )}
               {petEmoji && <span className={(streakTier(streak) ? "petcharge petcharge-" + streakTier(streak) : "petsway") + " petwrap"} style={{ marginLeft: 4, fontSize: 16 }} aria-hidden="true">{petEmoji}{outfitEmoji && <span className="petfit">{outfitEmoji}</span>}</span>}
             </span>
             <span style={{ ...st.clock, color: timerColor }}>⏱ {timeLeft}s</span>
@@ -2863,6 +2995,13 @@ export default function AutoMathtics() {
             <div key={qIdx} className="qin" style={{ textAlign: "center" }}>
               <QuestionView q={q} />
             </div>
+            {q.answer.type === "choice" ? (
+              <div className="choices" style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(2, q.display.choices.length)}, 1fr)`, gap: 8, margin: "12px auto 0", maxWidth: 520 }}>
+                {q.display.choices.map((c, i) => (
+                  <button key={i} className="choicebtn" type="button" onClick={() => chooseAnswer(i)}>{c}</button>
+                ))}
+              </div>
+            ) : (
             <div style={{ ...st.inputBox, borderStyle: input === "" ? "dashed" : "solid", boxShadow: input === "" ? "none" : "0 0 16px rgba(53,224,255,.32)" }} aria-label="your answer">
               {input === "" ? (
                 <span style={{ color: "#9BB2C6" }}>answer…</span>
@@ -2872,28 +3011,41 @@ export default function AutoMathtics() {
                 input
               )}
             </div>
+            )}
             {rtlInput && (
+
               <div style={st.subtle}>start with the ones digit — the answer fills right to left</div>
             )}
           </div>
 
           <div style={st.padWrap}>
             <div style={st.pad}>
+              {q.answer.type === "choice" ? (
+                <div style={{ gridColumn: "1 / -1", alignSelf: "center", textAlign: "center", color: "#8A93C9", fontSize: 13, fontWeight: 700, padding: 12 }}>tap your answer above 👆</div>
+              ) : (
+              <>
               {PAD_KEYS.map((k) => (
                 <button key={k} className="padkey" style={st.key} onClick={() => pressKey(String(k))}>{k}</button>
               ))}
               <button className="padkey" style={st.key} onClick={() => pressKey("0")}>0</button>
-              {isFractionLevel ? (
+              {isFractionLevel && !isDecimalQ ? (
                 <>
                   <button className="padkey" style={{ ...st.key, ...st.keySlash }} onClick={() => pressKey("/")} aria-label="fraction bar">∕</button>
+                  <button className="padkey" style={{ ...st.key, ...st.keyBack }} onClick={pressBackspace} aria-label="backspace">⌫</button>
+                </>
+              ) : isDecimalQ ? (
+                <>
+                  <button className="padkey" style={{ ...st.key, ...st.keySlash }} onClick={() => pressKey(".")} aria-label="decimal point">.</button>
                   <button className="padkey" style={{ ...st.key, ...st.keyBack }} onClick={pressBackspace} aria-label="backspace">⌫</button>
                 </>
               ) : (
                 <button className="padkey" style={{ ...st.key, ...st.keyBack, gridColumn: "span 2" }} onClick={pressBackspace} aria-label="backspace">⌫</button>
               )}
+              </>
+              )}
             </div>
             <div style={st.actionCol}>
-              <button style={st.goBtn} onClick={submit}>Go!</button>
+              <button style={{ ...st.goBtn, ...(q.answer.type === "choice" ? { opacity: 0.35 } : {}) }} onClick={submit} disabled={q.answer.type === "choice"}>Go!</button>
               <button style={st.restartBtn} onClick={restartMidSession}>↺ Restart</button>
               <button style={st.quitBtn} onClick={quitSession}>✕ Quit</button>
             </div>
@@ -3043,10 +3195,12 @@ export default function AutoMathtics() {
 
       {/* ---------- progress map ---------- */}
       {screen === "map" && user && prog && (() => {
+        const mt = mapTrack; const mcur = trk(prog, mt);
         const heat = {};
         prog.history.forEach((h) => {
           if (!h.qlog) return;
-          h.qlog.forEach(([tier, secs, ok, qLevel]) => {
+          h.qlog.forEach(([tier, secs, ok, qLevel, isNav]) => {
+            if ((isNav ? "nav" : "engine") !== mt) return;
             // rows logged before qLevel existed: trust the session's level, except on a SCAN, where the
             // questions came from a mix of levels and can't be attributed — drop those rather than skew the tier.
             const lv = typeof qLevel === "number" ? qLevel : h.scan ? null : h.levelIdx;
@@ -3055,11 +3209,11 @@ export default function AutoMathtics() {
             heat[tier].n++; heat[tier].ok += ok ? 1 : 0; heat[tier].t += secs;
           });
         });
-        const passed = Math.min(prog.paper - 1, PAPERS_PER_LEVEL);
+        const passed = Math.min(mcur.paper - 1, PAPERS_PER_LEVEL);
         const glyph = LETTER_ROUTES[LEVELS[levelIdx].id] || LETTER_ROUTES.A;
         const gLen = routeLen(glyph.route);
         const gPath = routeD(glyph.route);
-        const energy = energyFor(glyph, passed, prog.bossCleared >= 5);
+        const energy = energyFor(glyph, passed, mcur.bossCleared >= 5);
         const [exitX, exitY] = pointAt(glyph.route, 1);
         const cpColors = mapTheme ? mapTheme.cps : CP_COLORS;
         const litColor = mapTheme ? mapTheme.lit : user.color;
@@ -3067,10 +3221,15 @@ export default function AutoMathtics() {
         const [vehX, vehY] = pointAt(glyph.route, Math.min(0.985, Math.max(0.03, energy) + 0.04));
         return (
           <div style={st.card} className="screen">
-            <div style={st.kicker}>🗺 LEVEL {LEVELS[levelIdx].id} ROUTE · {user.name.toUpperCase()}</div>
+            <div style={st.kicker}>🗺 SECTOR {LEVELS[levelIdx].id} ROUTE · {user.name.toUpperCase()}</div>
+            <div style={{ display: "flex", gap: 6, justifyContent: "center", margin: "6px 0 2px" }} role="tablist" aria-label="track">
+              {["engine", "nav"].map((t) => { const T = TRACKS[t]; const on = mt === t; return (
+                <button key={t} role="tab" aria-selected={on} style={{ ...st.tinyBtn, padding: "5px 12px", color: on ? "#0B0E23" : T.color, background: on ? T.color : "transparent", borderColor: T.color, boxShadow: on ? `0 0 14px ${T.color}66` : "none" }} onClick={() => setMapTrack(t)}>{T.emoji} {T.name}{trackDone(prog, t) ? " ✓" : ""}</button>
+              ); })}
+            </div>
             <div className="tronmap" style={{ background: "#070A1E", border: "1px solid #2A3170", borderRadius: 14, padding: "16px 10px 10px", margin: "12px 0", position: "relative", overflow: "hidden", "--grid": mapTheme ? mapTheme.grid : "rgba(53,224,255,.06)" }}>
               <svg viewBox="-18 -18 236 276" role="img"
-                aria-label={`Level ${LEVELS[levelIdx].id} route — ${prog.bossCleared} of 5 check points cleared, ${passed} of ${PAPERS_PER_LEVEL} papers passed`}
+                aria-label={`Level ${LEVELS[levelIdx].id} route — ${mcur.bossCleared} of 5 check points cleared, ${passed} of ${PAPERS_PER_LEVEL} papers passed`}
                 style={{ display: "block", width: "100%", maxWidth: 320, margin: "0 auto" }}>
                 <defs>
                   <filter id="amNeon" x="-70%" y="-70%" width="240%" height="240%">
@@ -3103,8 +3262,8 @@ export default function AutoMathtics() {
                 {[1, 2, 3, 4, 5].map((t) => {
                   const [cx, cy] = pointAt(glyph.route, cpAt(glyph, t));
                   const col = cpColors[t - 1];
-                  const cleared = prog.bossCleared >= t;
-                  const due = !cleared && prog.paper > (t - 1) * 20;
+                  const cleared = mcur.bossCleared >= t;
+                  const due = !cleared && mcur.paper > (t - 1) * 20;
                   const open = cleared || due;
                   return (
                     <g key={t} className={due ? "cpdue" : ""}>
@@ -3122,8 +3281,8 @@ export default function AutoMathtics() {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 4 }}>
               {[1, 2, 3, 4, 5].map((t) => {
                 const col = cpColors[t - 1];
-                const cleared = prog.bossCleared >= t;
-                const due = !cleared && prog.paper > (t - 1) * 20;
+                const cleared = mcur.bossCleared >= t;
+                const due = !cleared && mcur.paper > (t - 1) * 20;
                 const open = cleared || due;
                 return (
                   <div key={t} style={{
@@ -3137,13 +3296,13 @@ export default function AutoMathtics() {
                 );
               })}
             </div>
-            <div style={st.subtle}>paper {Math.min(prog.paper, PAPERS_PER_LEVEL)} of {PAPERS_PER_LEVEL} · the route is the letter {LEVELS[levelIdx].id} · 👑 check point every 20 papers gates the next tier · 🔓 next level</div>
+            <div style={st.subtle}>paper {Math.min(mcur.paper, PAPERS_PER_LEVEL)} of {PAPERS_PER_LEVEL} · the route is the letter {LEVELS[levelIdx].id} · 👑 check point every 20 papers gates the next tier · 🔓 next level</div>
             <div style={{ ...st.logTitle, margin: "16px 0 6px" }}>FLUENCY HEATMAP</div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 4 }}>
               {[1, 2, 3, 4, 5].map((t) => {
                 const h = heat[t];
                 // measure against the time this kid is actually given (pace × admin scale), not the raw level base
-                const allowed = scaledSecs(prog.level, t, user);
+                const allowed = scaledSecsT(prog.level, t, user, mt);
                 const target = allowed * 0.75;
                 const col = !h || h.n < 5 ? "#2A3170" : (h.ok / h.n) < 0.9 ? "#FF3B5C" : (h.t / h.n) > target ? "#FFB020" : "#2DFFB3";
                 return (
@@ -3253,7 +3412,11 @@ export default function AutoMathtics() {
           {lastSummary.finishedAll ? (
             <h2 style={{ margin: "0 0 4px", color: "#8E24AA" }}>🏆 ALL LEVELS COMPLETE!</h2>
           ) : lastSummary.leveledUp ? (
-            <h2 style={{ margin: "0 0 4px", color: "#FFB020" }}>⬆ LEVEL UP! Welcome to Level {LEVELS[prog.level].id}</h2>
+            <h2 style={{ margin: "0 0 4px", color: "#FFB020" }}>⬆ JUMP! Both tracks through — welcome to Sector {LEVELS[prog.level].id}</h2>
+          ) : lastSummary.trackNowDone ? (
+            <h2 style={{ margin: "0 0 4px", color: "#2DFFB3" }}>✓ {TRACKS[lastSummary.track || "engine"].emoji} {TRACKS[lastSummary.track || "engine"].name} SECTOR {LEVELS[prog.level].id} COMPLETE — {lastSummary.track === "nav" ? "⚙️ Engine" : "🧭 Navigator"} to go before the jump</h2>
+          ) : lastSummary.mode === "practice" ? (
+            <h2 style={{ margin: "0 0 4px", color: lastSummary.passed ? "#2DFFB3" : "#35E0FF" }}>🔁 Practice run {lastSummary.passed ? "— perfect!" : "— keep at it"}</h2>
           ) : lastSummary.mode === "boss" && lastSummary.passed ? (
             <h2 style={{ margin: "0 0 4px", color: "#FFB020" }}>👑 CHECK POINT CLEARED! Tier complete</h2>
           ) : lastSummary.mode === "scan" && lastSummary.passed ? (
@@ -3978,6 +4141,11 @@ body { background: #07091A; }
 .add-player:hover { border-style: solid; border-color: #2DFFB3; color: #2DFFB3; box-shadow: 0 0 18px rgba(45,255,179,.35); }
 .pick { cursor: pointer; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
 .pick:active { transform: scale(.9) !important; }
+/* navigator: answer choices, read-aloud, track cards */
+.choicebtn { padding: 14px 12px; border-radius: 12px; border: 2px solid #FFB020; background: #0B0E23; color: #EAF2FF; font: 700 17px 'Rajdhani', sans-serif; letter-spacing: .02em; cursor: pointer; box-shadow: 0 0 12px rgba(255,176,32,.18); min-height: 54px; }
+.choicebtn:active { transform: scale(.96) !important; background: #2A1F3F; }
+.tts { border: 1.5px solid #FFB020; background: #0B0E23; color: #FFB020; border-radius: 999px; width: 30px; height: 30px; font-size: 15px; line-height: 1; cursor: pointer; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+.track-active { outline: 0; }
 /* family rocket */
 .rocket-ride { display: inline-block; animation: petSway 2.2s ease-in-out infinite; filter: drop-shadow(0 0 6px #8A5CFF); }
 .rocket-fly { display: inline-block; animation: launchUp 1.8s cubic-bezier(.5,0,.3,1) forwards; filter: drop-shadow(0 0 8px #FFB020); }

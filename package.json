@@ -1,6 +1,6 @@
 {
   "name": "automathtics",
-  "version": "1.14.0",
+  "version": "2.0.0",
   "private": true,
   "description": "AutoMathtics — the math grid. Builds to a single index.html for GitHub Pages.",
   "type": "module",

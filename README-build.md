@@ -34,6 +34,29 @@ the browser console with
 and reload. Note `loadProgress` still runs its migrations on whatever you seed — for level A it will
 backfill the SEED_SYNC passes, so seed a later level if you want the numbers left alone.
 
+## Two tracks per sector (v2.0)
+
+Every level ("sector") has two tracks that both have to be through — paper 100 and five crowns —
+before the jump to the next sector (`trackDone`, `jumpTo`):
+
+| track | fields | a paper is | a session is | timer at sector A |
+| --- | --- | --- | --- | --- |
+| ⚙️ ENGINE — arithmetic drills | the original `paper` / `bossCleared` | 5 sums | 25 questions | 25 s per question |
+| 🧭 NAVIGATOR — word & logic | `prog.nav = { paper, bossCleared }` | 3 word problems | 15 questions, under ten minutes | 50 s per question |
+
+`trk(p, t)` / `withTrk(p, t, patch)` read and write a track; `bossDueT`, `trackDone` and the load-time
+crown clamp are per track. History rows for Navigator carry `track: "nav"` (and a 🧭 prefix on
+`papers`); `qlog` rows carry a 5th element `isNav` so the heatmap can be shown per track. Practice mode
+(`mode: "practice"`, rows flagged `practice`) replays random papers of a finished track for normal
+pay without moving progress. The weekly System Scan is Engine-only.
+
+Navigator questions come from `src/navigator.js`: templates with randomised numbers, names and objects
+per level (difficulty one MOE year above the letter: A ≈ P2 … F ≈ PSLE heuristics) plus a fact base for
+the real-world comparisons. A question is `{ display: { layout: "word", text, choices? }, answer:
+{ type: int|dec|choice, v }, read }` — `dec` adds a "." key, `choice` replaces the keypad with buttons,
+and `read` is spoken aloud by the browser (`speak`, 🔊 in the status row). Fuzz the generators with
+`node node_modules/.harness/navfuzz.mjs`-style checks before changing templates.
+
 ## Players
 
 The built-in `USERS` (Allison, Geralt — photo avatars, a pace multiplier) plus anything in

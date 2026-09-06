@@ -22,8 +22,13 @@ src = src.replace(gate, "if (true) { enterAs(u, p); return; } // HARNESS: PIN ga
 const adminGate = "if (pin === ADMIN_PIN) {";
 if (!src.includes(adminGate)) throw new Error("admin-gate anchor not found — harness.mjs needs updating");
 src = src.replace(adminGate, "if (true) { // HARNESS: admin gate off");
+// expose the current question so a scripted test can answer word problems it can't parse from the DOM
+const qAnchor = "  const q = qs[qIdx];\n  const curPaper = q ? q.paper : startPaper;"; // the render-scope one, not record()'s
+if (!src.includes(qAnchor)) throw new Error("question anchor not found — harness.mjs needs updating");
+src = src.replace(qAnchor, qAnchor + "\n  if (typeof document !== \"undefined\") document.documentElement.setAttribute(\"data-q\", q ? JSON.stringify({ t: q.answer.type, v: q.answer.v }) : \"\"); // HARNESS");
 fs.writeFileSync(path.join(tmp, "automathtics-src.jsx"), src, "utf8");
 fs.copyFileSync(r("src", "automathtics-entry.jsx"), path.join(tmp, "automathtics-entry.jsx"));
+fs.copyFileSync(r("src", "navigator.js"), path.join(tmp, "navigator.js"));
 
 const out = await build({
   entryPoints: [path.join(tmp, "automathtics-entry.jsx")],
