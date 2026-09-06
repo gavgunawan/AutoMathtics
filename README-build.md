@@ -150,7 +150,13 @@ there and all three move together.
 ## Data
 
 Firebase RTDB `families/gav-kmn-x7q94vb2nt38/kumon/{allison|geralt|testbot|settings}`.
-Admin PIN 2026. Kid PINs default 8520.
+Admin PIN 1590 (it sits in the client bundle — a deterrent, not a secret). Kid PINs default 8520.
+
+Admin-gate watch (v2.2): every wrong admin PIN is written to `kumon/security` (`fails`, `streak`,
+`lastFail`) through `updateSecurity` (a transaction). The third wrong PIN within ten minutes sets
+`lockUntil` (ten-minute lockout, shown on the PIN screen) and `alert`, which blinks on the
+player-selection screen and heads the admin panel until Dad taps dismiss. A correct PIN resets the
+streak but never the alert.
 
 Economy: pass ⚡50/🏆100, streak block +50/+100, CHECK POINT (every 20 papers, max T5, hard gate) and
 weekly System Scan (Level B+, after papers 1–20 of current level) pay double. Coins derive from

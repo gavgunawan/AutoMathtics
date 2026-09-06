@@ -1065,9 +1065,9 @@ function playWrong() {
 
 
 // ---------- shared settings (admin panel), synced via cloud ----------
-const ADMIN_PIN = "2026";
-const BUILD_TAG = "v2.1 · 6 Sep";
-const BUILD_ID = "am-build-210"; // ASCII-only twin of BUILD_TAG, searched for in the live index.html
+const ADMIN_PIN = "1590";
+const BUILD_TAG = "v2.2 · 6 Sep";
+const BUILD_ID = "am-build-220"; // ASCII-only twin of BUILD_TAG, searched for in the live index.html
 
 // ---------- full screen ----------
 const fsSupported = () => typeof document !== "undefined" && !!(document.fullscreenEnabled || document.webkitFullscreenEnabled) && !(window.navigator && window.navigator.standalone);
@@ -1142,6 +1142,25 @@ const rocketReady = (r) => {
 // a rocket is fuelled with grid coins by default; Dad can build one that takes reward points instead
 const rocketSym = (r) => (r && r.currency === "rp" ? "🏆" : "⚡");
 const ROCKET_AMOUNTS = { gc: [50, 100, 250], rp: [100, 200, 500] };
+// ---------- admin-gate watch ----------
+// Every wrong admin PIN is recorded at kumon/security for Dad to see. Three in a row (within ten
+// minutes) lock the gate for ten minutes and raise an alert that stays on the player-selection
+// screen and in the admin panel until Dad dismisses it.
+const securityPath = () => `families/${FAMILY_TOKEN}/kumon/security`;
+const ADMIN_LOCK_MS = 10 * 60 * 1000;
+const ADMIN_ALERT_AT = 3;
+const localLoadSec = () => { try { const s = localStorage.getItem("kumon-security"); return s ? JSON.parse(s) : null; } catch (e) { return null; } };
+const localSaveSec = (v) => { try { localStorage.setItem("kumon-security", JSON.stringify(v)); } catch (e) {} };
+function subscribeSecurity(cb) {
+  if (!fbdb) return () => {};
+  try { return onValue(dbRef(fbdb, securityPath()), (snap) => cb(snap.exists() ? snap.val() : null)); } catch (e) { return () => {}; }
+}
+async function updateSecurity(fn) {
+  if (!fbdb) { const n = fn(localLoadSec()); localSaveSec(n); return n; }
+  try { const res = await runTransaction(dbRef(fbdb, securityPath()), (cur) => fn(cur === undefined ? null : cur)); const v = res.snapshot.val(); localSaveSec(v); return v; }
+  catch (e) { return null; }
+}
+const adminLocked = (sec) => !!(sec && sec.lockUntil && sec.lockUntil > Date.now());
 const ADMIN_INP = { background: "#10142E", border: "1px solid #2A3170", borderRadius: 8, color: "#EAF2FF", padding: "6px 8px", fontSize: 13, fontFamily: "Consolas, monospace" };
 
 // ---------- progress load/save (cloud-first, local fallback) ----------
@@ -1554,6 +1573,7 @@ export default function AutoMathtics() {
   const [rocketBoom, setRocketBoom] = useState(0);
   const rocketPrev = useRef(null);
   const [rk, setRk] = useState({ emoji: "🎬", name: "", currency: "gc", goal: "2000", minEach: "300", crew: [] }); // admin build form
+  const [security, setSecurity] = useState(null); // admin-gate watch: fails, lock, alert
   const [creditMsg, setCreditMsg] = useState(null);
   useEffect(() => {
     const on = () => setIsFs(fsActive());
@@ -1645,6 +1665,11 @@ export default function AutoMathtics() {
   useEffect(() => {
     (async () => { const r = (await cloudLoadRocket()) || localLoadRocket(); if (r) setRocket(r); })();
     return subscribeRocket((r) => { setRocket(r); localSaveRocket(r); });
+  }, []);
+  // admin-gate watch: live everywhere, so the alert shows on whichever device Dad opens next
+  useEffect(() => {
+    const l = localLoadSec(); if (l) setSecurity(l);
+    return subscribeSecurity((v) => { setSecurity(v); localSaveSec(v); });
   }, []);
   // lift-off moment: the tank filled while this screen was watching
   useEffect(() => {
@@ -1930,6 +1955,22 @@ export default function AutoMathtics() {
         : cur)));
     }
   }
+
+  // ----- admin-gate watch -----
+  async function recordAdminFail() {
+    const now = new Date();
+    const fail = { ts: now.getTime(), on: todayISO(), when: now.toLocaleDateString() + " " + now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }), device: deviceId(), player: user ? user.name : "—" };
+    const next = await updateSecurity((cur) => {
+      const c = cur || {};
+      const streak = c.lastFail && fail.ts - c.lastFail < ADMIN_LOCK_MS ? (c.streak || 0) + 1 : 1;
+      const out = { ...c, fails: [fail, ...(c.fails || [])].slice(0, 30), streak, lastFail: fail.ts };
+      if (streak >= ADMIN_ALERT_AT) { out.lockUntil = fail.ts + ADMIN_LOCK_MS; out.alert = { at: fail.ts, when: fail.when, count: streak, device: fail.device, player: fail.player }; }
+      return out;
+    });
+    if (next) setSecurity(next);
+  }
+  function adminUnlocked() { updateSecurity((cur) => (cur ? { ...cur, streak: 0, lastFail: 0 } : cur)); }
+  async function dismissAdminAlert() { const next = await updateSecurity((cur) => (cur ? { ...cur, alert: null } : cur)); if (next) setSecurity(next); }
 
   function removePlayer(name) {
     // only the roster entry goes; the progress node stays in the cloud in case it was a mistake
@@ -2357,6 +2398,9 @@ export default function AutoMathtics() {
               ? "☁ cloud sync ON — progress is shared across all devices"
               : "⚠ running local-only — Firebase not configured yet"}
           </div>
+          {security && security.alert && (
+            <div className="sec-alert" role="alert">🚨 Admin PIN: {security.alert.count} wrong attempts · {security.alert.when} · device {security.alert.device} · last player {security.alert.player}</div>
+          )}
           <button className="add-player" type="button" onClick={openNewPlayer} disabled={loading}>➕ Add player</button>
           <div style={{ ...st.subtle, fontSize: 10, opacity: 0.6 }}>{BUILD_TAG}</div>
           <div style={{ display: "flex", gap: 10, justifyContent: "center", alignItems: "center", marginTop: 16 }}>
@@ -2510,7 +2554,9 @@ export default function AutoMathtics() {
           <div style={{ ...st.inputBox, letterSpacing: 10, fontSize: 30 }} aria-label="PIN">
             {pin === "" ? <span style={{ color: "#8A93C9", fontSize: 14, letterSpacing: 1 }}>enter PIN…</span> : "•".repeat(pin.length)}
           </div>
-          {pinErr && <div style={{ ...st.warn, color: "#FF3B5C" }}>✗ wrong PIN</div>}
+          {adminLocked(security)
+            ? <div style={{ ...st.warn, color: "#FF3B5C" }}>🔒 too many wrong PINs — try again in {Math.max(1, Math.ceil((security.lockUntil - Date.now()) / 60000))} min</div>
+            : pinErr && <div style={{ ...st.warn, color: "#FF3B5C" }}>✗ wrong PIN{security && security.streak >= 2 ? " — one more and the gate locks" : ""}</div>}
           <div style={{ ...st.pad, maxWidth: 260, margin: "14px auto 0" }}>
             {[7, 8, 9, 4, 5, 6, 1, 2, 3].map((k) => (
               <button key={k} style={st.key} onClick={() => { if (pin.length < 4) { setPinErr(false); setPin(pin + k); } }}>{k}</button>
@@ -2520,14 +2566,16 @@ export default function AutoMathtics() {
             <button
               style={{ ...st.key, color: "#2DFFB3", borderColor: "#2DFFB3" }}
               onClick={() => {
+                if (adminLocked(security)) { setPin(""); return; }
                 if (pin === ADMIN_PIN) {
+                  adminUnlocked();
                   setDraft({ ...settings }); setSettingsSaved(false); setScreen("admin");
                   setRk((f) => ({ ...f, crew: f.crew.length ? f.crew : roster.filter((u) => !u.test).map((u) => u.name.toLowerCase()) }));
                   Promise.all(roster.map((u) => loadProgress(u.name))).then((ps) => {
                     const m = {}; roster.forEach((u, i) => { m[u.name.toLowerCase()] = ps[i]; }); setAdminKids(m);
                   });
                 }
-                else { setPinErr(true); setPin(""); }
+                else { setPinErr(true); setPin(""); if (pin.length > 0) recordAdminFail(); }
               }}
             >✓</button>
           </div>
@@ -2539,6 +2587,17 @@ export default function AutoMathtics() {
       {screen === "admin" && draft && (
         <div style={st.card} className="screen">
           <div style={st.kicker}>AUTOMATHTICS · ADMIN PANEL</div>
+          {security && (security.alert || (security.fails || []).length > 0) && (
+            <div style={{ textAlign: "left", margin: "8px 0 14px", padding: "10px 12px", background: "#0B0E23", border: `1.5px solid ${security.alert ? "#FF3B5C" : "#2A3170"}`, borderRadius: 12 }}>
+              <div style={{ ...st.logTitle, marginBottom: 6, color: security.alert ? "#FF3B5C" : "#8A93C9" }}>🔐 ADMIN GATE</div>
+              {security.alert && <div style={{ fontSize: 13, color: "#FF3B5C", fontWeight: 800, marginBottom: 6 }}>🚨 {security.alert.count} wrong PINs in a row · {security.alert.when} · device {security.alert.device} · last player {security.alert.player}</div>}
+              <div style={{ fontSize: 11.5, color: "#8A93C9", fontFamily: "Consolas, monospace" }}>
+                {(security.fails || []).slice(0, 5).map((f, i) => <div key={i}>✗ {f.when} · device {f.device} · last player {f.player}</div>)}
+                {(security.fails || []).length > 5 && <div>… {security.fails.length - 5} more</div>}
+              </div>
+              {security.alert && <button style={{ ...st.tinyBtn, marginTop: 8, color: "#2DFFB3", borderColor: "#2DFFB3" }} onClick={dismissAdminAlert}>✓ seen — dismiss alert</button>}
+            </div>
+          )}
           <h1 style={st.title}>TIME CONTROL</h1>
           <p style={{ ...st.introText, textAlign: "left" }}>
             Slide to shrink each player's per-question time. 100% = the built-in time,
@@ -4214,6 +4273,7 @@ body { background: #07091A; }
 .choicebtn:active { transform: scale(.96) !important; background: #2A1F3F; }
 .tts { border: 1.5px solid #FFB020; background: #0B0E23; color: #FFB020; border-radius: 999px; width: 30px; height: 30px; font-size: 15px; line-height: 1; cursor: pointer; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
 .track-active { outline: 0; }
+.sec-alert { position: relative; z-index: 2; margin: 6px auto 8px; max-width: 560px; padding: 8px 14px; border-radius: 12px; background: rgba(255,59,92,.12); border: 1.5px solid #FF3B5C; color: #FF6B85; font: 700 12px 'Rajdhani', sans-serif; box-shadow: 0 0 18px rgba(255,59,92,.3); animation: blink 2.4s steps(1) infinite; }
 /* family rocket */
 .rocket-ride { display: inline-block; animation: petSway 2.2s ease-in-out infinite; filter: drop-shadow(0 0 6px #8A5CFF); }
 .rocket-fly { display: inline-block; animation: launchUp 1.8s cubic-bezier(.5,0,.3,1) forwards; filter: drop-shadow(0 0 8px #FFB020); }

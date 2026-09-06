@@ -21,7 +21,7 @@ src = src.replace(gate, "if (true) { enterAs(u, p); return; } // HARNESS: PIN ga
 // the admin gate too — the harness is local-only, so there is nothing behind it to protect
 const adminGate = "if (pin === ADMIN_PIN) {";
 if (!src.includes(adminGate)) throw new Error("admin-gate anchor not found — harness.mjs needs updating");
-src = src.replace(adminGate, "if (true) { // HARNESS: admin gate off");
+src = src.replace(adminGate, "if (pin === ADMIN_PIN || pin === \"\") { // HARNESS: an empty PIN opens the gate; a wrong one still exercises the fail path");
 // expose the current question so a scripted test can answer word problems it can't parse from the DOM
 const qAnchor = "  const q = qs[qIdx];\n  const curPaper = q ? q.paper : startPaper;"; // the render-scope one, not record()'s
 if (!src.includes(qAnchor)) throw new Error("question anchor not found — harness.mjs needs updating");
