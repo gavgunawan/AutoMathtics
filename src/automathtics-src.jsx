@@ -137,6 +137,7 @@ const GUIDE_SLIDES = [
     "Tap 🛒 Shop on your home screen.",
     "Pets ride along with you, outfits dress them, backgrounds and rings change your look.",
     "🎁 Surprise Box = a random new thing. 🥚 Mystery Egg = hatches after 5 passes.",
+    "🚀 Family Rocket — when Dad builds one, fuel it with ⚡ together. Full tank = a prize you all share.",
   ] },
   { emoji: "🎁", title: "Cashing in 🏆 Reward Points", lines: [
     "The 🎁 Reward Store is at the bottom of the Shop — real prizes set up by Dad.",
@@ -998,8 +999,8 @@ function playWrong() {
 
 // ---------- shared settings (admin panel), synced via cloud ----------
 const ADMIN_PIN = "2026";
-const BUILD_TAG = "v1.18 · 5 Sep";
-const BUILD_ID = "am-build-118"; // ASCII-only twin of BUILD_TAG, searched for in the live index.html
+const BUILD_TAG = "v1.19 · 6 Sep";
+const BUILD_ID = "am-build-119"; // ASCII-only twin of BUILD_TAG, searched for in the live index.html
 
 // ---------- full screen ----------
 const fsSupported = () => typeof document !== "undefined" && !!(document.fullscreenEnabled || document.webkitFullscreenEnabled) && !(window.navigator && window.navigator.standalone);
@@ -1036,6 +1037,39 @@ function subscribeSettings(cb) {
   if (!fbdb) return () => {};
   try { return onValue(dbRef(fbdb, settingsPath()), (snap) => { if (snap.exists()) cb(snap.val()); }); } catch (e) { return () => {}; }
 }
+
+// ---------- family rocket: one shared goal everyone fuels with their own ⚡ ----------
+// Lives at kumon/rocket: { id, status: fueling|launched|claimed, prize:{emoji,name}, goal, minEach,
+// crew:[names], fuel:{name:⚡}, createdOn, launchedOn, history:[past launches] }. Every change goes
+// through a transaction so two kids fuelling at once can't lose a contribution. Fuel is spending:
+// it goes through the kid's ledger like a shop buy and is never refunded.
+const rocketPath = () => `families/${FAMILY_TOKEN}/kumon/rocket`;
+const localLoadRocket = () => { try { const s = localStorage.getItem("kumon-rocket"); return s ? JSON.parse(s) : null; } catch (e) { return null; } };
+const localSaveRocket = (r) => { try { localStorage.setItem("kumon-rocket", JSON.stringify(r)); } catch (e) {} };
+async function cloudLoadRocket() {
+  if (!fbdb) return null;
+  try { const snap = await dbGet(dbRef(fbdb, rocketPath())); return snap.exists() ? snap.val() : null; } catch (e) { return null; }
+}
+function subscribeRocket(cb) {
+  if (!fbdb) return () => {};
+  try { return onValue(dbRef(fbdb, rocketPath()), (snap) => cb(snap.exists() ? snap.val() : null)); } catch (e) { return () => {}; }
+}
+async function updateRocket(fn) {
+  if (!fbdb) { const next = fn(localLoadRocket()); localSaveRocket(next); return next; }
+  try {
+    const res = await runTransaction(dbRef(fbdb, rocketPath()), (cur) => fn(cur === undefined ? null : cur));
+    const v = res.snapshot.val(); localSaveRocket(v); return v;
+  } catch (e) { return null; }
+}
+const rocketFuel = (r) => Object.values((r && r.fuel) || {}).reduce((a, b) => a + (b || 0), 0);
+// full tank, and everyone on the crew has put in the minimum (if one is set)
+const rocketReady = (r) => {
+  if (!r || r.status !== "fueling") return false;
+  if (rocketFuel(r) < (r.goal || 0)) return false;
+  const min = r.minEach || 0;
+  return !min || (r.crew || []).every((n) => ((r.fuel || {})[n] || 0) >= min);
+};
+const ADMIN_INP = { background: "#10142E", border: "1px solid #2A3170", borderRadius: 8, color: "#EAF2FF", padding: "6px 8px", fontSize: 13, fontFamily: "Consolas, monospace" };
 
 // ---------- progress load/save (cloud-first, local fallback) ----------
 
@@ -1418,6 +1452,13 @@ export default function AutoMathtics() {
   const [npColor, setNpColor] = useState(PLAYER_COLORS[2]);
   const [npErr, setNpErr] = useState(null);
   const [guideIdx, setGuideIdx] = useState(0);
+  // family rocket
+  const [rocket, setRocket] = useState(null);
+  const [rocketMsg, setRocketMsg] = useState(null);
+  const [rocketBusy, setRocketBusy] = useState(false);
+  const [rocketBoom, setRocketBoom] = useState(0);
+  const rocketPrev = useRef(null);
+  const [rk, setRk] = useState({ emoji: "🎬", name: "", goal: "2000", minEach: "300", crew: [] }); // admin build form
   const [creditMsg, setCreditMsg] = useState(null);
   useEffect(() => {
     const on = () => setIsFs(fsActive());
@@ -1497,6 +1538,18 @@ export default function AutoMathtics() {
     });
     return un;
   }, []);
+
+  // the rocket is shared by everyone, so it's live on every screen from the moment the app opens
+  useEffect(() => {
+    (async () => { const r = (await cloudLoadRocket()) || localLoadRocket(); if (r) setRocket(r); })();
+    return subscribeRocket((r) => { setRocket(r); localSaveRocket(r); });
+  }, []);
+  // lift-off moment: the tank filled while this screen was watching
+  useEffect(() => {
+    const was = rocketPrev.current; rocketPrev.current = rocket ? rocket.status : null;
+    if (was === "fueling" && rocket && rocket.status === "launched" && user) { playKaching(); setRocketBoom((n) => n + 1); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rocket]);
 
   // per-kid admin time scale (percent): question time = base × kid pace × scale
   const scaleFor = (name) => {
@@ -1720,6 +1773,48 @@ export default function AutoMathtics() {
     enterAs(u, p);
     setGuideIdx(0); setScreen("guide");
   }
+  // ----- family rocket -----
+  async function fuelRocket(amt) {
+    if (!user || !prog || !rocket || rocket.status !== "fueling") return;
+    const key = user.name.toLowerCase();
+    if (!(rocket.crew || []).includes(key)) { setRocketMsg("you're not on this rocket's crew — ask Dad"); return; }
+    const bal = balances(prog);
+    if (bal.gcBal < amt) { setRocketMsg(`need ⚡${amt - bal.gcBal} more`); return; }
+    setRocketBusy(true);
+    const mineBefore = (rocket.fuel || {})[key] || 0;
+    const next = await updateRocket((cur) => {
+      if (!cur || cur.status !== "fueling" || cur.id !== rocket.id) return cur;
+      const fuel = { ...(cur.fuel || {}) }; fuel[key] = (fuel[key] || 0) + amt;
+      const r = { ...cur, fuel, lastFuel: { by: user.name, amt, at: Date.now() } };
+      if (rocketReady(r)) { r.status = "launched"; r.launchedAt = Date.now(); r.launchedOn = todayISO(); }
+      return r;
+    });
+    setRocketBusy(false);
+    if (!next || next.id !== rocket.id || ((next.fuel || {})[key] || 0) < mineBefore + amt) { setRocketMsg("⚠ couldn't reach the rocket — try again"); return; }
+    // the fuel is spent: through the ledger like a shop buy, so balances and merges stay honest
+    const w = { ...prog.wallet, gcSpent: (prog.wallet.gcSpent || 0) + amt,
+      purchases: [ledgerRow({ id: "rocket", emoji: "🚀", name: `Rocket fuel · ${(next.prize && next.prize.name) || "family prize"}` }, amt), ...(prog.wallet.purchases || [])].slice(0, 120) };
+    const np = { ...prog, wallet: w };
+    setProg(np); saveProgress(user.name, np);
+    setRocket(next);
+    if (next.status !== "launched") playKaching();
+    setRocketMsg(next.status === "launched" ? "🚀 LIFT-OFF!" : `⛽ +⚡${amt} in — thanks, ${user.name}!`);
+  }
+  async function adminRocket(action) {
+    if (action === "build") {
+      const r = { id: Date.now() + "", status: "fueling", prize: { emoji: rk.emoji.trim() || "🎁", name: rk.name.trim() }, goal: parseInt(rk.goal, 10) || 0, minEach: parseInt(rk.minEach, 10) || 0, crew: rk.crew, createdOn: todayISO(), createdAt: Date.now(), history: (rocket && rocket.history) || [] };
+      setRocket(await updateRocket((cur) => (cur && cur.status === "fueling" ? cur : r)));
+    } else if (action === "launch") {
+      setRocket(await updateRocket((cur) => (cur && cur.status === "fueling" ? { ...cur, status: "launched", launchedAt: Date.now(), launchedOn: todayISO(), forced: true } : cur)));
+    } else if (action === "scrap") {
+      setRocket(await updateRocket((cur) => (cur ? { id: "none", status: "claimed", history: cur.history || [] } : cur)));
+    } else if (action === "claim") {
+      setRocket(await updateRocket((cur) => (cur && cur.status === "launched"
+        ? { id: "none", status: "claimed", history: [...(cur.history || []), { id: cur.id, prize: cur.prize, goal: cur.goal, fuel: cur.fuel || {}, launchedOn: cur.launchedOn || todayISO(), claimedOn: todayISO() }].slice(-20) }
+        : cur)));
+    }
+  }
+
   function removePlayer(name) {
     // only the roster entry goes; the progress node stays in the cloud in case it was a mistake
     const ns = { ...settings, players: ((settings && settings.players) || []).filter((p) => p.name !== name) };
@@ -2256,6 +2351,7 @@ export default function AutoMathtics() {
               onClick={() => {
                 if (pin === ADMIN_PIN) {
                   setDraft({ ...settings }); setSettingsSaved(false); setScreen("admin");
+                  setRk((f) => ({ ...f, crew: f.crew.length ? f.crew : roster.filter((u) => !u.test).map((u) => u.name.toLowerCase()) }));
                   Promise.all(roster.map((u) => loadProgress(u.name))).then((ps) => {
                     const m = {}; roster.forEach((u, i) => { m[u.name.toLowerCase()] = ps[i]; }); setAdminKids(m);
                   });
@@ -2416,6 +2512,48 @@ export default function AutoMathtics() {
             )}
           </div>
 
+          <div style={{ textAlign: "left", margin: "0 0 16px", padding: "12px 14px", background: "#0B0E23", border: "1.5px solid #8A5CFF", borderRadius: 12 }}>
+            <div style={{ ...st.logTitle, marginBottom: 6, color: "#8A5CFF" }}>🚀 FAMILY ROCKET</div>
+            {rocket && rocket.status === "fueling" && rocket.prize ? (
+              <>
+                <div style={{ fontSize: 13, color: "#EAF2FF", fontWeight: 700 }}>{rocket.prize.emoji} {rocket.prize.name} · goal ⚡{rocket.goal}{rocket.minEach ? ` · at least ⚡${rocket.minEach} each` : ""} · since {rocket.createdOn}</div>
+                <div style={{ fontSize: 12, color: "#8A93C9", margin: "4px 0 8px", fontFamily: "Consolas, monospace" }}>fuel ⚡{rocketFuel(rocket)} / {rocket.goal} — {(rocket.crew || []).map((n) => `${n} ⚡${(rocket.fuel || {})[n] || 0}`).join(" · ")}</div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button style={{ ...st.tinyBtn, color: "#FFB020", borderColor: "#FFB020" }} onClick={() => { if (window.confirm("Launch it now, goal or not? The kids will see it launched and the prize as won.")) adminRocket("launch"); }}>🚀 Launch now</button>
+                  <button style={{ ...st.tinyBtn, color: "#FF3B5C", borderColor: "#FF3B5C" }} onClick={() => { if (window.confirm("Scrap this rocket? Fuel already put in is NOT refunded.")) adminRocket("scrap"); }}>🗑 Scrap</button>
+                </div>
+              </>
+            ) : rocket && rocket.status === "launched" && rocket.prize ? (
+              <>
+                <div style={{ fontSize: 13, color: "#FFB020", fontWeight: 800 }}>🎉 LAUNCHED {rocket.launchedOn}{rocket.forced ? " (by you)" : ""} — {rocket.prize.emoji} {rocket.prize.name} is owed to the crew</div>
+                <div style={{ fontSize: 12, color: "#8A93C9", margin: "4px 0 8px", fontFamily: "Consolas, monospace" }}>{(rocket.crew || []).map((n) => `${n} ⚡${(rocket.fuel || {})[n] || 0}`).join(" · ")}</div>
+                <button style={{ ...st.tinyBtn, color: "#2DFFB3", borderColor: "#2DFFB3" }} onClick={() => adminRocket("claim")}>✓ Prize delivered — clear the pad</button>
+              </>
+            ) : (
+              <>
+                <div style={{ ...st.subtle, textAlign: "left", marginBottom: 8 }}>One shared goal the kids fuel with their own ⚡, live on every home screen. When the tank is full — and everyone on the crew has put in the minimum — it launches for all of them and the prize is theirs. Fuel is spent, never refunded.</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+                  <input value={rk.emoji} onChange={(e) => setRk({ ...rk, emoji: e.target.value.slice(0, 4) })} style={{ ...ADMIN_INP, width: 48, textAlign: "center" }} aria-label="prize emoji" />
+                  <input value={rk.name} onChange={(e) => setRk({ ...rk, name: e.target.value.slice(0, 40) })} placeholder="prize, e.g. Movie night" style={{ ...ADMIN_INP, flex: "1 1 160px" }} aria-label="prize name" />
+                  <label style={{ fontSize: 11, color: "#8A93C9" }}>goal ⚡ <input value={rk.goal} onChange={(e) => setRk({ ...rk, goal: e.target.value.replace(/\D/g, "").slice(0, 5) })} style={{ ...ADMIN_INP, width: 64 }} aria-label="goal" /></label>
+                  <label style={{ fontSize: 11, color: "#8A93C9" }}>min each ⚡ <input value={rk.minEach} onChange={(e) => setRk({ ...rk, minEach: e.target.value.replace(/\D/g, "").slice(0, 5) })} style={{ ...ADMIN_INP, width: 56 }} aria-label="minimum per kid, 0 for none" /></label>
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 10, margin: "8px 0", fontSize: 12, color: "#EAF2FF", alignItems: "center" }}>
+                  crew:
+                  {roster.map((u) => { const k = u.name.toLowerCase(); const on = rk.crew.includes(k); return (
+                    <label key={k} style={{ cursor: "pointer", color: on ? u.color : "#8A93C9", fontWeight: 700 }}>
+                      <input type="checkbox" checked={on} onChange={(e) => setRk({ ...rk, crew: e.target.checked ? [...rk.crew, k] : rk.crew.filter((x) => x !== k) })} /> {u.name}
+                    </label>
+                  ); })}
+                </div>
+                <button style={{ ...st.tinyBtn, color: "#8A5CFF", borderColor: "#8A5CFF" }} disabled={!rk.name.trim() || !(parseInt(rk.goal, 10) > 0) || rk.crew.length === 0} onClick={() => adminRocket("build")}>🚀 Build rocket</button>
+                {rocket && rocket.history && rocket.history.length > 0 && (
+                  <div style={{ ...st.subtle, textAlign: "left", marginTop: 8 }}>past launches: {rocket.history.slice(-3).map((h) => `${h.prize.emoji} ${h.prize.name} (${h.launchedOn})`).join(" · ")}</div>
+                )}
+              </>
+            )}
+          </div>
+
           <label style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: "center", fontSize: 14, fontWeight: 700, color: "#EAF2FF", margin: "4px 0 14px", cursor: "pointer" }}>
             <input
               type="checkbox"
@@ -2536,6 +2674,44 @@ export default function AutoMathtics() {
               );
             })()}
             <div style={st.subtle}>level {LEVELS[levelIdx].id} · 👑 check point every 20 papers — clear it to enter the next tier</div>
+            {rocket && rocket.status !== "claimed" && rocket.prize && (() => {
+              const total = rocketFuel(rocket), goal = rocket.goal || 1, pct = Math.min(100, Math.round((total / goal) * 100));
+              const key = user.name.toLowerCase(); const mine = (rocket.fuel || {})[key] || 0; const min = rocket.minEach || 0;
+              const launched = rocket.status === "launched";
+              const bal = earn ? earn.gcBal : 0;
+              const onCrew = (rocket.crew || []).includes(key);
+              return (
+                <div style={{ position: "relative", margin: "14px 0 0", padding: "10px 12px 12px", borderRadius: 12, background: "#0B0E23", border: `1.5px solid ${launched ? "#FFB020" : "#8A5CFF"}`, boxShadow: launched ? "0 0 22px rgba(255,176,32,.35)" : "0 0 14px rgba(138,92,255,.25)", textAlign: "left" }}>
+                  {rocketBoom > 0 && <MoneySplash key={"rk" + rocketBoom} bigger fxSet={fxSet} />}
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 11, letterSpacing: 2, color: launched ? "#FFB020" : "#8A5CFF", fontFamily: "'Orbitron', sans-serif" }}>🚀 FAMILY ROCKET</span>
+                    <span style={{ marginLeft: "auto", fontSize: 12.5, fontWeight: 700, color: "#EAF2FF" }}>{rocket.prize.emoji} {rocket.prize.name}</span>
+                  </div>
+                  <div style={{ position: "relative", height: 14, margin: "10px 0 4px", borderRadius: 99, background: "#10142E", border: "1px solid #2A3170" }} aria-label={`rocket fuel ${total} of ${goal}`}>
+                    <div style={{ height: "100%", width: `${pct}%`, borderRadius: 99, background: launched ? "linear-gradient(90deg, #FFB020, #FF2DA8)" : "linear-gradient(90deg, #35E0FF, #8A5CFF)", transition: "width .6s cubic-bezier(.2,.8,.2,1)", boxShadow: "0 0 10px rgba(138,92,255,.6)" }} />
+                    <span className={launched ? "rocket-fly" : "rocket-ride"} style={{ position: "absolute", top: -9, left: `calc(${pct}% - 12px)`, fontSize: 20, lineHeight: 1, transition: "left .6s cubic-bezier(.2,.8,.2,1)" }} aria-hidden="true">🚀</span>
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 12px", fontSize: 11.5, color: "#8A93C9", fontFamily: "Consolas, monospace", fontWeight: 700 }}>
+                    <span style={{ color: "#EAF2FF" }}>⚡{total} / {goal}</span>
+                    {(rocket.crew || []).map((n) => { const u = roster.find((x) => x.name.toLowerCase() === n); const f = (rocket.fuel || {})[n] || 0; return <span key={n} style={{ color: u ? u.color : "#8A93C9" }}>{u ? u.name : n} ⚡{f}{min ? (f >= min ? " ✓" : ` / ${min}`) : ""}</span>; })}
+                  </div>
+                  {launched ? (
+                    <div style={{ marginTop: 8, fontSize: 13.5, fontWeight: 800, color: "#FFB020" }}>🎉 LIFT-OFF! {rocket.prize.emoji} {rocket.prize.name} is yours — Dad hands it over.</div>
+                  ) : !onCrew ? (
+                    <div style={{ marginTop: 8, fontSize: 11.5, color: "#8A93C9" }}>you're not on this rocket's crew — ask Dad</div>
+                  ) : (
+                    <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 11.5, color: "#8A93C9" }}>⛽ fuel it:</span>
+                      {[50, 100, 250].map((a) => (
+                        <button key={a} style={{ ...st.tinyBtn, color: "#8A5CFF", borderColor: "#8A5CFF", opacity: bal >= a && !rocketBusy ? 1 : 0.45 }} disabled={bal < a || rocketBusy} onClick={() => fuelRocket(a)}>⚡{a}</button>
+                      ))}
+                      {min > 0 && mine < min && <span style={{ fontSize: 11, color: "#FFB020" }}>everyone needs ⚡{min} in for lift-off</span>}
+                      {rocketMsg && <span key={rocketMsg} className="fade" style={{ fontSize: 11.5, color: "#2DFFB3", fontWeight: 700 }}>{rocketMsg}</span>}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
             <div style={{ marginTop: 14, display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
               <button style={{ ...st.primaryBtn, ...(bossDue(prog) ? { background: "#FFB020", boxShadow: "0 0 18px rgba(255,176,32,0.5)" } : {}) }} onClick={beginSession}>
                 {bossDue(prog) ? `👑 CHECK POINT T${prog.bossCleared + 1} ▶` : "Start mission ▶"}
@@ -3785,6 +3961,9 @@ body { background: #07091A; }
 .add-player:hover { border-style: solid; border-color: #2DFFB3; color: #2DFFB3; box-shadow: 0 0 18px rgba(45,255,179,.35); }
 .pick { cursor: pointer; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
 .pick:active { transform: scale(.9) !important; }
+/* family rocket */
+.rocket-ride { display: inline-block; animation: petSway 2.2s ease-in-out infinite; filter: drop-shadow(0 0 6px #8A5CFF); }
+.rocket-fly { display: inline-block; animation: launchUp 1.8s cubic-bezier(.5,0,.3,1) forwards; filter: drop-shadow(0 0 8px #FFB020); }
 .tronmap::before { content:""; position:absolute; inset:0; pointer-events:none; opacity:.5;
   background-image: linear-gradient(var(--grid, rgba(53,224,255,.06)) 1px, transparent 1px), linear-gradient(90deg, var(--grid, rgba(53,224,255,.06)) 1px, transparent 1px);
   background-size: 22px 22px; mask-image: linear-gradient(to top, black 30%, transparent); -webkit-mask-image: linear-gradient(to top, black 30%, transparent); }

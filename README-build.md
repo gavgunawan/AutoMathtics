@@ -47,6 +47,18 @@ scale (`<name>Scale`), log, restore, PIN reset, manual credit and redemptions al
 "✕ remove" drops the roster entry only — the progress node stays, and adding the same name again
 picks it back up. The admin Save writes `players` from live settings, never from the draft.
 
+## Family Rocket
+
+One shared goal at `kumon/rocket`: `{ id, status: fueling|launched|claimed, prize:{emoji,name}, goal,
+minEach, crew:[names], fuel:{name:⚡}, createdOn, launchedOn, history }`. Dad defines it in the admin
+panel (prize, goal, minimum per crew member, who's on the crew) and it appears on every crew member's
+home screen as a gauge with ⚡50/100/250 fuel buttons. Every change is a `runTransaction`
+(`updateRocket`), so two kids fuelling at once can't lose a contribution; `rocketReady` flips it to
+`launched` inside the transaction the moment the tank is full and everyone on the crew has met the
+minimum. A kid's fuel is spending — `gcSpent` plus a ledger row — so balances and merges stay honest,
+and it is never refunded (Scrap warns). Admin "Prize delivered" moves the launch into `history` and
+frees the pad for the next one. Offline, the harness keeps the rocket in `localStorage`.
+
 ## Sync — nothing a device recorded can be erased by another
 
 Every save is stamped (`savedAt`, `savedBy`) and every history row written since v1.17 carries `ts`.
