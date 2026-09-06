@@ -48,7 +48,8 @@ const choice = (text, options, correct, read) => q(text, { type: "choice", v: co
 const pickOne = (text, options, right, read) => { const o = shuffle(options); return choice(text, o, o.indexOf(right), read); };
 
 // ---- shared comparison templates, scaled by level ----
-const heavier = () => { const [a, b] = farPair(MASS_G); const n = pick([1, 1, 10, 5]); const A = n === 1 ? a[0] : `${n} ${a[0].replace(/^an? /, "")}s`, B = n === 1 ? b[0] : `${n} ${b[0].replace(/^an? /, "")}s`; return pickOne(`Which is heavier — ${A} or ${B}?`, [cap(A), cap(B)], a[1] > b[1] ? cap(A) : cap(B)); };
+const manyOf = (n, name) => { const s = name.replace(/^an? /, ""); return `${n} ${s.includes(" of ") ? s.replace(/^(\w+) of/, "$1s of") : s + "s"}`; };
+const heavier = () => { const [a, b] = farPair(MASS_G); const n = pick([1, 1, 10, 5]); const A = n === 1 ? a[0] : manyOf(n, a[0]), B = n === 1 ? b[0] : manyOf(n, b[0]); return pickOne(`Which is heavier — ${A} or ${B}?`, [cap(A), cap(B)], a[1] > b[1] ? cap(A) : cap(B)); };
 const longer = () => { const [a, b] = farPair(LEN_CM); return pickOne(`Which is longer — ${a[0]} or ${b[0]}?`, [cap(a[0]), cap(b[0])], a[1] > b[1] ? cap(a[0]) : cap(b[0])); };
 const holdsMore = () => { const [a, b] = farPair(CAP_ML); return pickOne(`Which holds more water — ${a[0]} or ${b[0]}?`, [cap(a[0]), cap(b[0])], a[1] > b[1] ? cap(a[0]) : cap(b[0])); };
 const takesLonger = () => { const [a, b] = farPair(TIME_MIN); return pickOne(`Which takes longer — ${a[0]} or ${b[0]}?`, [cap(a[0]), cap(b[0])], a[1] > b[1] ? cap(a[0]) : cap(b[0])); };
@@ -71,6 +72,48 @@ const ordering = () => {
   return pickOne(`${a} is ${attr[0]} than ${b}. ${b} is ${attr[0]} than ${c}. Who is the ${askTop ? attr[1] : attr[2]}?`, [a, b, c], askTop ? a : c);
 };
 
+// ---- legs: single kind at A (small counts), two kinds at once from B ----
+const LEGS = [["spider", 8], ["dog", 4], ["bird", 2], ["ant", 6], ["cat", 4], ["chicken", 2], ["beetle", 6]];
+const twoLegs = (lo, hi, where) => { const [[a, la], [b, lb]] = shuffle(LEGS).slice(0, 2); const na = ri(lo, hi), nb = ri(lo, hi); return num(`${where} ${na} ${a}s and ${nb} ${b}s. How many legs altogether?`, na * la + nb * lb); };
+
+// ---- fractions: halves & quarters first · thirds from tier 3 · eighths & tenths from tier 4 (paper 61 on) ----
+const FRAC_DENS = (t) => (t >= 4 ? [2, 3, 4, 8, 10] : t >= 3 ? [2, 3, 4] : [2, 4]);
+const FRAC_NAME = { 2: "half", 3: "third", 4: "quarter", 8: "eighth", 10: "tenth" };
+const fracOf = (d) => (d === 2 ? "Half" : d === 8 ? "An eighth" : `A ${FRAC_NAME[d]}`);
+const fracA = (t) => {
+  const dens = FRAC_DENS(t);
+  const kind = ri(1, 4);
+  if (kind === 1) { // unit fractions: which is bigger / smaller
+    const [a, b] = shuffle(dens).slice(0, 2); const big = Math.random() < 0.5; const win = big ? Math.min(a, b) : Math.max(a, b);
+    const thing = pick(["pizza", "cake", "chocolate bar", "pie"]);
+    return pickOne(`Which is ${big ? "bigger" : "smaller"} — 1/${a} of a ${thing} or 1/${b} of the same ${thing}?`, [`1/${a}`, `1/${b}`], `1/${win}`);
+  }
+  if (kind === 2) { // fraction of a set
+    const d = pick(dens); const n = d * ri(2, t >= 4 ? 6 : 5); const it = pick(ITEMS);
+    return num(`${fracOf(d)} of ${n} ${it}s is ___.`, n / d);
+  }
+  if (kind === 3) { // how many make a whole / a half
+    const d = pick(dens.filter((x) => x !== 2)); const half = d % 2 === 0 && Math.random() < 0.5;
+    return num(`How many ${FRAC_NAME[d]}s make ${half ? "a half" : "one whole"}?`, half ? d / 2 : d);
+  }
+  const d = pick(dens); const k = ri(1, d - 1); const right = `${d - k}/${d}`; // what fraction is left
+  const decoys = [`${k}/${d}`, `${d - k}/${d * 2}`, `${k}/${d * 2}`].filter((x, i, arr) => x !== right && arr.indexOf(x) === i).slice(0, 2);
+  return pickOne(`A ${pick(["cake", "pizza"])} is cut into ${d} equal pieces. ${k} ${k === 1 ? "piece is" : "pieces are"} eaten. What fraction is left?`, [right, ...decoys], right);
+};
+
+// ---- trip times: same hour → across the hour → over an hour → 24-hour clock with hours AND minutes (tier 4–5) ----
+const VEHICLES = ["train", "bus", "ferry", "MRT train"];
+const hm = (h, m) => `${h}:${String(m).padStart(2, "0")}`;
+const trip = (t) => {
+  const v = pick(VEHICLES);
+  if (t <= 1) { const h = ri(1, 11), m1 = pick([0, 5, 10, 15, 20, 25]), d = pick([5, 10, 15, 20, 25, 30]); return num(`The ${v} leaves at ${hm(h, m1)} and arrives at ${hm(h, m1 + d)}. The ride took ___ minutes.`, d); }
+  if (t === 2) { const h = ri(1, 10), m1 = ri(4, 11) * 5, d = ri(3, 11) * 5, end = h * 60 + m1 + d; return num(`The ${v} leaves at ${hm(h, m1)} and arrives at ${hm(Math.floor(end / 60), end % 60)}. The ride took ___ minutes.`, d); }
+  if (t === 3) { const h = ri(1, 9), m1 = ri(0, 11) * 5, d = ri(7, 24) * 5, end = h * 60 + m1 + d; return num(`The ${v} leaves at ${hm(h, m1)} and arrives at ${hm(Math.floor(end / 60), end % 60)}. The ride took ___ minutes.`, d); }
+  const h = ri(6, 16), m1 = ri(0, 11) * 5, dh = ri(1, t >= 5 ? 6 : 4), dm = ri(1, 11) * 5, end = h * 60 + m1 + dh * 60 + dm;
+  const text = `The ${v} leaves at ${hm(h, m1)} and arrives at ${hm(Math.floor(end / 60), end % 60)}.`;
+  return pick([num(`${text} The trip took ${plural(dh, "hour")} and ___ minutes.`, dm), num(`${text} The trip took ___ hours and ${dm} minutes.`, dh)]);
+};
+
 // ====================================================================
 // LEVEL A  (≈ P2): to 1,000 · 2-step add/sub · small × only (2,3,5,10 — NO division) · ½ ¼ · m/cm · kg/g · L · $ · time to 5 min
 // ====================================================================
@@ -78,18 +121,20 @@ const A = [
   (t) => { const n = ri(10, 100 * t); const k = ri(1, 9 + t * 2); return pick([num(`___ is ${k} less than ${n}.`, n - k), num(`___ is ${k} more than ${n}.`, n + k), num(`${k} more than ${n} is ___.`, n + k)]); },
   (t) => { const n = ri(100, 200 + 150 * t); const k = pick([10, 20, 30, 50, 100]); return num(`___ is ${k} more than ${n}.`, n + k); },
   // multiplication only, and small: rows × 2/3/5/10 — no division at Sector A (that starts at B)
-  (t) => { const r = ri(2, Math.min(5, 2 + t)), c = pick([2, 3, 5, 10]); return num(`A box has ${r} rows of ${c} eggs. How many eggs altogether?`, r * c); },
-  (t) => { const [a] = names(1); const k = ri(2, Math.min(5, 2 + t)), each = pick([2, 3, 5]); return num(`${a} has ${k} bags with ${each} sweets in each bag. How many sweets altogether?`, k * each); },
+  (t) => { const r = ri(Math.min(4, 1 + t), Math.min(5, 2 + t)), c = pick([2, 3, 5, 10]); return num(`A box has ${r} rows of ${c} eggs. How many eggs altogether?`, r * c); },
+  (t) => { const [a] = names(1); const k = ri(Math.min(4, 1 + t), Math.min(5, 2 + t)), each = pick(t >= 3 ? [2, 3, 5, 10] : [2, 3, 5]); return num(`${a} has ${k} bags with ${each} sweets in each bag. How many sweets altogether?`, k * each); },
   (t) => { const [a] = names(1); const had = ri(10, 15 + 10 * t), spent = ri(3, had - 4), found = ri(1, 9); return num(`${a} had $${had}. ${a} spent $${spent}, then found $${found}. How much does ${a} have now?`, had - spent + found); },
   (t) => { const m = ri(1, 1 + Math.floor(t / 2)), cut = ri(15, 85); return num(`A rope is ${m} m long. ${cut} cm is cut off. How many cm are left?`, m * 100 - cut); },
-  () => pickOne("Half of a pizza is more or less than a quarter of the same pizza?", ["More", "Less"], "More"),
-  (t) => { const h = ri(1, 11), m1 = pick([0, 5, 10, 15, 20]), d = pick([5, 10, 15, 20, 25, 30]).valueOf() + (t > 3 ? 5 : 0); const m2 = m1 + d; return num(`The train leaves at ${h}:${String(m1).padStart(2, "0")} and arrives at ${h}:${String(m2).padStart(2, "0")}. The ride took ___ minutes.`, d); },
+  fracA, fracA,
+  trip, trip,
   ordering,
   heavier, longer, holdsMore, takesLonger,
   () => pickOne("A watermelon weighs about 1 kg or 5 kg?", ["1 kg", "5 kg"], "5 kg"),
   (t) => { const [a, b] = names(2); const it = pick(ITEMS); const d = ri(2, 9), x = ri(d + 3, 20 + 10 * t); return pick([num(`${a} has ${x} ${it}s. ${b} has ${d} fewer. How many does ${b} have?`, x - d), num(`${a} has ${x} ${it}s, ${d} more than ${b}. How many does ${b} have?`, x - d), num(`${a} has ${x} ${it}s. ${b} has ${x + d}. How many more does ${b} have?`, d)]); },
   (t) => { const total = ri(20, 40 + 20 * t), gone = ri(5, total - 5), more = ri(2, 12); return num(`${total} birds sit on a wire. ${gone} fly away, then ${more} come back. How many birds now?`, total - gone + more); },
-  (t) => { const n = ri(1, Math.min(5, 1 + t)); const [what, legs] = pick([["spider", 8], ["dog", 4], ["bird", 2], ["ant", 6]]); return num(`A ${what} has ${legs} legs. How many legs do ${n} ${what}s have?`, legs * n); },
+  // legs: counts grow with the tier (2–3 at first, up to 6 spiders = 48 legs by paper 61); two kinds at once only at tier 5, kept small
+  (t) => { const n = ri(t >= 4 ? 3 : 2, t >= 4 ? 6 : t >= 3 ? 5 : t >= 2 ? 4 : 3); const [what, legs] = pick(LEGS); return num(`A ${what} has ${legs} legs. How many legs do ${n} ${what}s have?`, legs * n); },
+  (t) => (t >= 5 ? twoLegs(2, 3, "In the garden there are") : null),
   () => { const d = ri(1, 9); const c = ri(1, 9) * 10; return dec(`${d} dollars and ${c} cents is $___.`, d + c / 100); },
 ];
 
@@ -100,7 +145,13 @@ const B = [
   (t) => { const a = ri(2, 9), b = ri(6, 9); return pick([num(`___ × ${b} = ${a * b}.`, a), num(`${a * b} ÷ ${b} = ___.`, a), num(`${a} × ___ = ${a * b}.`, b)]); },
   (t) => { const boxes = ri(3, 5 + t), per = ri(6, 9), broken = ri(2, 12); return num(`A shop gets ${boxes} boxes of ${per} pens. ${broken} pens are broken. How many good pens?`, boxes * per - broken); },
   (t) => { const k = pick([2, 3, 4, 5, 6]); const each = ri(2, 5 + t); const [a] = names(1); return num(`${a} shares ${k * each} sweets equally among ${k} friends. Each friend gets ___.`, each); },
-  () => { const d = pick([2, 3, 4, 5]); const k = pick([2, 3]); return pickOne(`Which is bigger — ${k}/${d * k} of a cake or 1/${d} of the same cake?`, [`${k}/${d * k}`, `1/${d}`, "They are equal"], "They are equal"); },
+  // fractions at B: equivalent pairs, same numerator, or same denominator — the answer is not always "equal"
+  () => { const d = pick([2, 3, 4, 5, 8, 10]); const k = pick([2, 3]); const kind = ri(1, 3);
+    if (kind === 1) return pickOne(`Which is bigger — ${k}/${d * k} of a cake or 1/${d} of the same cake?`, [`${k}/${d * k}`, `1/${d}`, "They are equal"], "They are equal");
+    if (kind === 2) { const [a, b] = shuffle([2, 3, 4, 5, 8, 10]).slice(0, 2); const n = pick([1, 2]); return pickOne(`Which is bigger — ${n}/${a} or ${n}/${b}?`, [`${n}/${a}`, `${n}/${b}`, "They are equal"], `${n}/${Math.min(a, b)}`); }
+    const den = pick([5, 8, 10]); const [a, b] = shuffle([...new Set([1, 2, 3, den - 2, den - 1])]).slice(0, 2); return pickOne(`Which is smaller — ${a}/${den} or ${b}/${den}?`, [`${a}/${den}`, `${b}/${den}`, "They are equal"], `${Math.min(a, b)}/${den}`); },
+  (t) => twoLegs(3, 5 + t, pick(["There are", "In a pet shop there are", "On a leaf there are"])),
+  (t) => trip(t >= 3 ? 5 : 4),
   (t) => { const l = ri(3, 10 + t * 2), w = ri(2, l - 1); return pick([num(`A rectangle is ${l} cm long and ${w} cm wide. Its perimeter is ___ cm.`, 2 * (l + w)), num(`A square has sides of ${l} cm. Its perimeter is ___ cm.`, 4 * l)]); },
   () => pickOne("A car trip to the next town takes about 20 minutes. About how far is it — 3 km or 300 km?", ["3 km", "300 km"], "3 km"),
   (t) => { const each = pick([100, 150, 200, 250]); const start = pick([1000, 1500, 2000]); const cups = ri(2, Math.min(4 + Math.floor(t / 2), Math.floor(start / each) - 1)); return num(`A bottle holds ${start} ml. After pouring ${cups} cups of ${each} ml, ___ ml are left.`, start - cups * each); },
@@ -132,6 +183,8 @@ const C = [
   () => { const [a, b] = names(2); const x = ri(2, 9) + pick([0.2, 0.4, 0.5, 0.6, 0.8]); const y = pick([1.5, 2.5, 0.75, 1.25]); return dec(`${a} runs ${x} km. ${b} runs ${y} km more. How far does ${b} run, in km?`, x + y); },
   () => { const n = ri(12, 60); const f = pick([2, 3, 4, 5, 6]); return pickOne(`Is ${f} a factor of ${n}?`, ["Yes", "No"], n % f === 0 ? "Yes" : "No"); },
   heavier, about, faster, ordering,
+  (t) => twoLegs(6, 10 + 2 * t, pick(["A farm has", "In the zoo there are"])),
+  () => { const [what, legs] = pick(LEGS.filter((x) => x[1] >= 4)); const n = ri(6, 12); return num(`Some ${what}s have ${legs * n} legs altogether. How many ${what}s are there?`, n); },
   (t) => { const n = ri(2, 4), per = ri(15, 30 + 5 * t), cars = ri(5, 25); return num(`${cars + n * per} pupils go on a trip. ${cars} ride in cars and the rest fill ${n} equal buses. How many pupils on each bus?`, per); },
 ];
 
@@ -198,13 +251,21 @@ const F = [
   about, faster,
 ];
 
-// generators drop `null` from a template that couldn't build a clean instance — retry another
+// generators drop `null` from a template that couldn't build a clean instance — retry another.
+// A template that fed one of the last few questions at this level is skipped, so a session of
+// 15 questions doesn't keep serving the same story with new numbers.
 const GENS = [A, B, C, D, E, F];
+const recent = GENS.map(() => []);
 export function genNavigator(levelIdx, tier) {
-  const pool = GENS[Math.min(levelIdx, GENS.length - 1)];
-  for (let i = 0; i < 40; i++) {
-    const g = pick(pool);
-    try { const out = g(tier); if (out && out.display && out.answer && (out.answer.type !== "int" || Number.isInteger(out.answer.v))) return out; } catch (e) {}
+  const li = Math.min(levelIdx, GENS.length - 1), pool = GENS[li], used = recent[li];
+  const keep = Math.max(4, pool.length - 3); // cycle through nearly the whole pool before any story comes round again
+  for (let i = 0; i < 60; i++) {
+    const idx = Math.floor(Math.random() * pool.length);
+    if (i < 45 && used.includes(idx)) continue;
+    try {
+      const out = pool[idx](tier);
+      if (out && out.display && out.answer && (out.answer.type !== "int" || Number.isInteger(out.answer.v))) { used.push(idx); if (used.length > keep) used.shift(); return out; }
+    } catch (e) {}
   }
   return num("What is 10 less than 100?", 90);
 }
@@ -213,8 +274,8 @@ export function genNavigator(levelIdx, tier) {
 export const navSecondsFor = (levelIdx, tier, mult) => Math.round((50 + levelIdx * 5 + (tier - 1) * 5) * mult);
 
 export const NAV_TOPICS = [
-  { title: "Sector A · Navigator", lines: ["Numbers to 1,000 — more than, less than, fill the blank.", "Easy multiplication in stories: rows of eggs, bags of sweets, legs on animals — 2s, 3s, 5s and 10s. No dividing yet.", "Halves and quarters. Metres and centimetres, kilograms, litres, dollars and cents.", "Which is heavier, longer, holds more, takes longer — think about the real thing."] },
-  { title: "Sector B · Navigator", lines: ["Numbers to 10,000. Tables 6, 7, 8, 9 in two-step stories.", "Equivalent fractions. Perimeter of rectangles and squares.", "Kilometres and millilitres. The 24-hour clock. Reading a graph in words.", "Times as many, how many more, order who is tallest."] },
+  { title: "Sector A · Navigator", lines: ["Numbers to 1,000 — more than, less than, fill the blank.", "Easy multiplication in stories: rows of eggs, bags of sweets, legs on animals — 2s, 3s, 5s and 10s. No dividing yet. The counts grow as the papers go on.", "Halves and quarters first; thirds from paper 41; eighths and tenths from paper 61 — which is bigger, how many make a whole, a quarter of 20.", "Trip times: same hour first, then across the hour, then 24-hour clock with hours AND minutes from paper 61.", "Metres and centimetres, kilograms, litres, dollars and cents. Which is heavier, longer, holds more, takes longer — think about the real thing."] },
+  { title: "Sector B · Navigator", lines: ["Numbers to 10,000. Tables 6, 7, 8, 9 in two-step stories.", "Two kinds of animal at once — 5 spiders and 7 ants, how many legs altogether?", "Fractions: equivalent pairs, same top or same bottom — which is bigger, which is smaller? Perimeter of rectangles and squares.", "Kilometres and millilitres. The 24-hour clock and trips that last hours and minutes. Reading a graph in words.", "Times as many, how many more, order who is tallest."] },
   { title: "Sector C · Navigator", lines: ["Numbers to 100,000. Factors and multiples.", "Decimals: money and measures with a decimal point (there's a . key).", "Area of squares and rectangles. Angles bigger or smaller than a right angle.", "Time across the hour. Multi-step money."] },
   { title: "Sector D · Navigator", lines: ["Percentages of a number. Ratio. Average.", "Rate — litres per minute, km per hour. Volume of a box.", "Fraction of a set. Discounts: more or less than?", "Area of a triangle."] },
   { title: "Sector E · Navigator", lines: ["Speed, distance and time. Simple algebra with n and x.", "Percentage increase and decrease. Pie charts in words.", "Work backwards from what's left. Circles with π = 22/7.", "Sharing in a ratio. Dividing fractions."] },
