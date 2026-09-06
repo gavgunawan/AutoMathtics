@@ -72,13 +72,14 @@ const ordering = () => {
 };
 
 // ====================================================================
-// LEVEL A  (≈ P2): to 1,000 · 2-step add/sub · ×÷ 2,3,4,5,10 · ½ ¼ · m/cm · kg/g · L · $ · time to 5 min
+// LEVEL A  (≈ P2): to 1,000 · 2-step add/sub · small × only (2,3,5,10 — NO division) · ½ ¼ · m/cm · kg/g · L · $ · time to 5 min
 // ====================================================================
 const A = [
   (t) => { const n = ri(10, 100 * t); const k = ri(1, 9 + t * 2); return pick([num(`___ is ${k} less than ${n}.`, n - k), num(`___ is ${k} more than ${n}.`, n + k), num(`${k} more than ${n} is ___.`, n + k)]); },
   (t) => { const n = ri(100, 200 + 150 * t); const k = pick([10, 20, 30, 50, 100]); return num(`___ is ${k} more than ${n}.`, n + k); },
-  (t) => { const r = ri(2, 4 + t), c = pick([2, 3, 4, 5, 10]); return num(`A box has ${r} rows of ${c} eggs. How many eggs altogether?`, r * c); },
-  (t) => { const k = pick([2, 3, 4, 5]); const each = ri(2, 4 + t); const [a] = names(1); return num(`${a} shares ${k * each} sweets equally among ${k} friends. Each friend gets ___.`, each); },
+  // multiplication only, and small: rows × 2/3/5/10 — no division at Sector A (that starts at B)
+  (t) => { const r = ri(2, Math.min(5, 2 + t)), c = pick([2, 3, 5, 10]); return num(`A box has ${r} rows of ${c} eggs. How many eggs altogether?`, r * c); },
+  (t) => { const [a] = names(1); const k = ri(2, Math.min(5, 2 + t)), each = pick([2, 3, 5]); return num(`${a} has ${k} bags with ${each} sweets in each bag. How many sweets altogether?`, k * each); },
   (t) => { const [a] = names(1); const had = ri(10, 15 + 10 * t), spent = ri(3, had - 4), found = ri(1, 9); return num(`${a} had $${had}. ${a} spent $${spent}, then found $${found}. How much does ${a} have now?`, had - spent + found); },
   (t) => { const m = ri(1, 1 + Math.floor(t / 2)), cut = ri(15, 85); return num(`A rope is ${m} m long. ${cut} cm is cut off. How many cm are left?`, m * 100 - cut); },
   () => pickOne("Half of a pizza is more or less than a quarter of the same pizza?", ["More", "Less"], "More"),
@@ -88,7 +89,7 @@ const A = [
   () => pickOne("A watermelon weighs about 1 kg or 5 kg?", ["1 kg", "5 kg"], "5 kg"),
   (t) => { const [a, b] = names(2); const it = pick(ITEMS); const d = ri(2, 9), x = ri(d + 3, 20 + 10 * t); return pick([num(`${a} has ${x} ${it}s. ${b} has ${d} fewer. How many does ${b} have?`, x - d), num(`${a} has ${x} ${it}s, ${d} more than ${b}. How many does ${b} have?`, x - d), num(`${a} has ${x} ${it}s. ${b} has ${x + d}. How many more does ${b} have?`, d)]); },
   (t) => { const total = ri(20, 40 + 20 * t), gone = ri(5, total - 5), more = ri(2, 12); return num(`${total} birds sit on a wire. ${gone} fly away, then ${more} come back. How many birds now?`, total - gone + more); },
-  (t) => { const n = ri(1, 4 + t); return num(`A spider has 8 legs. How many legs do ${n} spiders have?`, 8 * n); },
+  (t) => { const n = ri(1, Math.min(5, 1 + t)); const [what, legs] = pick([["spider", 8], ["dog", 4], ["bird", 2], ["ant", 6]]); return num(`A ${what} has ${legs} legs. How many legs do ${n} ${what}s have?`, legs * n); },
   () => { const d = ri(1, 9); const c = ri(1, 9) * 10; return dec(`${d} dollars and ${c} cents is $___.`, d + c / 100); },
 ];
 
@@ -98,6 +99,7 @@ const A = [
 const B = [
   (t) => { const a = ri(2, 9), b = ri(6, 9); return pick([num(`___ × ${b} = ${a * b}.`, a), num(`${a * b} ÷ ${b} = ___.`, a), num(`${a} × ___ = ${a * b}.`, b)]); },
   (t) => { const boxes = ri(3, 5 + t), per = ri(6, 9), broken = ri(2, 12); return num(`A shop gets ${boxes} boxes of ${per} pens. ${broken} pens are broken. How many good pens?`, boxes * per - broken); },
+  (t) => { const k = pick([2, 3, 4, 5, 6]); const each = ri(2, 5 + t); const [a] = names(1); return num(`${a} shares ${k * each} sweets equally among ${k} friends. Each friend gets ___.`, each); },
   () => { const d = pick([2, 3, 4, 5]); const k = pick([2, 3]); return pickOne(`Which is bigger — ${k}/${d * k} of a cake or 1/${d} of the same cake?`, [`${k}/${d * k}`, `1/${d}`, "They are equal"], "They are equal"); },
   (t) => { const l = ri(3, 10 + t * 2), w = ri(2, l - 1); return pick([num(`A rectangle is ${l} cm long and ${w} cm wide. Its perimeter is ___ cm.`, 2 * (l + w)), num(`A square has sides of ${l} cm. Its perimeter is ___ cm.`, 4 * l)]); },
   () => pickOne("A car trip to the next town takes about 20 minutes. About how far is it — 3 km or 300 km?", ["3 km", "300 km"], "3 km"),
@@ -211,7 +213,7 @@ export function genNavigator(levelIdx, tier) {
 export const navSecondsFor = (levelIdx, tier, mult) => Math.round((50 + levelIdx * 5 + (tier - 1) * 5) * mult);
 
 export const NAV_TOPICS = [
-  { title: "Sector A · Navigator", lines: ["Numbers to 1,000 — more than, less than, fill the blank.", "Times tables 2, 3, 4, 5, 10 in stories: rows, groups, sharing.", "Halves and quarters. Metres and centimetres, kilograms, litres, dollars and cents.", "Which is heavier, longer, holds more, takes longer — think about the real thing."] },
+  { title: "Sector A · Navigator", lines: ["Numbers to 1,000 — more than, less than, fill the blank.", "Easy multiplication in stories: rows of eggs, bags of sweets, legs on animals — 2s, 3s, 5s and 10s. No dividing yet.", "Halves and quarters. Metres and centimetres, kilograms, litres, dollars and cents.", "Which is heavier, longer, holds more, takes longer — think about the real thing."] },
   { title: "Sector B · Navigator", lines: ["Numbers to 10,000. Tables 6, 7, 8, 9 in two-step stories.", "Equivalent fractions. Perimeter of rectangles and squares.", "Kilometres and millilitres. The 24-hour clock. Reading a graph in words.", "Times as many, how many more, order who is tallest."] },
   { title: "Sector C · Navigator", lines: ["Numbers to 100,000. Factors and multiples.", "Decimals: money and measures with a decimal point (there's a . key).", "Area of squares and rectangles. Angles bigger or smaller than a right angle.", "Time across the hour. Multi-step money."] },
   { title: "Sector D · Navigator", lines: ["Percentages of a number. Ratio. Average.", "Rate — litres per minute, km per hour. Volume of a box.", "Fraction of a set. Discounts: more or less than?", "Area of a triangle."] },
