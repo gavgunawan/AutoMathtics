@@ -44,6 +44,14 @@ before the jump to the next sector (`trackDone`, `jumpTo`):
 | ⚙️ ENGINE — arithmetic drills | the original `paper` / `bossCleared` | 5 sums | 25 questions | 25 s per question |
 | 🧭 NAVIGATOR — word & logic | `prog.nav = { paper, bossCleared }` | 3 word problems | 15 questions, under ten minutes | 50 s per question |
 
+Each track has its **own sector** (v2.1): Engine's is `p.level`, Navigator's is `p.nav.level`, which
+starts at A for everyone. `canJump(p, t)`: a track that has finished its sector jumps on once the other
+track has finished that sector too (or is already past it); `settleJumps` applies every due jump after a
+pass or an admin credit. So a kid can be in Engine B and Navigator A — Navigator jumps to B on its own
+when A is done, and Engine can't leave B until Navigator finishes B. `levelIdx` is the *active* track's
+sector; anything about the other track reads `trk(p, "nav").level` / `engineLevel` / `navLevel`. Admin
+"📍 MOVE TO SECTOR" puts a track at paper 1 of any sector, backwards included.
+
 `trk(p, t)` / `withTrk(p, t, patch)` read and write a track; `bossDueT`, `trackDone` and the load-time
 crown clamp are per track. History rows for Navigator carry `track: "nav"` (and a 🧭 prefix on
 `papers`); `qlog` rows carry a 5th element `isNav` so the heatmap can be shown per track. Practice mode
@@ -69,6 +77,13 @@ history, PIN) to the player's own node, enters them, and shows the quick guide (
 scale (`<name>Scale`), log, restore, PIN reset, manual credit and redemptions all just work. Admin
 "✕ remove" drops the roster entry only — the progress node stays, and adding the same name again
 picks it back up. The admin Save writes `players` from live settings, never from the draft.
+
+## Reward Store — who may redeem
+
+Each reward in `settings.rewards` carries `kids: [names]`. `normSettings` gives rewards from before
+that field existed `REWARD_DEFAULT_KIDS` (Allison and Geralt); new rewards start the same way and added
+players stay unticked until Dad ticks them on the reward's row in the admin menu. The Reward Store
+filters by it and `redeemReward` refuses anything not addressed to the current kid.
 
 ## Family Rocket
 
