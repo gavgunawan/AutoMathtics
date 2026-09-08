@@ -3,7 +3,7 @@ on:
   pull_request:
     paths: ['commercial/**', '.github/workflows/secure-foundation.yml']
   push:
-    branches: ['main', 'release/v3.0', 'feature/secure-foundation-step-1']
+    branches: ['main', 'release/v3.0', 'hardening/stage-1', 'feature/secure-foundation-step-1']
     paths: ['commercial/**', '.github/workflows/secure-foundation.yml']
 permissions:
   contents: read
@@ -53,3 +53,12 @@ jobs:
         env:
           CI: 'true'
           FIREBASE_CLI_DISABLE_USAGE: 'true'
+  container-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build runtime image without deploying or publishing it
+        run: docker build --tag automathtics-stage1-check ./commercial

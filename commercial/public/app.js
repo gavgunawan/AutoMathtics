@@ -1,12 +1,14 @@
 const root = document.querySelector('#app'), status = document.querySelector('#message');
 const icons = { fox: '\u{1f98a}', panda: '\u{1f43c}', tiger: '\u{1f42f}', wolf: '\u{1f43a}', robot: '\u{1f916}', rocket: '\u{1f680}' };
 let csrf = '', model = null, authModule = null, working = false, transientView = false;
+let reauthEpoch = 0, sessionRefreshPending = false;
 const channel = 'BroadcastChannel' in window ? new BroadcastChannel('automathtics-session') : null;
 const messages = {
   CHILD_LIMIT_REACHED: 'All child slots are in use. A larger allowance is needed to add another child.',
   SUBSCRIPTION_INACTIVE: 'Learning access is inactive. Parent account access remains available.',
   PIN_LOCKED: 'Too many PIN attempts. Wait 15 minutes or ask your parent to reset the PIN.',
   PIN_SERVICE_BUSY: 'Another PIN check is in progress. Please try again in a moment.',
+  PIN_CHECK_EXPIRED: 'This PIN check expired. Please enter your PIN again.',
   TOO_MANY_ATTEMPTS: 'Too many attempts. Please pause before trying again.',
   INCORRECT_PIN: 'That PIN did not match.', REAUTHENTICATE: 'Please sign in again for this parent action.',
   SIGN_IN_REQUIRED: 'Please sign in.', PARENT_REQUIRED: 'Return to parent sign-in to manage your family.',
@@ -40,7 +42,13 @@ async function run(fn) {
   try { note(''); await fn(); }
   catch (error) {
     note(messages[error.code] || (error.code?.startsWith('auth/') ? 'The account check failed. Check your details or try again later.' : error.message || 'Please try again.'));
-  } finally { working = false; root.removeAttribute('aria-busy'); }
+  } finally {
+    working = false; root.removeAttribute('aria-busy');
+    if (sessionRefreshPending) {
+      sessionRefreshPending = false;
+      await run(async () => { if (authModule) await authModule.clear(); await refresh(); });
+    }
+  }
 }
 async function api(path, payload, requestId) {
   const response = await fetch(`/api${path}`, { method: payload === undefined ? 'GET' : 'POST', cache: 'no-store', credentials: 'same-origin',
@@ -58,8 +66,17 @@ async function refresh() {
 }
 async function auth() { authModule ||= await import('/auth.js'); return authModule; }
 async function authStep(result, afterReady = null) {
+  if (afterReady?.valid && !afterReady.valid()) {
+    await (await auth()).clear(); result.idToken = '';
+    note('Parent verification was cancelled. Start the action again.'); return;
+  }
   if (result.stage === 'ready') {
-    try { await api('/auth/session', { idToken: result.idToken }); }
+    try {
+      // Reauthentication can outlast the old cookie/preauthentication CSRF lifetime.
+      csrf = (await api('/bootstrap')).csrf;
+      if (afterReady?.valid && !afterReady.valid()) return;
+      await api('/auth/session', { idToken: result.idToken });
+    }
     finally { await (await auth()).clear(); result.idToken = ''; }
     await refresh(); channel?.postMessage('changed');
     if (afterReady) await afterReady();
@@ -85,6 +102,7 @@ async function authStep(result, afterReady = null) {
     button('Verify code', async () => authStep(await (await auth()).confirmCode(otp.input.value), afterReady), 'primary'));
 }
 function signInScreen(signup = false, afterReady = null, reauth = false) {
+  if (!reauth) reauthEpoch++;
   model = null;
   const box = panel(reauth ? 'PARENT VERIFICATION' : 'YOUR FAMILY. YOUR GRID.',
     reauth ? 'Confirm it\u2019s you.' : (signup ? 'A new adventure starts here.' : 'Big futures. Small steps.'),
@@ -104,16 +122,40 @@ function signInScreen(signup = false, afterReady = null, reauth = false) {
     await authStep(await (signup ? a.signUp(email.input.value, value) : a.signIn(email.input.value, value)), afterReady);
   }); };
   box.append(form);
+  if (reauth) box.append(button('Cancel verification', async () => {
+    reauthEpoch++;
+    if (authModule) await authModule.clear();
+    await refresh(); note('Verification cancelled. The unfinished action was discarded.');
+  }, 'ghost'));
   if (!reauth) box.append(button(signup ? 'Already registered? Sign in' : 'New here? Create a parent account', () => signInScreen(!signup), 'ghost'));
   if (!signup && !reauth) box.append(button('Forgot password?', async () => { if (!email.input.checkValidity()) { email.input.reportValidity(); return; }
     await (await auth()).resetPassword(email.input.value); note('If this email can receive a reset link, one has been requested. Mobile verification is still required.'); }, 'text-button'));
   box.append(el('p', 'EMAIL VERIFIED  /  MOBILE VERIFIED  /  FAMILY-ONLY ACCESS', 'trust'));
 }
 function reauthenticate(afterReady) {
+  // This scope comes from authenticated /me, not an editable email form or storage.
+  const expected = model?.role === 'parent' && typeof model.parent?.uid === 'string'
+    ? { uid: model.parent.uid, familyId: model.family?.id ?? null } : null;
+  if (!expected) { signInScreen(); note('Sign in again and restart this parent action.'); return; }
+  const epoch = ++reauthEpoch;
+  const resume = () => {
+    if (epoch !== reauthEpoch) return;
+    if (model?.role !== 'parent' || model.parent?.uid !== expected.uid ||
+        (model.family?.id ?? null) !== expected.familyId) {
+      // The new account may be valid, but it does not own the old account's draft.
+      reauthEpoch++;
+      note('Account or family changed. The unfinished action was discarded. Start a new action in this account.');
+      return;
+    }
+    reauthEpoch++; // One-shot continuation; never automatically submit a mutation.
+    return afterReady();
+  };
+  resume.valid = () => epoch === reauthEpoch;
   transientView = true;
-  signInScreen(false, afterReady, true);
+  signInScreen(false, resume, true);
 }
 async function signOut() {
+  reauthEpoch++;
   await api('/auth/logout', {}); if (authModule) await authModule.clear(); channel?.postMessage('changed'); await refresh();
 }
 function renderModel() {
@@ -219,7 +261,7 @@ function selectorScreen() {
     transientView = true;
     const pane = panel('YOUR PRIVATE GRID', child.nickname, 'Enter your six-digit PIN.');
     const p = field('Child PIN', 'password', { inputMode: 'numeric', maxLength: 6, pattern: '[0-9]{6}', autocomplete: 'off' });
-    const enter = async () => { const code = p.input.value; p.input.value = ''; await api(`/children/${child.id}/enter`, { pin: code }); await refresh(); };
+    const enter = async () => { const code = p.input.value; p.input.value = ''; await api(`/children/${child.id}/enter`, { pin: code }); channel?.postMessage('changed'); await refresh(); };
     p.input.addEventListener('keydown', (event) => { if (event.key === 'Enter') run(enter); });
     pane.append(p.wrap, button('Enter my grid', enter, 'primary'), button('Choose another child', refresh, 'ghost'));
     p.input.focus();
@@ -230,10 +272,14 @@ function childScreen() {
   const box = panel('CHILD SESSION / FAMILY PROTECTED', `Welcome, ${child.nickname}.`, 'Your profile is ready. You are signed in with child-only permissions.');
   box.append(cards([child]), el('p', 'This first step secures accounts and child access. The learning game, progress and rewards have not been connected to this backend yet.', 'notice'),
     button('Check my secure access', async () => { await api('/child/profile'); note('Access checked by the server. Your profile is active.'); }, 'primary'),
-    button('Switch child', async () => { await api('/session/select', {}); await refresh(); }, 'ghost'),
+    button('Switch child', async () => { await api('/session/select', {}); channel?.postMessage('changed'); await refresh(); }, 'ghost'),
     button('Parent sign-in', () => signInScreen(), 'text-button'));
 }
-channel?.addEventListener('message', () => run(async () => { if (authModule) await authModule.clear(); await refresh(); }));
+channel?.addEventListener('message', () => {
+  reauthEpoch++; // Cancel old drafts even if a request is currently in flight.
+  if (working) { sessionRefreshPending = true; return; }
+  run(async () => { if (authModule) await authModule.clear(); await refresh(); });
+});
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && model && !working && !transientView) run(refresh);
 });

@@ -98,7 +98,7 @@ export class Foundation {
         const c = await tx.get(`families/${s.familyId}/children/${id}`);
         if (c) children.push(publicChild(c));
       }
-      return { role: s.role, csrf: s.csrf, family: family ? {
+      return { role: s.role, csrf: s.csrf, ...(s.role === 'parent' ? { parent: { uid: s.uid } } : {}), family: family ? {
         id: family.id, label: family.label, children,
         ...(s.role === 'parent' ? { entitlement: family.entitlement, activeCount: family.activeChildIds.length } : {}),
       } : null };
@@ -136,6 +136,8 @@ export class Foundation {
       if (existing.uid !== ctx.uid || existing.fingerprint !== fingerprint) fail(409, 'IDEMPOTENCY_CONFLICT');
       return { child: existing.child };
     }
+    if (initial.family.activeChildIds.length >= initial.family.entitlement.seatLimit) fail(409, 'CHILD_LIMIT_REACHED');
+    if (initial.family.childIds.length >= FAMILY_LIMIT) fail(409, 'PILOT_PROFILE_LIMIT');
     const hash = await this.hasher.hash(familyId, childId, input.pin);
     return this.store.transaction(async (tx) => {
       const { s, family } = await this.authorize(tx, ctx, ['parent']);
@@ -157,18 +159,45 @@ export class Foundation {
       return { child: publicChild(child) };
     });
   }
+  // Internal helper: call only after the transaction has read all authorization state.
+  // Never mutate ctx or return a raw cookie through the JSON API.
+  rotateSession(tx, ctx, session, changes) {
+    const token = randomToken();
+    tx.delete(`sessions/${ctx.key}`);
+    tx.set(`sessions/${sha256(token)}`, { ...session, ...changes, csrf: randomToken() });
+    return token;
+  }
   async lock(ctx) {
-    await this.store.transaction(async (tx) => {
+    return this.store.transaction(async (tx) => {
       const { s, parent } = await this.authorize(tx, ctx, ['parent']);
-      tx.set(`sessions/${ctx.key}`, { ...s, role: 'selector', childId: null, expiresAt: this.now() + 12 * 60 * MINUTE });
+      const token = this.rotateSession(tx, ctx, s, {
+        role: 'selector', childId: null, pinVersion: null, expiresAt: this.now() + 12 * 60 * MINUTE,
+      });
       tx.set(`parents/${s.uid}`, { ...parent, reauthAfter: Math.max(parent.reauthAfter || 0, s.authTime, Math.floor(this.now() / 1000)) });
       this.audit(tx, 'session.child_mode', s.uid, s.familyId);
+      return token;
     });
   }
   async selector(ctx) {
-    await this.store.transaction(async (tx) => {
+    return this.store.transaction(async (tx) => {
       const { s } = await this.authorize(tx, ctx, ['child', 'selector']);
-      tx.set(`sessions/${ctx.key}`, { ...s, role: 'selector', childId: null });
+      // This downgrade also lets a PIN-revoked child session return to selection.
+      // It does not grant another child's access; a current PIN is still required.
+      const token = this.rotateSession(tx, ctx, s, { role: 'selector', childId: null, pinVersion: null });
+      this.audit(tx, 'session.selector', s.uid, s.familyId);
+      return token;
+    });
+  }
+  async releasePinReservation(path, ticket) {
+    // Refund ONLY this request's reservation. A reset/new window removes old tickets,
+    // so late cleanup cannot erase someone else's failures or a newly-created budget.
+    await this.store.transaction(async (tx) => {
+      const current = await tx.get(path);
+      if (!current?.pending?.[ticket]) return;
+      const pending = { ...current.pending }; delete pending[ticket];
+      const count = Math.max(0, current.count - 1);
+      if (!count) tx.delete(path);
+      else tx.set(path, { ...current, pending, count });
     });
   }
   async selectChild(ctx, childId, code) {
@@ -177,40 +206,72 @@ export class Foundation {
     const ticket = randomUUID();
     const state = await this.store.transaction(async (tx) => {
       const { s, family } = await this.authorize(tx, ctx, ['selector']);
-      const path = `families/${s.familyId}/children/${childId}`;
-      const child = await tx.get(path);
+      const child = await tx.get(`families/${s.familyId}/children/${childId}`);
       const credential = await tx.get(`families/${s.familyId}/credentials/${childId}`);
       const attemptPath = `families/${s.familyId}/pinAttempts/${childId}`;
       const prior = await tx.get(attemptPath);
       if (!child || !credential) fail(404, 'CHILD_NOT_FOUND');
       this.entitlement(family, childId);
       if (child.status !== 'active') fail(403, 'CHILD_INACTIVE');
-      const attempts = prior && prior.until > this.now() ? { ...prior } : { count: 0, until: this.now() + 15 * MINUTE };
-      if (attempts.count >= 5) fail(429, 'PIN_LOCKED');
-      attempts.count++; attempts.ticket = ticket;
-      tx.set(attemptPath, attempts); // Reserve an attempt BEFORE expensive verification, across devices.
+      // count = completed wrong checks + pending reservations. Pending checks cannot
+      // overrun the five-check budget, but a busy/unavailable hasher is not a wrong PIN.
+      const attempts = prior && prior.until > this.now() ? { ...prior, pending: { ...prior.pending } }
+        : { count: 0, until: this.now() + 15 * MINUTE, pending: {} };
+      if (attempts.count >= 5) {
+        const failed = attempts.count - Object.keys(attempts.pending).length;
+        fail(429, failed >= 5 ? 'PIN_LOCKED' : 'PIN_SERVICE_BUSY');
+      }
+      attempts.count++; attempts.pending[ticket] = true;
+      delete attempts.ticket; // old local-pilot record format
+      tx.set(attemptPath, attempts);
       return { s, credential, attemptPath };
     });
-    const correct = await this.hasher.verify(state.s.familyId, childId, code, state.credential.hash);
-    await this.store.transaction(async (tx) => {
-      const { s, family } = await this.authorize(tx, ctx, ['selector']);
-      const current = await tx.get(`families/${s.familyId}/credentials/${childId}`);
-      const attempts = await tx.get(state.attemptPath);
-      this.entitlement(family, childId);
-      if (!current || current.version !== state.credential.version || current.hash !== state.credential.hash) fail(409, 'PIN_CHANGED_RETRY');
-      if (correct) {
-        if (attempts?.ticket === ticket) tx.delete(state.attemptPath);
-        tx.set(`sessions/${ctx.key}`, { ...s, role: 'child', childId, pinVersion: current.version });
-        this.audit(tx, 'child.signed_in', s.uid, s.familyId, childId);
-      } else this.audit(tx, 'child.pin_failed', s.uid, s.familyId, childId);
-    });
-    if (!correct) fail(401, 'INCORRECT_PIN');
+    try {
+      const correct = await this.hasher.verify(state.s.familyId, childId, code, state.credential.hash);
+      const next = await this.store.transaction(async (tx) => {
+        const { s, family } = await this.authorize(tx, ctx, ['selector']);
+        const child = await tx.get(`families/${s.familyId}/children/${childId}`);
+        const current = await tx.get(`families/${s.familyId}/credentials/${childId}`);
+        const attempts = await tx.get(state.attemptPath);
+        this.entitlement(family, childId);
+        if (!child || child.status !== 'active') fail(403, 'CHILD_INACTIVE');
+        if (!current || current.version !== state.credential.version || current.hash !== state.credential.hash) fail(409, 'PIN_CHANGED_RETRY');
+        // Never authenticate from a stale verification whose reservation has expired
+        // or disappeared. A reset, timeout or replaced window must start a new check.
+        if (!attempts?.pending?.[ticket] || attempts.until <= this.now()) fail(409, 'PIN_CHECK_EXPIRED');
+        const pending = { ...attempts.pending }; delete pending[ticket];
+        if (correct) {
+          // A correct proof clears completed failures, NOT other in-flight requests.
+          const count = Object.keys(pending).length;
+          if (count) tx.set(state.attemptPath, { ...attempts, pending, count });
+          else tx.delete(state.attemptPath);
+          const token = this.rotateSession(tx, ctx, s, { role: 'child', childId, pinVersion: current.version });
+          this.audit(tx, 'child.signed_in', s.uid, s.familyId, childId);
+          return token;
+        }
+        tx.set(state.attemptPath, { ...attempts, pending });
+        this.audit(tx, 'child.pin_failed', s.uid, s.familyId, childId);
+        return null;
+      });
+      if (!correct) fail(401, 'INCORRECT_PIN');
+      return next;
+    } catch (error) {
+      // Cleanup itself must commit. On database failure we fail closed; an unreleased
+      // reservation can persist until its 15-minute window ends, never grant access.
+      await this.releasePinReservation(state.attemptPath, ticket);
+      throw error;
+    }
   }
   async resetPin(ctx, childId, code) {
     uuid(childId); pin(code);
     await this.rate(`pin-reset:${ctx.uid}`, 5, MINUTE);
-    const first = await this.store.transaction((tx) => this.authorize(tx, ctx, ['parent']));
-    this.requireRecent(first.s);
+    const first = await this.store.transaction(async (tx) => {
+      const authorized = await this.authorize(tx, ctx, ['parent']);
+      this.requireRecent(authorized.s);
+      const old = await tx.get(`families/${authorized.s.familyId}/credentials/${childId}`);
+      if (!old) fail(404, 'CHILD_NOT_FOUND');
+      return authorized;
+    });
     const hash = await this.hasher.hash(first.s.familyId, childId, code);
     await this.store.transaction(async (tx) => {
       const { s } = await this.authorize(tx, ctx, ['parent']); this.requireRecent(s);

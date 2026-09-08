@@ -135,8 +135,13 @@ test('real SMS MFA token, Firestore seat contention, private rules and expiry', 
   assert.equal((await fetch(url, { headers: { Authorization: `Bearer ${p.idToken}` } })).status, 403);
   assert.equal((await fetch(url, { method: 'PATCH', headers: { Authorization: `Bearer ${p.idToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ fields: { seatLimit: { integerValue: '99' } } }) })).status, 403);
-  await service.lock(ctx); await service.selectChild(ctx, child.id, '763829');
-  assert.equal((await service.me(ctx)).role, 'child');
+  const selectorToken = await service.lock(ctx);
+  await assert.rejects(service.authenticate(cookie), rejected('SIGN_IN_REQUIRED'));
+  const selectorCtx = await service.authenticate(selectorToken);
+  const childToken = await service.selectChild(selectorCtx, child.id, '763829');
+  await assert.rejects(service.authenticate(selectorToken), rejected('SIGN_IN_REQUIRED'));
+  const childCtx = await service.authenticate(childToken);
+  assert.equal((await service.me(childCtx)).role, 'child');
   await grantEntitlement(store, { familyId: family.id, seatLimit: 1, accessUntil: Date.now() - 1, reason: 'emulator expiry', actor: 'integration-test' });
-  await assert.rejects(service.me(ctx), rejected('SUBSCRIPTION_INACTIVE'));
+  await assert.rejects(service.me(childCtx), rejected('SUBSCRIPTION_INACTIVE'));
 });

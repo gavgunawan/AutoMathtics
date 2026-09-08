@@ -74,5 +74,5 @@ test('HTTP handover actually prevents writes from an old parent tab', async (t) 
   const headers = { Cookie: `__session=${a.cookie}`, 'X-CSRF-Token': (await s.f.service.me(a.ctx)).csrf };
   assert.equal((await s.call('/api/session/lock', {}, headers)).status, 200);
   const r = await s.call('/api/children', { nickname: 'Other', icon: 'fox', pin: '763829' }, { ...headers, 'Idempotency-Key': '6389f688-87d9-44bc-8a54-ddbc3c328be7' });
-  assert.equal(r.status, 403); assert.equal((await r.json()).error, 'PARENT_REQUIRED');
+  assert.equal(r.status, 403); assert.equal((await r.json()).error, 'CSRF_DENIED');
 });

@@ -1,4 +1,11 @@
-# v3.0 verification record - 6 September 2026
+# Stage 1 hardening verification - 8 September 2026
+
+The initial record below is historical, not the status of the hardening patch.
+Read [STAGE1_HARDENING.md](STAGE1_HARDENING.md) for the changes, executed checks,
+and remaining acceptance work. Stage 1 sign-off is still pending. No public
+launch or production-security certification is implied by a green test run.
+
+## Initial v3.0 verification record - 6 September 2026
 
 ## Verified in the authoring environment
 
