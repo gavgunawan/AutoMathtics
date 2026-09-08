@@ -27,10 +27,12 @@ export function config(env = process.env) {
       new Set(previousPeppers).size !== previousPeppers.length) {
     throw Error('PIN_PEPPER_PREVIOUS must list distinct retired hex peppers, none equal to the current secrets.');
   }
-  // How many trailing X-Forwarded-For entries were appended by proxies we trust (Hosting, Cloud
-  // Run). The client address for rate limiting sits just before them. 0 = use the socket address,
-  // which behind a proxy is the proxy itself and would throttle every visitor as one client, so
-  // staging/production must state the count explicitly after measuring it on the real origin.
+  // The number of trusted proxies in front of the server. Each appends to X-Forwarded-For the
+  // address it accepted the connection from, so the last N entries are trustworthy and the
+  // earliest of them — appended by the first trusted proxy — is the client. Firebase Hosting in
+  // front of Cloud Run is 2. 0 = use the socket address, which behind a proxy is the proxy itself
+  // and would throttle every visitor as one client, so staging/production must state the count
+  // explicitly after measuring it on the real origin (DEPLOY_V3.md §5).
   if (!emulator && !/^[0-5]$/.test(env.TRUSTED_PROXY_HOPS || '')) throw Error('Set TRUSTED_PROXY_HOPS (0-5) for the deployed edge; see DEPLOY_V3.md.');
   const proxyHops = emulator ? Number(env.TRUSTED_PROXY_HOPS || 0) : Number(env.TRUSTED_PROXY_HOPS);
   if (!Number.isInteger(proxyHops) || proxyHops < 0 || proxyHops > 5) throw Error('TRUSTED_PROXY_HOPS must be 0-5.');

@@ -10,8 +10,9 @@ Every change below has a regression test in `tests/stage1b.test.mjs`; the existi
 
 ### F1 — login lockout through the shared proxy address (High)
 - `clientAddress()` in `http.mjs` derives the client from `X-Forwarded-For` using
-  `TRUSTED_PROXY_HOPS`: the last *hops* entries were appended by proxies we trust; the entry before
-  them is the client. `0` uses the socket address.
+  `TRUSTED_PROXY_HOPS`: the number of trusted proxies, each of which appended the address it
+  accepted the connection from, so the earliest of the last *hops* entries is the client.
+  Hosting in front of Cloud Run is 2. `0` uses the socket address.
 - Config refuses staging/production without an explicit `TRUSTED_PROXY_HOPS` (0–5), because the
   socket address behind Hosting/Cloud Run is the proxy itself and would throttle every visitor as one.
 - Only **failed** logins are counted per address (`peek()` before, `rate()` on failure; 30 per

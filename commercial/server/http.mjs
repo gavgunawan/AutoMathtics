@@ -12,9 +12,11 @@ const cookieToken = (req) => {
   const matches = (req.headers.cookie || '').split(';').map((v) => v.trim()).filter((v) => v.startsWith(`${COOKIE}=`));
   return matches.length === 1 ? matches[0].slice(COOKIE.length + 1) : null;
 };
-// The client address for throttling. The last `hops` X-Forwarded-For entries were appended by
-// proxies we trust; the entry before them is the client. With hops = 0 the socket address is
-// used, which behind a proxy is the proxy itself — config refuses that outside the emulator.
+// The client address for throttling. Each of the `hops` trusted proxies appended the address it
+// accepted the connection from, so the last `hops` entries are trustworthy and the earliest of
+// them is the client; anything before that was supplied by the client and is ignored. With
+// hops = 0 the socket address is used, which behind a proxy is the proxy itself — config
+// refuses that outside the emulator.
 const clientAddress = (req, hops) => {
   const chain = String(req.headers['x-forwarded-for'] || '').split(',').map((v) => v.trim()).filter(Boolean);
   const ip = hops > 0 && chain.length >= hops ? chain[chain.length - hops] : req.socket.remoteAddress;
