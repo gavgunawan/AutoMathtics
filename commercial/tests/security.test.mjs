@@ -13,11 +13,16 @@ test('emulator configuration is explicit, demo-only and loopback-only', () => {
     { APP_ORIGIN: 'https://example.com' }, { FIRESTORE_EMULATOR_HOST: 'public.example:8088' }]) assert.throws(() => config({ ...env, ...patch }));
 });
 test('production fails closed for emulator variables, weak secrets and missing origin', () => {
-  const prod = { ...env, APP_MODE: 'production', APP_ORIGIN: 'https://pilot.example.test', FIREBASE_PROJECT_ID: 'am-new-pilot' };
+  const prod = { ...env, APP_MODE: 'production', APP_ORIGIN: 'https://pilot.example.test', FIREBASE_PROJECT_ID: 'am-new-pilot', TRUSTED_PROXY_HOPS: '1' };
   assert.throws(() => config(prod));
   delete prod.FIREBASE_AUTH_EMULATOR_HOST; delete prod.FIRESTORE_EMULATOR_HOST;
   assert.equal(config(prod).emulator, false);
-  for (const patch of [{ SESSION_SECRET: 'short' }, { PIN_PEPPER: secret }, { APP_ORIGIN: '' }, { APP_ORIGIN: 'https://pilot.example.test/path' }]) assert.throws(() => config({ ...prod, ...patch }));
+  assert.equal(config(prod).proxyHops, 1);
+  for (const patch of [{ SESSION_SECRET: 'short' }, { PIN_PEPPER: secret }, { APP_ORIGIN: '' }, { APP_ORIGIN: 'https://pilot.example.test/path' },
+    { TRUSTED_PROXY_HOPS: undefined }, { TRUSTED_PROXY_HOPS: '7' }, { PIN_PEPPER_PREVIOUS: pepper }, { PIN_PEPPER_PREVIOUS: 'short' },
+    { PIN_PEPPER_PREVIOUS: `${'c3'.repeat(32)},${'c3'.repeat(32)}` }]) assert.throws(() => config({ ...prod, ...patch }));
+  assert.deepEqual(config({ ...prod, PIN_PEPPER_PREVIOUS: `${'c3'.repeat(32)}, ${'d4'.repeat(32)}` }).previousPeppers, ['c3'.repeat(32), 'd4'.repeat(32)]);
+  assert.equal(config(env).proxyHops, 0); // emulator defaults to the socket address
 });
 test('preauthentication CSRF state rejects tampering and expiry', () => {
   const now = Date.parse('2026-09-06'), cookie = preauth(secret, now);

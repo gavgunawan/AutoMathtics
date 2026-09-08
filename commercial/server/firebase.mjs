@@ -4,19 +4,35 @@ import { fail } from './security.mjs';
 export class FirestoreStore {
   constructor(db) { this.db = db; }
   async get(path) { const snap = await this.db.doc(path).get(); return snap.exists ? snap.data() : null; }
-  transaction(fn) {
+  // readOnly transactions take no document locks, so read-only routes never contend with writers.
+  transaction(fn, { readOnly = false } = {}) {
     return this.db.runTransaction((t) => fn({
       get: async (path) => { const s = await t.get(this.db.doc(path)); return s.exists ? s.data() : null; },
       set: (path, value) => t.set(this.db.doc(path), value),
       delete: (path) => t.delete(this.db.doc(path)),
-    }));
+    }), readOnly ? { readOnly: true } : undefined);
   }
 }
 export class FirebaseIdentity {
-  constructor(auth) { this.auth = auth; }
+  // Per-request rechecks reuse a user record for `cacheMs`, so one busy session cannot spend the
+  // project's Auth Admin quota on everyone's behalf. Revocation, disabling and MFA changes are
+  // therefore honoured within cacheMs plus one request. Login always fetches fresh.
+  constructor(auth, { now = Date.now, cacheMs = 60_000, cacheMax = 5000 } = {}) {
+    this.auth = auth; this.now = now; this.cacheMs = cacheMs; this.cacheMax = cacheMax;
+    this.cache = new Map(); this.lookups = 0;
+  }
+  async lookup(uid, fresh = false) {
+    const hit = this.cache.get(uid);
+    if (!fresh && hit && hit.until > this.now()) return hit.user;
+    this.cache.delete(uid);
+    const user = await this.auth.getUser(uid); this.lookups++;
+    if (this.cache.size >= this.cacheMax) this.cache.delete(this.cache.keys().next().value);
+    this.cache.set(uid, { user, until: this.now() + this.cacheMs });
+    return user;
+  }
   async verifyLogin(idToken, now) {
     let decoded, user;
-    try { decoded = await this.auth.verifyIdToken(idToken, true); user = await this.auth.getUser(decoded.uid); }
+    try { decoded = await this.auth.verifyIdToken(idToken, true); user = await this.lookup(decoded.uid, true); }
     catch { fail(401, 'INVALID_LOGIN'); }
     if (typeof decoded.uid !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(decoded.uid) || user.uid !== decoded.uid) fail(401, 'INVALID_LOGIN');
     if (!decoded.email_verified || !user.emailVerified || !user.email || decoded.email !== user.email) fail(403, 'VERIFY_EMAIL');
@@ -37,7 +53,7 @@ export class FirebaseIdentity {
   }
   async recheck(session) {
     let user;
-    try { user = await this.auth.getUser(session.uid); } catch { fail(401, 'SESSION_REVOKED'); }
+    try { user = await this.lookup(session.uid); } catch { fail(401, 'SESSION_REVOKED'); }
     this.check(user, session);
   }
 }
