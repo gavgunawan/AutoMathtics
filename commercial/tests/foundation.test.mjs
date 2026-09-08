@@ -203,7 +203,8 @@ test('old parent authorization contexts cannot survive session rotation', async 
 });
 test('handover barrier also covers an identity-provider clock ahead of the server', async () => {
   const f = fixture(), a = await f.login('parentA', { auth_time: Math.floor(f.now() / 1000) + 20 });
-  await f.service.createFamily(a.ctx, { label: 'Test', adultAttestation: true, consentVersion: 'pilot-v1' });
+  const created = await f.service.createFamily(a.ctx, { label: 'Test', adultAttestation: true, consentVersion: 'pilot-v1' });
+  await move(f, a, Promise.resolve(created.token));
   await move(f, a, f.service.lock(a.ctx));
   await assert.rejects(f.service.login(a.idToken), rejected('REAUTHENTICATE'));
 });

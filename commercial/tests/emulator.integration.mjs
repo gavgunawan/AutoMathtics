@@ -123,8 +123,11 @@ test('real Auth emulator rejects unverified email before account access', async 
 });
 test('real SMS MFA token, Firestore seat contention, private rules and expiry', async () => {
   const p = await parent(`verified-${randomUUID()}@example.test`, '+16505550111');
-  const cookie = await service.login(p.idToken), ctx = await service.authenticate(cookie);
-  const family = await service.createFamily(ctx, { label: 'Emulator family', adultAttestation: true, consentVersion: 'pilot-v1' });
+  const loginCookie = await service.login(p.idToken), loginCtx = await service.authenticate(loginCookie);
+  const family = await service.createFamily(loginCtx, { label: 'Emulator family', adultAttestation: true, consentVersion: 'pilot-v1' });
+  assert.equal(typeof family.token, 'string');
+  await assert.rejects(service.authenticate(loginCookie), rejected('SIGN_IN_REQUIRED'));
+  const cookie = family.token, ctx = await service.authenticate(cookie);
   await grantEntitlement(store, { familyId: family.id, seatLimit: 1, accessUntil: Date.now() + 600000, reason: 'emulator test grant', actor: 'integration-test' });
   const results = await Promise.allSettled(['One', 'Two'].map((nickname) => service.createChild(ctx, { nickname, icon: 'fox', pin: '763829' }, randomUUID())));
   assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1);

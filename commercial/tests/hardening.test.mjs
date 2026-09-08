@@ -237,3 +237,51 @@ test('S1-005: Docker build context explicitly includes the required lockfile', a
   assert.match(ignore, /^!package-lock\.json$/m); assert.match(docker, /COPY package\.json package-lock\.json/);
   assert.match(docker, /npm ci --omit=dev/);
 });
+
+test('S1-006: creating a family rotates the session and invalidates the pre-family cookie', async () => {
+  const f = fixture(), parent = await f.login('parentA');
+  const oldCsrf = (await f.service.me(parent.ctx)).csrf;
+  const created = await f.service.createFamily(parent.ctx, {
+    label: 'Rotation family', adultAttestation: true, consentVersion: 'pilot-v1'
+  });
+  assert.equal(typeof created.token, 'string');
+  assert.notEqual(created.token, parent.cookie);
+  await assert.rejects(f.service.authenticate(parent.cookie), rejected('SIGN_IN_REQUIRED'));
+  await assert.rejects(f.service.me(parent.ctx), rejected('SIGN_IN_REQUIRED'));
+  const next = await f.service.authenticate(created.token);
+  const me = await f.service.me(next);
+  assert.equal(me.role, 'parent');
+  assert.equal(me.family.id, created.id);
+  assert.notEqual(me.csrf, oldCsrf);
+});
+
+test('S1-006: family creation HTTP rotates the cookie without exposing the raw token', async (t) => {
+  const f = fixture(), parent = await f.login('parentA'), s = await listen(t, f, true);
+  const csrf = (await f.service.me(parent.ctx)).csrf;
+  const response = await s.call('/family', parent.cookie, csrf, {
+    label: 'HTTP rotation family', adultAttestation: true, consentVersion: 'pilot-v1'
+  });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(typeof body.id, 'string');
+  assert.equal(body.token, undefined);
+  const setCookie = response.headers.get('set-cookie');
+  assert.ok(setCookie);
+  for (const flag of ['HttpOnly', 'SameSite=Strict', 'Secure', 'Path=/']) assert.ok(setCookie.includes(flag));
+  const fresh = setCookie.split(';')[0].split('=')[1];
+  assert.notEqual(fresh, parent.cookie);
+  await assert.rejects(f.service.authenticate(parent.cookie), rejected('SIGN_IN_REQUIRED'));
+  const me = await f.service.me(await f.service.authenticate(fresh));
+  assert.equal(me.family.id, body.id);
+  assert.notEqual(me.csrf, csrf);
+});
+
+test('S1-007: GitHub Actions are pinned to immutable full commit SHAs', async () => {
+  const workflow = await readFile(new URL('../../.github/workflows/secure-foundation.yml', import.meta.url), 'utf8');
+  const uses = [...workflow.matchAll(/^\s*- uses:\s+([^\s#]+)/gm)].map((m) => m[1]);
+  assert.ok(uses.length >= 1);
+  for (const action of uses) {
+    assert.match(action, /^[^@\s]+@[0-9a-f]{40}$/);
+  }
+  assert.ok(!/@v\d+(?:\s|$)/m.test(workflow));
+});

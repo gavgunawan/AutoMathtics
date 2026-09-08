@@ -47,7 +47,12 @@ export function fixture() {
   async function login(uid, patch) { const idToken = token(uid, patch); const cookie = await service.login(idToken); return { cookie, idToken, ctx: await service.authenticate(cookie) }; }
   async function family(uid = 'parentA', seats = 1) {
     const session = await login(uid);
-    const { id } = await service.createFamily(session.ctx, { label: 'Test family', adultAttestation: true, consentVersion: 'pilot-v1' });
+    const created = await service.createFamily(session.ctx, { label: 'Test family', adultAttestation: true, consentVersion: 'pilot-v1' });
+    if (created.token) {
+      session.cookie = created.token;
+      session.ctx = await service.authenticate(created.token);
+    }
+    const id = created.id;
     if (seats) await grantEntitlement(store, { familyId: id, seatLimit: seats, accessUntil: clock + 15 * 60_000, reason: 'synthetic pilot', actor: 'test-operator' }, clock);
     return { ...session, familyId: id };
   }

@@ -112,14 +112,14 @@ export class Foundation {
     return this.store.transaction(async (tx) => {
       const { s, parent } = await this.authorize(tx, ctx, ['parent'], false);
       this.requireRecent(s);
-      if (parent.familyId) return { id: parent.familyId }; // One family per owner; safe retry.
+      if (parent.familyId) return { id: parent.familyId, token: null }; // Existing family; no boundary change.
       tx.set(`families/${familyId}`, { id: familyId, label, childIds: [], activeChildIds: [], createdAt: this.now(),
         entitlement: { status: 'inactive', seatLimit: 0, accessUntil: 0, version: 0, source: 'manual' } });
       tx.set(`families/${familyId}/members/${s.uid}`, { role: 'owner', status: 'active' });
       tx.set(`parents/${s.uid}`, { ...parent, familyId, consentVersion: 'pilot-v1', attestedAt: this.now() });
-      tx.set(`sessions/${ctx.key}`, { ...s, familyId });
+      const token = this.rotateSession(tx, ctx, s, { familyId });
       this.audit(tx, 'family.created', s.uid, familyId);
-      return { id: familyId };
+      return { id: familyId, token };
     });
   }
   async createChild(ctx, body, requestId) {

@@ -90,7 +90,11 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
         return json(200, { child: me.child });
       }
       if (req.method !== 'POST') fail(404, 'NOT_FOUND');
-      if (path === '/api/family') return json(200, await service.createFamily(ctx, data));
+      if (path === '/api/family') {
+        const { token: next, ...result } = await service.createFamily(ctx, data);
+        if (next) setCookie(res, next);
+        return json(200, result);
+      }
       if (path === '/api/children') return json(201, await service.createChild(ctx, data, req.headers['idempotency-key']));
       if (path === '/api/session/lock') { object(data, []); const next = await service.lock(ctx); setCookie(res, next); return json(200, { ok: true }); }
       if (path === '/api/session/select') { object(data, []); const next = await service.selector(ctx); setCookie(res, next); return json(200, { ok: true }); }
