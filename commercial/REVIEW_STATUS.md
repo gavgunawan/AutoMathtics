@@ -5,6 +5,17 @@ Read [STAGE1_HARDENING.md](STAGE1_HARDENING.md) for the changes, executed checks
 and remaining acceptance work. Stage 1 sign-off is still pending. No public
 launch or production-security certification is implied by a green test run.
 
+## Developer-PC hardening acceptance - 8 September 2026
+
+- Hardened security-code checkpoint: `adcfc15`.
+- Local unit/security/UI tests: **81/81 passed**.
+- Firebase emulator integration: **2/2 passed**.
+- Manual Chrome session rotation passed for parent -> selector, selector -> child, and child -> selector.
+- Targeted staged-secret scan: no matches.
+- Runtime dependency audit: one tracked moderate `uuid` advisory represented by six transitive audit paths; temporary exception only, with re-review required before public staging.
+- Actual Docker image build and GitHub CI validation remain pending.
+- Stage 1 remains a private-development security foundation; production IAM, secrets, real MFA, operational controls, privacy lifecycle, and final production security review are outside this checkpoint.
+
 ## Initial v3.0 verification record - 6 September 2026
 
 ## Verified in the authoring environment

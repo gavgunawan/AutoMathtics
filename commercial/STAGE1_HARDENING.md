@@ -138,12 +138,30 @@ was performed here. The lockfile and dependency versions are not changed in this
 
 Do not enable billing, real SMS or public deployment merely to test this patch.
 
+## Developer-PC acceptance - 8 September 2026
+
+Completed against the hardened local branch after security-code commit `adcfc15`:
+
+- Expanded unit/security/UI suite: **81 passed, 0 failed, 0 skipped**.
+- Firebase Auth + Firestore emulator integration: **2 passed, 0 failed**.
+- Total automated checks executed locally for this checkpoint: **83/83 passed**.
+- Real-browser parent -> selector handover rotated the `__session` cookie.
+- Real-browser selector -> authenticated child transition rotated the cookie and reached child-only mode.
+- Real-browser child -> selector transition rotated the cookie again.
+- One-seat entitlement and synthetic child creation behaved as expected through the hardened backend.
+- Staged diff passed `git diff --cached --check` and the targeted staged-secret scan returned no matches.
+- `commercial/.env` remained ignored and was not committed.
+- Local Docker execution was unavailable because Docker is not installed on the developer PC; the static Docker-context regression passes and the actual container build remains a GitHub CI requirement.
+- `npm audit --omit=dev` reports six moderate entries arising from one `uuid <11.1.1` advisory through Firebase Admin transitive dependencies, including the Cloud Storage dependency path.
+- Reviewed AutoMathtics runtime code initializes Firebase Auth and Firestore only; no direct Cloud Storage use or direct vulnerable `uuid` v3/v5/v6 output-buffer call was identified.
+- Dependency disposition: **temporary tracked exception**, not a permanent exemption. Do not use `npm audit fix --force`; re-check before public staging and whenever `firebase-admin` changes.
+
+These checks materially strengthen the Stage 1 evidence but do not constitute a production penetration test or public-launch certification.
+
 ## Still open before sign-off
 
-- Fresh Firebase emulator acceptance and real browser acceptance for these changes.
 - Actual image build and review of the new CI result.
-- Recorded disposition of unresolved dependency advisories (affected API, reachability,
-  mitigation, owner, recheck date); no automatic upstream exemption is granted here.
+- Re-check the tracked `uuid` advisory before public staging or whenever `firebase-admin` changes; the current runtime-only exception is documented above and is not a permanent exemption.
 - Secret scanning beyond filename exclusions and history/CI access review.
 - Independent review of session lifecycle and remaining failure/race conditions.
 - Production-only IAM, secrets, real token verification, provider anti-abuse/quotas,
