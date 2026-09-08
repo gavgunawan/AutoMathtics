@@ -128,7 +128,8 @@ export class Learning {
     const passed = correct === total;
     const date = dayISO(now, timeZone);
     const row = { ts: now, date, track: sess.track, mode: sess.mode, level: sess.level, levelId: LEVELS[sess.level].id, papers: this.label(sess),
-      correct, incorrect, timeout, total, passed, secs: Math.round((now - sess.createdAt) / 1000), qlog: sess.results.map((r) => [r.tier, r.secs, r.r === 'correct' ? 1 : 0]) };
+      // Firestore forbids arrays nested in arrays, so the per-question log is a list of objects, not v2's triples.
+      correct, incorrect, timeout, total, passed, secs: Math.round((now - sess.createdAt) / 1000), qlog: sess.results.map((r) => ({ t: r.tier, s: r.secs, ok: r.r === 'correct' ? 1 : 0 })) };
     let np = { ...prog, activeSession: null, history: [row, ...prog.history].slice(0, HISTORY_MAX),
       stats: { sessions: (prog.stats?.sessions || 0) + 1, passes: (prog.stats?.passes || 0) + (passed ? 1 : 0) }, wallet: { ...prog.wallet } };
     let gcEarned = 0, rpEarned = 0, jumped = [];

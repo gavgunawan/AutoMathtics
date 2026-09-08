@@ -4,6 +4,17 @@ import { FirebaseIdentity } from '../server/firebase.mjs';
 import { Learning } from '../server/learning.mjs';
 import { mac } from '../server/security.mjs';
 
+// Firestore rejects `undefined` values and arrays nested directly inside arrays; fail the same way
+// here so a document shape that the emulator would refuse cannot pass the in-memory suite.
+export function assertFirestoreShape(value, path = '$', inArray = false) {
+  if (value === undefined) throw Error(`Firestore shape: undefined at ${path}`);
+  if (Array.isArray(value)) {
+    if (inArray) throw Error(`Firestore shape: array nested in array at ${path}`);
+    value.forEach((v, i) => assertFirestoreShape(v, `${path}[${i}]`, true));
+  } else if (value && typeof value === 'object') {
+    for (const [k, v] of Object.entries(value)) assertFirestoreShape(v, `${path}.${k}`, false);
+  }
+}
 // Tests only: serializable copy-on-write transactions; rollback on throw;
 // disallow reads after writes to match the real Firestore adapter contract.
 export class MemoryStore {
@@ -15,7 +26,7 @@ export class MemoryStore {
       const write = () => { if (readOnly) throw Error('Write in readOnly transaction'); written = true; };
       const result = await fn({
         get: async (p) => { if (written) throw Error('Read after write'); return structuredClone(working.get(p) || null); },
-        set: (p, v) => { write(); working.set(p, structuredClone(v)); },
+        set: (p, v) => { write(); assertFirestoreShape(v, p); working.set(p, structuredClone(v)); },
         delete: (p) => { write(); working.delete(p); },
       });
       this.data = working; return result;
