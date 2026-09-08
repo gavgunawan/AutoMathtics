@@ -1,0 +1,55 @@
+name: AutoMathtics v3.0 checks
+on:
+  pull_request:
+    paths: ['commercial/**', '.github/workflows/secure-foundation.yml']
+  push:
+    branches: ['main', 'release/v3.0', 'feature/secure-foundation-step-1']
+    paths: ['commercial/**', '.github/workflows/secure-foundation.yml']
+permissions:
+  contents: read
+concurrency:
+  group: foundation-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: commercial
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm test
+  emulator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: commercial
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install pinned dependencies
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci --ignore-scripts --no-fund --no-audit
+          else
+            echo "::warning::Generate, review and commit package-lock.json before deploying."
+            npm install --ignore-scripts --no-fund --no-audit
+          fi
+      - run: npm run test:emulator
+        env:
+          CI: 'true'
+          FIREBASE_CLI_DISABLE_USAGE: 'true'
