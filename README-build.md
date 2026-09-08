@@ -152,6 +152,15 @@ there and all three move together.
 Firebase RTDB `families/gav-kmn-x7q94vb2nt38/kumon/{allison|geralt|testbot|settings}`.
 Admin PIN 1590 (it sits in the client bundle — a deterrent, not a secret). Kid PINs default 8520.
 
+Database access (v2.3.1): every device signs in to Firebase **anonymously** on load (`fbAuthReady`),
+and every read, write and listener waits for that token (`whenAuthed`). The rules in
+`database.rules.json` allow `families/$family/kumon` only with `auth != null` and deny everything
+else. Two console steps go with this: Authentication → Sign-in method → **Anonymous** must be
+enabled (or sign-in fails and the app carries on after an 8 s wait, at the rules' mercy), and the
+rules are published by hand in Realtime Database → Rules **only after every device runs v2.3.1** —
+an older build has no token, so its writes would be refused. This is an interim measure until v3
+puts the game behind the server; anyone with the bundle can still obtain an anonymous token.
+
 Admin-gate watch (v2.2): every wrong admin PIN is written to `kumon/security` (`fails`, `streak`,
 `lastFail`) through `updateSecurity` (a transaction). The third wrong PIN within ten minutes sets
 `lockUntil` (ten-minute lockout, shown on the PIN screen) and `alert`, which blinks on the

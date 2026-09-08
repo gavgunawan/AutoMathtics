@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref as dbRef, get as dbGet, set as dbSet, onValue, runTransaction } from "firebase/database";
+import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 import { genNavigator, navSecondsFor, NAV_TOPICS } from "./navigator.js";
 
 // ================= AUTOMATHTICS — THE MATH GRID =================
@@ -566,10 +567,31 @@ const FIREBASE_CONFIG = (typeof window !== "undefined" && window.KUMON_FIREBASE_
 const FAMILY_TOKEN = "gav-kmn-x7q94vb2nt38";
 
 let fbdb = null;
+// Every device signs in anonymously before it touches the database, so the rules can turn away
+// anyone who isn't a signed-in AutoMathtics device. Nothing is asked of the user: the token is
+// per device and persists. If sign-in can't happen (provider off, offline) the app carries on
+// after a short wait and the rules decide what it may do.
+let fbAuthReady = Promise.resolve();
 if (FIREBASE_CONFIG) {
-  try { fbdb = getDatabase(initializeApp(FIREBASE_CONFIG)); } catch (e) { fbdb = null; }
+  try {
+    const app = initializeApp(FIREBASE_CONFIG);
+    fbdb = getDatabase(app);
+    const auth = getAuth(app);
+    fbAuthReady = new Promise((resolve) => {
+      let done = false; const finish = () => { if (!done) { done = true; resolve(); } };
+      try { onAuthStateChanged(auth, (u) => { if (u) finish(); else signInAnonymously(auth).catch(finish); }, finish); } catch (e) { finish(); }
+      setTimeout(finish, 8000);
+    });
+  } catch (e) { fbdb = null; }
 }
 const cloudConfigured = () => !!fbdb;
+// attach a listener only once this device has its token — one attached before that would be
+// cancelled by the rules and never retried
+function whenAuthed(attach) {
+  let off = null, stopped = false;
+  fbAuthReady.then(() => { if (!stopped) { try { off = attach(); } catch (e) {} } });
+  return () => { stopped = true; if (off) off(); };
+}
 const cloudPath = (name) => `families/${FAMILY_TOKEN}/kumon/${name.toLowerCase()}`;
 
 let reportSync = null; // the component registers here to receive sync status
@@ -587,6 +609,7 @@ function localSave(name, data) {
 
 async function cloudLoad(name) {
   if (!fbdb) return null;
+  await fbAuthReady;
   try {
     const snap = await dbGet(dbRef(fbdb, cloudPath(name)));
     return snap.exists() ? snap.val() : null;
@@ -594,6 +617,7 @@ async function cloudLoad(name) {
 }
 async function cloudSave(name, data) {
   if (!fbdb) { if (reportSync) reportSync({ mode: "local" }); return false; }
+  await fbAuthReady;
   try {
     // Merged with whatever is on the server at the moment of writing — never a blind overwrite.
     // A device that slept through other devices' saves used to write its stale snapshot back and
@@ -691,9 +715,7 @@ const normalize = (v) => {
 const sameProgress = (a, b) => JSON.stringify(normalize(a)) === JSON.stringify(normalize(b));
 function subscribeCloud(name, cb) {
   if (!fbdb) return () => {};
-  try {
-    return onValue(dbRef(fbdb, cloudPath(name)), (snap) => { if (snap.exists()) cb(snap.val()); });
-  } catch (e) { return () => {}; }
+  return whenAuthed(() => onValue(dbRef(fbdb, cloudPath(name)), (snap) => { if (snap.exists()) cb(snap.val()); }));
 }
 
 // ---------- prize wallet ----------
@@ -1066,8 +1088,8 @@ function playWrong() {
 
 // ---------- shared settings (admin panel), synced via cloud ----------
 const ADMIN_PIN = "1590";
-const BUILD_TAG = "v2.3 · 6 Sep";
-const BUILD_ID = "am-build-230"; // ASCII-only twin of BUILD_TAG, searched for in the live index.html
+const BUILD_TAG = "v2.3.1 · 8 Sep";
+const BUILD_ID = "am-build-231"; // ASCII-only twin of BUILD_TAG, searched for in the live index.html
 
 // ---------- full screen ----------
 const fsSupported = () => typeof document !== "undefined" && !!(document.fullscreenEnabled || document.webkitFullscreenEnabled) && !(window.navigator && window.navigator.standalone);
@@ -1096,16 +1118,18 @@ function localLoadSettings() {
 }
 async function cloudLoadSettings() {
   if (!fbdb) return null;
+  await fbAuthReady;
   try { const snap = await dbGet(dbRef(fbdb, settingsPath())); return snap.exists() ? snap.val() : null; } catch (e) { return null; }
 }
 async function saveSettings(s) {
   try { localStorage.setItem("kumon-settings", JSON.stringify(s)); } catch (e) {}
   if (!fbdb) return false;
+  await fbAuthReady;
   try { await dbSet(dbRef(fbdb, settingsPath()), s); return true; } catch (e) { return false; }
 }
 function subscribeSettings(cb) {
   if (!fbdb) return () => {};
-  try { return onValue(dbRef(fbdb, settingsPath()), (snap) => { if (snap.exists()) cb(snap.val()); }); } catch (e) { return () => {}; }
+  return whenAuthed(() => onValue(dbRef(fbdb, settingsPath()), (snap) => { if (snap.exists()) cb(snap.val()); }));
 }
 
 // ---------- family rocket: one shared goal everyone fuels with their own ⚡ ----------
@@ -1118,14 +1142,16 @@ const localLoadRocket = () => { try { const s = localStorage.getItem("kumon-rock
 const localSaveRocket = (r) => { try { localStorage.setItem("kumon-rocket", JSON.stringify(r)); } catch (e) {} };
 async function cloudLoadRocket() {
   if (!fbdb) return null;
+  await fbAuthReady;
   try { const snap = await dbGet(dbRef(fbdb, rocketPath())); return snap.exists() ? snap.val() : null; } catch (e) { return null; }
 }
 function subscribeRocket(cb) {
   if (!fbdb) return () => {};
-  try { return onValue(dbRef(fbdb, rocketPath()), (snap) => cb(snap.exists() ? snap.val() : null)); } catch (e) { return () => {}; }
+  return whenAuthed(() => onValue(dbRef(fbdb, rocketPath()), (snap) => cb(snap.exists() ? snap.val() : null)));
 }
 async function updateRocket(fn) {
   if (!fbdb) { const next = fn(localLoadRocket()); localSaveRocket(next); return next; }
+  await fbAuthReady;
   try {
     const res = await runTransaction(dbRef(fbdb, rocketPath()), (cur) => fn(cur === undefined ? null : cur));
     const v = res.snapshot.val(); localSaveRocket(v); return v;
@@ -1153,10 +1179,11 @@ const localLoadSec = () => { try { const s = localStorage.getItem("kumon-securit
 const localSaveSec = (v) => { try { localStorage.setItem("kumon-security", JSON.stringify(v)); } catch (e) {} };
 function subscribeSecurity(cb) {
   if (!fbdb) return () => {};
-  try { return onValue(dbRef(fbdb, securityPath()), (snap) => cb(snap.exists() ? snap.val() : null)); } catch (e) { return () => {}; }
+  return whenAuthed(() => onValue(dbRef(fbdb, securityPath()), (snap) => cb(snap.exists() ? snap.val() : null)));
 }
 async function updateSecurity(fn) {
   if (!fbdb) { const n = fn(localLoadSec()); localSaveSec(n); return n; }
+  await fbAuthReady;
   try { const res = await runTransaction(dbRef(fbdb, securityPath()), (cur) => fn(cur === undefined ? null : cur)); const v = res.snapshot.val(); localSaveSec(v); return v; }
   catch (e) { return null; }
 }

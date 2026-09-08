@@ -1,0 +1,12 @@
+{
+  "rules": {
+    "families": {
+      "$family": {
+        "kumon": {
+          ".read": "auth != null",
+          ".write": "auth != null"
+        }
+      }
+    }
+  }
+}
