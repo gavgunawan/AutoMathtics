@@ -8,13 +8,14 @@ import { mac } from '../server/security.mjs';
 export class MemoryStore {
   data = new Map(); tail = Promise.resolve();
   async get(path) { return structuredClone(this.data.get(path) || null); }
-  transaction(fn) {
+  transaction(fn, { readOnly = false } = {}) {
     const run = this.tail.then(async () => {
       const working = new Map(structuredClone([...this.data])); let written = false;
+      const write = () => { if (readOnly) throw Error('Write in readOnly transaction'); written = true; };
       const result = await fn({
         get: async (p) => { if (written) throw Error('Read after write'); return structuredClone(working.get(p) || null); },
-        set: (p, v) => { written = true; working.set(p, structuredClone(v)); },
-        delete: (p) => { written = true; working.delete(p); },
+        set: (p, v) => { write(); working.set(p, structuredClone(v)); },
+        delete: (p) => { write(); working.delete(p); },
       });
       this.data = working; return result;
     });
@@ -34,7 +35,7 @@ export function fixture() {
     verifyIdToken: async (t, revoked) => { if (!revoked || !tokens.has(t)) throw Error('invalid'); return structuredClone(tokens.get(t)); },
     getUser: async (uid) => { if (!users.has(uid)) throw Error('missing'); return structuredClone(users.get(uid)); },
   };
-  const identity = new FirebaseIdentity(auth);
+  const identity = new FirebaseIdentity(auth, { now: () => clock });
   const service = new Foundation({ store, identity, hasher: fakeHasher, secret, now: () => clock });
   function token(uid, patch = {}) {
     if (!users.has(uid)) users.set(uid, { uid, email: `${uid}@example.test`, emailVerified: true, disabled: false,

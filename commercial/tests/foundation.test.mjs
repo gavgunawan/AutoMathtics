@@ -38,6 +38,7 @@ test('removed MFA factor and changed email invalidate sessions', async () => {
   const f = fixture(), a = await f.login('parentA'), b = await f.login('parentB');
   f.users.get('parentA').multiFactor.enrolledFactors = [];
   f.users.get('parentB').email = 'changed@example.test';
+  f.advance(61_000); // identity rechecks are cached for a minute (Stage 1b, F3)
   await assert.rejects(f.service.authenticate(a.cookie), rejected('SESSION_REVOKED'));
   await assert.rejects(f.service.authenticate(b.cookie), rejected('SESSION_REVOKED'));
 });
@@ -49,6 +50,7 @@ test('disabled and administratively revoked parent identities are rejected', asy
   const f = fixture(), a = await f.login('parentA'), b = await f.login('parentB');
   f.users.get('parentA').disabled = true;
   f.users.get('parentB').tokensValidAfterTime = new Date(f.now() + 1000).toUTCString();
+  f.advance(61_000); // identity rechecks are cached for a minute (Stage 1b, F3)
   await assert.rejects(f.service.authenticate(a.cookie), rejected('SESSION_REVOKED'));
   await assert.rejects(f.service.authenticate(b.cookie), rejected('SESSION_REVOKED'));
 });

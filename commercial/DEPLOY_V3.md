@@ -129,7 +129,16 @@ Authenticate Firebase CLI if it requests it:
 
 ## 5. Deploy v3.0
 
+The server refuses to start in staging/production without `TRUSTED_PROXY_HOPS`: the number of
+trailing `X-Forwarded-For` entries that Hosting and Cloud Run append. Rate limiting keys on the
+entry just before them; a wrong count either throttles every visitor as one client or lets a
+client choose its own address. Measure it once on the real origin: deploy with `TRUSTED_PROXY_HOPS=1`,
+request `/healthz` from a machine whose public address you know while a temporary log line prints
+`req.headers['x-forwarded-for']` (remove it afterwards), count the entries after your address, and
+redeploy with that number. Two is the usual answer for Hosting in front of Cloud Run.
+
 ```bash
+export TRUSTED_PROXY_HOPS=2
 npm run deploy:staging
 ```
 

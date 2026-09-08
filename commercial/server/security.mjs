@@ -44,28 +44,47 @@ export function publicChild(c) {
 // A pepper is kept in Secret Manager, never in Firestore or a client bundle.
 // Fixed parameters prevent a modified hash from requesting arbitrary CPU/memory.
 const derive = promisify(scrypt);
-export function pinHasher(pepper) {
+// Each pepper is named by the first 8 hex of its SHA-256, and that name is written into every
+// hash (`scrypt-v2:<kid>:<salt>:<hash>`), so a pepper can be rotated: the new one hashes, the
+// retired ones still verify, and a PIN is silently re-hashed the next time it is entered.
+// The unnamed pre-rotation format `scrypt-v1:<salt>:<hash>` is tried against every known pepper.
+export const pepperId = (pepper) => sha256(pepper).slice(0, 8);
+export function pinHasher(pepper, previous = []) {
   let busy = false;
-  async function key(familyId, childId, code, salt) {
+  const current = pepperId(pepper);
+  const peppers = new Map([[current, pepper], ...previous.map((p) => [pepperId(p), p])]);
+  async function key(secret, familyId, childId, code, salt) {
     if (busy) fail(503, 'PIN_SERVICE_BUSY');
     busy = true;
     try {
-      return await derive(mac(pepper, `${familyId}:${childId}:${code}`), salt, 32,
+      return await derive(mac(secret, `${familyId}:${childId}:${code}`), salt, 32,
         { N: 131072, r: 8, p: 1, maxmem: 192 * 1024 * 1024 });
     } finally { busy = false; }
+  }
+  function parse(stored) {
+    if (typeof stored !== 'string') return null;
+    let m = stored.match(/^scrypt-v2:([a-f0-9]{8}):([a-f0-9]{32}):([a-f0-9]{64})$/);
+    if (m) return peppers.has(m[1]) ? { kids: [m[1]], salt: m[2], expected: m[3], stale: m[1] !== current } : null;
+    m = stored.match(/^scrypt-v1:([a-f0-9]{32}):([a-f0-9]{64})$/);
+    return m ? { kids: [...peppers.keys()], salt: m[1], expected: m[2], stale: true } : null;
   }
   return {
     async hash(familyId, childId, code) {
       const salt = randomBytes(16).toString('hex');
-      const value = await key(familyId, childId, pin(code), salt);
-      return `scrypt-v1:${salt}:${value.toString('hex')}`;
+      const value = await key(pepper, familyId, childId, pin(code), salt);
+      return `scrypt-v2:${current}:${salt}:${value.toString('hex')}`;
     },
     async verify(familyId, childId, code, stored) {
       pin(code);
-      if (typeof stored !== 'string' || !/^scrypt-v1:[a-f0-9]{32}:[a-f0-9]{64}$/.test(stored)) return false;
-      const [, salt, expected] = stored.split(':');
-      return equal((await key(familyId, childId, code, salt)).toString('hex'), expected);
+      const p = parse(stored);
+      if (!p) return false;
+      for (const kid of p.kids) {
+        if (equal((await key(peppers.get(kid), familyId, childId, code, p.salt)).toString('hex'), p.expected)) return true;
+      }
+      return false;
     },
+    // true when the stored hash was made under a retired pepper or the unnamed legacy format
+    needsRehash(stored) { const p = parse(stored); return !!p && p.stale; },
   };
 }
 

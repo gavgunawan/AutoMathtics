@@ -6,6 +6,8 @@ cd "$(dirname "$0")/.."
 : "${CONFIRM_PROJECT:?Set CONFIRM_PROJECT to the same project ID}"
 : "${FIREBASE_WEB_API_KEY:?Copy the new project web apiKey}"
 : "${FIREBASE_WEB_APP_ID:?Copy the new project web appId}"
+: "${TRUSTED_PROXY_HOPS:?Set TRUSTED_PROXY_HOPS (0-5) after measuring X-Forwarded-For on the real origin; see DEPLOY_V3.md}"
+[[ "$TRUSTED_PROXY_HOPS" =~ ^[0-5]$ ]] || { echo 'TRUSTED_PROXY_HOPS must be 0-5.' >&2; exit 1; }
 if [[ ! "$PROJECT_ID" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]] ||
    [[ "$PROJECT_ID" == "automathtics" || "$PROJECT_ID" == demo-* || "$CONFIRM_PROJECT" != "$PROJECT_ID" ]]; then
   echo 'Refusing unconfirmed, demo or legacy project.' >&2; exit 1
@@ -35,13 +37,14 @@ npm run test:emulator
 # Ephemeral config contains ONLY public identifiers. Secret values never enter it.
 ENV_FILE="$(mktemp)"
 trap 'rm -f "$ENV_FILE"' EXIT
-export PROJECT_ID FIREBASE_WEB_API_KEY FIREBASE_WEB_APP_ID
+export PROJECT_ID FIREBASE_WEB_API_KEY FIREBASE_WEB_APP_ID TRUSTED_PROXY_HOPS
 node --input-type=module - "$ENV_FILE" <<'NODE'
 import { writeFileSync } from 'node:fs';
 const p = process.env;
 writeFileSync(process.argv[2], JSON.stringify({ APP_MODE: 'staging',
   APP_ORIGIN: `https://${p.PROJECT_ID}.web.app`, FIREBASE_PROJECT_ID: p.PROJECT_ID,
-  FIREBASE_WEB_API_KEY: p.FIREBASE_WEB_API_KEY, FIREBASE_WEB_APP_ID: p.FIREBASE_WEB_APP_ID }), { mode: 0o600 });
+  FIREBASE_WEB_API_KEY: p.FIREBASE_WEB_API_KEY, FIREBASE_WEB_APP_ID: p.FIREBASE_WEB_APP_ID,
+  TRUSTED_PROXY_HOPS: p.TRUSTED_PROXY_HOPS }), { mode: 0o600 });
 NODE
 # Deny browser database access BEFORE publishing the new service.
 ./node_modules/.bin/firebase deploy --config firebase.staging.json --project "$PROJECT_ID" --only firestore:rules

@@ -21,14 +21,25 @@ export class Foundation {
   audit(tx, action, uid, familyId = null, childId = null) {
     tx.set(`audit/${randomUUID()}`, { action, uid, familyId, childId, at: this.now() });
   }
-  async rate(bucket, maximum, windowMs) {
+  // Throttle inside an existing transaction, after authorization has been read, so an
+  // unauthorized caller cannot spend a family's budget. The read happens now; the returned
+  // thunk performs the write, so callers keep every read ahead of every write.
+  async rateIn(tx, bucket, maximum, windowMs) {
     const path = `rateLimits/${mac(this.secret, bucket)}`;
-    return this.store.transaction(async (tx) => {
-      const old = await tx.get(path), now = this.now();
-      const next = old && old.until > now ? { ...old } : { count: 0, until: now + windowMs };
-      if (next.count >= maximum) fail(429, 'TOO_MANY_ATTEMPTS');
-      next.count++; tx.set(path, next);
-    });
+    const old = await tx.get(path), now = this.now();
+    const next = old && old.until > now ? { ...old } : { count: 0, until: now + windowMs };
+    if (next.count >= maximum) fail(429, 'TOO_MANY_ATTEMPTS');
+    next.count++;
+    return () => tx.set(path, next);
+  }
+  async rate(bucket, maximum, windowMs) {
+    return this.store.transaction(async (tx) => (await this.rateIn(tx, bucket, maximum, windowMs))());
+  }
+  // Refuse when a bucket is already full without spending it. Login pairs this with rate() on
+  // failure only, so honest sign-ins never consume an address's failure budget.
+  async peek(bucket, maximum) {
+    const old = await this.store.get(`rateLimits/${mac(this.secret, bucket)}`);
+    if (old && old.until > this.now() && old.count >= maximum) fail(429, 'TOO_MANY_ATTEMPTS');
   }
   async authenticate(token) {
     const key = sessionKey(token);
@@ -38,12 +49,15 @@ export class Foundation {
     await this.identity.recheck(session);
     return { key, uid: session.uid };
   }
-  async authorize(tx, ctx, roles, needFamily = true) {
+  async authorize(tx, ctx, roles, needFamily = true, { allowRevokedChild = false } = {}) {
     const s = await tx.get(`sessions/${ctx.key}`);
     if (!s || s.uid !== ctx.uid || s.expiresAt <= this.now()) fail(401, 'SIGN_IN_REQUIRED');
     if (!roles.includes(s.role)) fail(403, 'PARENT_REQUIRED');
     const parent = await tx.get(`parents/${s.uid}`);
-    if (!parent || parent.familyId !== s.familyId) fail(403, 'ACCESS_DENIED');
+    if (!parent) fail(403, 'ACCESS_DENIED');
+    // The parent record moved on (a family was created from another session), so this session
+    // is superseded rather than forbidden: send the device back to sign-in instead of stranding it.
+    if (parent.familyId !== s.familyId) fail(401, 'SIGN_IN_REQUIRED');
     if (!s.familyId) {
       if (needFamily) fail(409, 'CREATE_FAMILY_FIRST');
       return { s, parent, family: null };
@@ -51,7 +65,14 @@ export class Foundation {
     const member = await tx.get(`families/${s.familyId}/members/${s.uid}`);
     const family = await tx.get(`families/${s.familyId}`);
     if (!member || member.role !== 'owner' || member.status !== 'active' || !family) fail(403, 'ACCESS_DENIED');
-    return { s, parent, family };
+    if (s.role !== 'child' || allowRevokedChild) return { s, parent, family };
+    // A child session is only as good as its child: active, entitled, and holding the current
+    // PIN version. This lives here, not in the routes, so no future route can forget it.
+    const child = await tx.get(`families/${s.familyId}/children/${s.childId}`);
+    const credential = await tx.get(`families/${s.familyId}/credentials/${s.childId}`);
+    this.entitlement(family, s.childId);
+    if (!child || child.status !== 'active' || !credential || credential.version !== s.pinVersion) fail(401, 'CHILD_SESSION_REVOKED');
+    return { s, parent, family, child, credential };
   }
   requireRecent(s) {
     if (s.authTime * 1000 < this.now() - 5 * MINUTE) fail(403, 'REAUTHENTICATE');
@@ -67,6 +88,7 @@ export class Foundation {
   async login(idToken, previousToken) {
     text(idToken, 20, 8192);
     const who = await this.identity.verifyLogin(idToken, this.now());
+    await this.rate(`login:${who.uid}`, 10, 10 * MINUTE); // per account, once the token is proven
     const token = randomToken(), key = sha256(token), oldKey = sessionKey(previousToken);
     await this.store.transaction(async (tx) => {
       const path = `parents/${who.uid}`;
@@ -85,14 +107,8 @@ export class Foundation {
   }
   async me(ctx) {
     return this.store.transaction(async (tx) => {
-      const { s, family } = await this.authorize(tx, ctx, ['parent', 'selector', 'child'], false);
-      if (s.role === 'child') {
-        this.entitlement(family, s.childId);
-        const child = await tx.get(`families/${s.familyId}/children/${s.childId}`);
-        const credential = await tx.get(`families/${s.familyId}/credentials/${s.childId}`);
-        if (!child || child.status !== 'active' || !credential || credential.version !== s.pinVersion) fail(401, 'CHILD_SESSION_REVOKED');
-        return { role: 'child', csrf: s.csrf, child: publicChild(child) };
-      }
+      const { s, family, child } = await this.authorize(tx, ctx, ['parent', 'selector', 'child'], false);
+      if (s.role === 'child') return { role: 'child', csrf: s.csrf, child: publicChild(child) };
       const children = [];
       for (const id of family?.childIds || []) {
         const c = await tx.get(`families/${s.familyId}/children/${id}`);
@@ -102,7 +118,7 @@ export class Foundation {
         id: family.id, label: family.label, children,
         ...(s.role === 'parent' ? { entitlement: family.entitlement, activeCount: family.activeChildIds.length } : {}),
       } : null };
-    });
+    }, { readOnly: true });
   }
   async createFamily(ctx, body) {
     object(body, ['label', 'adultAttestation', 'consentVersion']);
@@ -124,8 +140,11 @@ export class Foundation {
   }
   async createChild(ctx, body, requestId) {
     const input = childInput(body); uuid(requestId);
-    await this.rate(`child-create:${ctx.uid}`, 10, MINUTE);
-    const initial = await this.store.transaction((tx) => this.authorize(tx, ctx, ['parent']));
+    const initial = await this.store.transaction(async (tx) => {
+      const authorized = await this.authorize(tx, ctx, ['parent']);
+      (await this.rateIn(tx, `child-create:${ctx.uid}`, 10, MINUTE))();
+      return authorized;
+    });
     this.requireRecent(initial.s);
     this.entitlement(initial.family);
     const familyId = initial.s.familyId, childId = randomUUID();
@@ -180,7 +199,7 @@ export class Foundation {
   }
   async selector(ctx) {
     return this.store.transaction(async (tx) => {
-      const { s } = await this.authorize(tx, ctx, ['child', 'selector']);
+      const { s } = await this.authorize(tx, ctx, ['child', 'selector'], true, { allowRevokedChild: true });
       // This downgrade also lets a PIN-revoked child session return to selection.
       // It does not grant another child's access; a current PIN is still required.
       const token = this.rotateSession(tx, ctx, s, { role: 'selector', childId: null, pinVersion: null });
@@ -202,10 +221,10 @@ export class Foundation {
   }
   async selectChild(ctx, childId, code) {
     uuid(childId); pin(code);
-    await this.rate(`pin-family:${ctx.uid}`, 30, 15 * MINUTE);
     const ticket = randomUUID();
     const state = await this.store.transaction(async (tx) => {
       const { s, family } = await this.authorize(tx, ctx, ['selector']);
+      const commitRate = await this.rateIn(tx, `pin-family:${ctx.uid}`, 30, 15 * MINUTE);
       const child = await tx.get(`families/${s.familyId}/children/${childId}`);
       const credential = await tx.get(`families/${s.familyId}/credentials/${childId}`);
       const attemptPath = `families/${s.familyId}/pinAttempts/${childId}`;
@@ -223,11 +242,16 @@ export class Foundation {
       }
       attempts.count++; attempts.pending[ticket] = true;
       delete attempts.ticket; // old local-pilot record format
+      commitRate();
       tx.set(attemptPath, attempts);
       return { s, credential, attemptPath };
     });
     try {
       const correct = await this.hasher.verify(state.s.familyId, childId, code, state.credential.hash);
+      // A correct PIN stored under a retired pepper or the unnamed legacy format is re-hashed
+      // now, while the code is in hand; the version stays, so the child's sessions survive.
+      const fresh = correct && this.hasher.needsRehash && this.hasher.needsRehash(state.credential.hash)
+        ? await this.hasher.hash(state.s.familyId, childId, code) : null;
       const next = await this.store.transaction(async (tx) => {
         const { s, family } = await this.authorize(tx, ctx, ['selector']);
         const child = await tx.get(`families/${s.familyId}/children/${childId}`);
@@ -245,6 +269,7 @@ export class Foundation {
           const count = Object.keys(pending).length;
           if (count) tx.set(state.attemptPath, { ...attempts, pending, count });
           else tx.delete(state.attemptPath);
+          if (fresh) tx.set(`families/${s.familyId}/credentials/${childId}`, { ...current, hash: fresh });
           const token = this.rotateSession(tx, ctx, s, { role: 'child', childId, pinVersion: current.version });
           this.audit(tx, 'child.signed_in', s.uid, s.familyId, childId);
           return token;
@@ -264,12 +289,13 @@ export class Foundation {
   }
   async resetPin(ctx, childId, code) {
     uuid(childId); pin(code);
-    await this.rate(`pin-reset:${ctx.uid}`, 5, MINUTE);
     const first = await this.store.transaction(async (tx) => {
       const authorized = await this.authorize(tx, ctx, ['parent']);
       this.requireRecent(authorized.s);
+      const commitRate = await this.rateIn(tx, `pin-reset:${ctx.uid}`, 5, MINUTE);
       const old = await tx.get(`families/${authorized.s.familyId}/credentials/${childId}`);
       if (!old) fail(404, 'CHILD_NOT_FOUND');
+      commitRate();
       return authorized;
     });
     const hash = await this.hasher.hash(first.s.familyId, childId, code);
@@ -289,7 +315,8 @@ export class Foundation {
       const parent = s ? await tx.get(`parents/${s.uid}`) : null;
       if (s) {
         tx.delete(`sessions/${ctx.key}`);
-        if (parent) tx.set(`parents/${s.uid}`, { ...parent, reauthAfter: Math.max(parent.reauthAfter || 0, s.authTime, Math.floor(this.now() / 1000)) });
+        // Only a parent session ending is a re-auth boundary; a child or selector cookie ends itself only.
+        if (parent && s.role === 'parent') tx.set(`parents/${s.uid}`, { ...parent, reauthAfter: Math.max(parent.reauthAfter || 0, s.authTime, Math.floor(this.now() / 1000)) });
         this.audit(tx, 'session.signed_out', s.uid, s.familyId);
       }
     });
