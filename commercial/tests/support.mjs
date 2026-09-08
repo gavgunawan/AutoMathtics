@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Foundation, grantEntitlement } from '../server/service.mjs';
 import { FirebaseIdentity } from '../server/firebase.mjs';
+import { Learning } from '../server/learning.mjs';
 import { mac } from '../server/security.mjs';
 
 // Tests only: serializable copy-on-write transactions; rollback on throw;
@@ -37,6 +38,7 @@ export function fixture() {
   };
   const identity = new FirebaseIdentity(auth, { now: () => clock });
   const service = new Foundation({ store, identity, hasher: fakeHasher, secret, now: () => clock });
+  const learning = new Learning({ foundation: service, store, now: () => clock });
   function token(uid, patch = {}) {
     if (!users.has(uid)) users.set(uid, { uid, email: `${uid}@example.test`, emailVerified: true, disabled: false,
       tokensValidAfterTime: new Date(0).toUTCString(), multiFactor: { enrolledFactors: [{ uid: `mfa-${uid}`, factorId: 'phone' }] } });
@@ -58,6 +60,17 @@ export function fixture() {
     return { ...session, familyId: id };
   }
   const child = (ctx, nickname = 'Fox', requestId = randomUUID()) => service.createChild(ctx, { nickname, icon: 'fox', pin: '763829' }, requestId);
-  return { service, store, identity, users, tokens, auth, token, login, family, child, now: () => clock, advance: (ms) => { clock += ms; } };
+  // a child signed in and ready to learn: parent → family with seats → child → handover → PIN
+  async function childSession(uid = 'parentA', seats = 1) {
+    const p = await family(uid, seats);
+    const { child: kid } = await child(p.ctx);
+    const selCtx = await service.authenticate(await service.lock(p.ctx));
+    const childCtx = await service.authenticate(await service.selectChild(selCtx, kid.id, '763829'));
+    return { p, child: kid, selCtx, childCtx };
+  }
+  return { service, learning, store, identity, users, tokens, auth, token, login, family, child, childSession, now: () => clock, advance: (ms) => { clock += ms; } };
 }
 export const rejected = (code) => (err) => err.code === code;
+// the answer the server holds, in the shape the browser would send — and a nearby wrong one
+export const canonical = (q) => { const a = q.answer; if (a.type === 'frac') return { n: String(a.n), d: String(a.d) }; if (a.type === 'dec') return String(Math.round(a.v * 100) / 100); return String(a.v); };
+export const wrong = (q) => { const a = q.answer; if (a.type === 'frac') return { n: String(a.n + 1), d: String(a.d) }; if (a.type === 'choice') return String((a.v + 1) % q.display.choices.length); if (a.type === 'dec') return ((Math.round(a.v * 100) + 100) / 100).toFixed(2); return String(a.v + 1); };

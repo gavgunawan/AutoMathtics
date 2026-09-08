@@ -29,7 +29,7 @@ async function body(req) {
   for await (const chunk of req) { total += chunk.length; if (total > 16_384) fail(413, 'REQUEST_TOO_LARGE'); parts.push(chunk); }
   try { return JSON.parse(Buffer.concat(parts).toString('utf8')); } catch { fail(400, 'INVALID_JSON'); }
 }
-export function createApp(service, cfg, { publicDir = new URL('../public/', import.meta.url), reportError = () => {} } = {}) {
+export function createApp(service, cfg, { publicDir = new URL('../public/', import.meta.url), reportError = () => {}, learning = null } = {}) {
   function setCookie(res, value, maxAge) {
     res.setHeader('Set-Cookie', `${COOKIE}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${cfg.emulator ? '' : '; Secure'}`);
   }
@@ -119,7 +119,12 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
         if (me.role !== 'child') fail(403, 'CHILD_MODE_REQUIRED');
         return json(200, { child: me.child });
       }
+      // Learning engine (child role only; authorization is re-read inside each call's transaction).
+      if (learning && req.method === 'GET' && path === '/api/learn/state') return json(200, await learning.state(ctx));
       if (req.method !== 'POST') fail(404, 'NOT_FOUND');
+      if (learning && path === '/api/learn/session') return json(200, await learning.start(ctx, data));
+      if (learning && path === '/api/learn/answer') return json(200, await learning.answer(ctx, data));
+      if (learning && path === '/api/learn/quit') return json(200, await learning.quit(ctx, data));
       if (path === '/api/family') {
         const { token: next, ...result } = await service.createFamily(ctx, data);
         if (next) setCookie(res, next, PARENT_COOKIE_S);

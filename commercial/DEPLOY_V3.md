@@ -114,6 +114,22 @@ make a command succeed. Deployment uses secret version `1`. Rotation requires an
 explicit migration/recovery plan. Secret values are piped directly to Secret Manager.
 The runtime account can access only the two individually granted secrets.
 
+### 4b. Firestore TTL policies (once per project)
+
+The server stamps short-lived records with an `expireAt` timestamp; Firestore deletes them only
+if a TTL policy names that field for the collection group. Run once, after the database exists:
+
+```bash
+for GROUP in sessions rateLimits pinAttempts operations audit; do
+  gcloud firestore fields ttls update expireAt --collection-group="$GROUP" \
+    --enable-ttl --project "$PROJECT_ID"
+done
+```
+
+Learning sessions live under `families/*/learning/*/sessions`, whose collection group is
+`sessions` as well, so the first line covers them. Deletion runs within about 24 hours of the
+timestamp; nothing in the code relies on it for correctness, only for bounded growth.
+
 Cloud Run source builds also require `roles/run.builder` on the actual BUILD
 service account. Current defaults commonly use the Compute Engine default account;
 check Cloud Build settings first. An administrator can grant the documented build

@@ -24,9 +24,9 @@ if (!familyId || !seats || !until || !reason) {
 const actor = emulator ? 'emulator-operator' : process.env.OPERATOR_ID;
 if (!actor) throw Error('Set OPERATOR_ID to your auditable operator identity.');
 const { initializeApp, applicationDefault } = await import('firebase-admin/app');
-const { getFirestore } = await import('firebase-admin/firestore');
+const { getFirestore, Timestamp } = await import('firebase-admin/firestore');
 const app = initializeApp({ projectId, ...(emulator ? {} : { credential: applicationDefault() }) });
-const result = await grantEntitlement(new FirestoreStore(getFirestore(app)), {
+const result = await grantEntitlement(new FirestoreStore(getFirestore(app), { timestamp: (ms) => Timestamp.fromMillis(ms) }), {
   familyId, seatLimit: Number(seats), accessUntil: Date.parse(until), actor, reason,
   ...(keep.length ? { keepChildIds: keep[0] === 'none' ? [] : keep } : {}),
 });

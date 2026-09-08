@@ -61,7 +61,7 @@ async function api(path, payload, requestId) {
 async function refresh() {
   transientView = false;
   csrf = (await api('/bootstrap')).csrf;
-  try { model = await api('/me'); csrf = model.csrf; renderModel(); }
+  try { model = await api('/me'); csrf = model.csrf; await renderModel(); }
   catch (error) { if (error.code === 'SIGN_IN_REQUIRED' || error.code === 'SESSION_REVOKED') { model = null; signInScreen(); } else throw error; }
 }
 async function auth() { authModule ||= await import('/auth.js'); return authModule; }
@@ -267,13 +267,85 @@ function selectorScreen() {
     p.input.focus();
   }), button('Return to parent sign-in', () => signInScreen(), 'ghost'), button('Sign out', signOut, 'text-button'));
 }
-function childScreen() {
+// ---- the learning engine: every question, mark, paper and coin comes from the server ----
+const TRACK = { engine: { name: 'ENGINE', emoji: '⚙️' }, nav: { name: 'NAVIGATOR', emoji: '🧭' } };
+let timer = null;
+function stopTimer() { if (timer) { clearInterval(timer); timer = null; } }
+const runLabel = (s) => (s.mode === 'boss' ? `👑 Check point T${s.tierEnd / 20}` : s.mode === 'practice' ? 'Practice run' : `Papers ${s.startPaper}–${s.startPaper + 4}`);
+async function childScreen() {
+  stopTimer();
   const child = model.child;
-  const box = panel('CHILD SESSION / FAMILY PROTECTED', `Welcome, ${child.nickname}.`, 'Your profile is ready. You are signed in with child-only permissions.');
-  box.append(cards([child]), el('p', 'This first step secures accounts and child access. The learning game, progress and rewards have not been connected to this backend yet.', 'notice'),
-    button('Check my secure access', async () => { await api('/child/profile'); note('Access checked by the server. Your profile is active.'); }, 'primary'),
-    button('Switch child', async () => { await api('/session/select', {}); channel?.postMessage('changed'); await refresh(); }, 'ghost'),
+  const st = await api('/learn/state');
+  const box = panel('CHILD SESSION / FAMILY PROTECTED', `Welcome, ${child.nickname}.`, 'Pick a track. Every question comes from the server, and so does every mark.');
+  const wallet = el('div', null, 'allowance');
+  wallet.append(el('strong', `⚡ ${st.wallet.gc}`, 'count'), el('span', 'grid coins'), el('strong', `🏆 ${st.wallet.rp}`, 'count'), el('span', 'reward points'));
+  box.append(wallet);
+  if (st.active) {
+    box.append(el('p', `A ${TRACK[st.active.session.track].name} session is open at question ${st.active.session.index + 1} of ${st.active.session.count}.`, 'notice'),
+      button('Continue', () => playView(st.active.session, st.active.question), 'primary'));
+  }
+  for (const t of ['engine', 'nav']) {
+    const p = st[t];
+    const card = el('div', null, 'track');
+    const next = p.next.mode === 'boss' ? `👑 Check point T${p.next.tierEnd / 20} is due` : p.next.mode === 'practice' ? 'Sector done — practice runs until the other track catches up' : `Next: papers ${p.next.startPaper}–${p.next.startPaper + 4}`;
+    card.append(el('strong', `${TRACK[t].emoji} ${TRACK[t].name} · SECTOR ${p.levelId}`), el('span', `${Math.min(p.paper - 1, 100)} / 100 papers · ${p.bossCleared} / 5 crowns`, 'card-meta'), el('span', next, 'card-meta'));
+    if (!st.active) card.append(button(`Start ${TRACK[t].name}`, async () => { const r = await api('/learn/session', { track: t }); playView(r.session, r.question); }, 'primary'));
+    box.append(card);
+  }
+  if (st.history.length) {
+    const log = el('div', null, 'log');
+    for (const h of st.history.slice(0, 6)) log.append(el('span', `${h.date} · ${TRACK[h.track].emoji} ${h.levelId} ${h.papers} · ${h.quit ? `left at Q${h.atQ + 1}` : h.passed ? 'PASS' : `${h.correct}/${h.total}`}`, 'card-meta'));
+    box.append(log);
+  }
+  box.append(button('Switch child', async () => { await api('/session/select', {}); channel?.postMessage('changed'); await refresh(); }, 'ghost'),
     button('Parent sign-in', () => signInScreen(), 'text-button'));
+}
+function displayText(d) {
+  if (d.layout === 'stack') return `${d.top} ${d.sym} ${d.bottom} =`;
+  if (d.layout === 'frac') return `${d.pre ? `${d.pre} ` : ''}${d.parts.map((p) => (p.sym ? p.sym : `${p.n}/${p.d}`)).join(' ')} =`;
+  return d.text;
+}
+function playView(session, q) {
+  stopTimer(); transientView = true;
+  const t = TRACK[session.track];
+  const box = panel(`${t.emoji} ${t.name} · SECTOR ${session.levelId}`, runLabel(session), `Question ${q.index + 1} of ${session.count} · paper ${q.paper}`);
+  box.append(el('p', displayText(q.display), 'question'));
+  const clock = el('p', `${q.seconds} s`, 'clock'); box.append(clock);
+  let left = q.seconds;
+  timer = setInterval(() => { left--; clock.textContent = `${Math.max(0, left)} s`; if (left <= 0) stopTimer(); }, 1000);
+  const attemptId = crypto.randomUUID(); // one id per question shown: a retried submit cannot count twice
+  const submit = async (answer) => {
+    stopTimer();
+    const r = await api('/learn/answer', { sessionId: session.id, index: q.index, attemptId, answer });
+    if (r.done) summaryView(session, r.summary); else playView({ ...session, index: r.question.index }, r.question);
+    note(r.correct ? '✓ Correct' : r.result === 'timeout' ? `⏱ Too slow — it was ${r.expected}` : `✗ It was ${r.expected}`);
+  };
+  const submitForm = (fields, read) => {
+    const form = el('form', null, 'answer-form'); for (const f of fields) form.append(f.wrap);
+    const go = el('button', 'Answer', 'primary'); go.type = 'submit'; form.append(go);
+    form.onsubmit = (event) => { event.preventDefault(); run(() => submit(read())); };
+    box.append(form); fields[0].input.focus();
+  };
+  if (q.answerType === 'choice') {
+    q.display.choices.forEach((c, i) => box.append(button(c, () => submit(String(i)), 'primary')));
+  } else if (q.answerType === 'frac') {
+    const n = field('Numerator', 'text', { inputMode: 'numeric', pattern: '[0-9]{1,4}', maxLength: 4, autocomplete: 'off' });
+    const d = field('Denominator', 'text', { inputMode: 'numeric', pattern: '[0-9]{1,4}', maxLength: 4, autocomplete: 'off' });
+    submitForm([n, d], () => ({ n: n.input.value.trim(), d: d.input.value.trim() }));
+  } else {
+    const a = field('Your answer', 'text', { inputMode: q.answerType === 'dec' ? 'decimal' : 'numeric', maxLength: 10, autocomplete: 'off' });
+    submitForm([a], () => a.input.value.trim());
+  }
+  box.append(button('Leave this session', async () => { stopTimer(); await api('/learn/quit', { sessionId: session.id }); await refresh(); }, 'text-button'));
+}
+function summaryView(session, s) {
+  transientView = true;
+  const t = TRACK[session.track];
+  const box = panel(`${t.emoji} ${t.name} · ${s.papers}`, s.passed ? 'PASS!' : 'Not this time.',
+    s.passed ? `${s.correct} out of ${s.total}. ⚡ +${s.gcEarned} 🏆 +${s.rpEarned}` : `${s.correct} out of ${s.total}${s.timeout ? `, ${s.timeout} timed out` : ''}. A pass needs every question right.`);
+  if (s.leveledUp) box.append(el('p', `Sector ${s.newLevelId} unlocked!`, 'notice'));
+  else if (s.bossNext) box.append(el('p', '👑 A check point is next: questions from the whole tier, double loot.', 'notice'));
+  box.append(el('p', `Wallet: ⚡ ${s.wallet.gc} · 🏆 ${s.wallet.rp}`, 'muted'), button('Back to my grid', refresh, 'primary'));
 }
 channel?.addEventListener('message', () => {
   reauthEpoch++; // Cancel old drafts even if a request is currently in flight.
