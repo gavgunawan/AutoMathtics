@@ -158,12 +158,26 @@ Completed against the hardened local branch after security-code commit `adcfc15`
 
 These checks materially strengthen the Stage 1 evidence but do not constitute a production penetration test or public-launch certification.
 
+## Follow-up Stage 1 hardening - 8 September 2026
+
+Security follow-up after the initial `adcfc15` hardening review:
+
+- **S1-006 - family-creation session boundary:** fixed in `9d4009a`. Creating the first family rotates the opaque session token and CSRF value, deletes the predecessor session, and exposes the replacement only through the hardened `HttpOnly` cookie path.
+- **S1-007 - CI action supply-chain pinning:** fixed in `9d4009a`. `actions/checkout`, `actions/setup-node`, and `actions/setup-java` are referenced by verified full commit SHAs rather than mutable major-version tags.
+- Local unit/security/UI regression suite: **84 passed, 0 failed, 0 skipped**.
+- Firebase Auth + Firestore emulator integration: **2 passed, 0 failed**.
+- The real emulator path verifies that the pre-family cookie becomes invalid immediately after family creation and subsequent operations use the replacement session.
+- A high-confidence credential scan across all reachable Git history returned **no matches**.
+- Staged security-code diff passed whitespace/integrity and targeted credential scans before commit.
+- Security-code commit: `9d4009a`.
+- Earlier GitHub Actions run 34244331889 on commit `04ff517` passed unit, Firebase emulator integration, and the actual Docker runtime-image build.
+- The follow-up branch containing `9d4009a` still requires a successful GitHub Actions unit, emulator and container-build run before integration into `release/v3.0`.
+
 ## Still open before sign-off
 
-- Actual image build and review of the new CI result.
 - Re-check the tracked `uuid` advisory before public staging or whenever `firebase-admin` changes; the current runtime-only exception is documented above and is not a permanent exemption.
-- Secret scanning beyond filename exclusions and history/CI access review.
-- Independent review of session lifecycle and remaining failure/race conditions.
+- High-confidence reachable-history secret scanning is complete with no matches; repository/branch governance remains a pre-public-staging review item.
+- Independent follow-up review identified S1-006 and S1-007; both are fixed in `9d4009a`. Re-review remains required if authentication, session, entitlement or CI trust boundaries materially change.
 - Production-only IAM, secrets, real token verification, provider anti-abuse/quotas,
   proxy-aware limits, MFA recovery, privacy/retention and deletion/export controls.
 

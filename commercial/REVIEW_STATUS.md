@@ -13,8 +13,20 @@ launch or production-security certification is implied by a green test run.
 - Manual Chrome session rotation passed for parent -> selector, selector -> child, and child -> selector.
 - Targeted staged-secret scan: no matches.
 - Runtime dependency audit: one tracked moderate `uuid` advisory represented by six transitive audit paths; temporary exception only, with re-review required before public staging.
-- Actual Docker image build and GitHub CI validation remain pending.
+- GitHub Actions run 34244331889 passed all three jobs: unit, Firebase emulator integration, and actual Docker runtime-image build.
 - Stage 1 remains a private-development security foundation; production IAM, secrets, real MFA, operational controls, privacy lifecycle, and final production security review are outside this checkpoint.
+
+## Follow-up Stage 1 hardening - 8 September 2026
+
+- Follow-up security-code checkpoint: `9d4009a`.
+- S1-006 fixed: first family creation now rotates the parent session token and CSRF value and invalidates the pre-family predecessor session.
+- S1-007 fixed: all GitHub Actions used by the foundation workflow are pinned to verified immutable full commit SHAs.
+- Local unit/security/UI suite after these changes: **84/84 passed**.
+- Firebase Auth + Firestore emulator integration after these changes: **2/2 passed**.
+- High-confidence credential scan across all reachable Git history returned no matches.
+- The recurring Firebase Admin `MetadataLookupWarning` appeared during emulator execution but did not fail either integration test; it remains tracked as a non-fatal environment/dependency warning.
+- The follow-up branch containing `9d4009a` must still pass GitHub Actions unit, emulator and container-build jobs before integration into `release/v3.0`.
+- These results strengthen the private-development Stage 1 foundation; they are not public-production security certification.
 
 ## Initial v3.0 verification record - 6 September 2026
 
