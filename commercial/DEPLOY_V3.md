@@ -4,7 +4,7 @@
 
 v3.0 is the Step 1 account/security foundation. It is NOT the old game with a new
 login screen: learning, progress, rewards and payments are not connected yet.
-Keep the existing root `index.html` and its v2.2.1 Firebase project unchanged.
+Keep the existing root `index.html` and its v2 Firebase project unchanged.
 Deploy this `commercial/` folder separately to a NEW Firebase project.
 A successful deployment creates a browser-accessible pilot, not a commercial
 security certification. Use synthetic child profiles until the privacy and
@@ -184,14 +184,14 @@ parent-to-child handover in old tabs, PIN reset, one-seat/two-seat limits, expir
 concurrent child creation and cross-family denial. Verify no secrets reach responses,
 logs, page source or Git. A green health check only proves the server is responding.
 The child screen intentionally stops at the protected profile; no maths game is
-connected in this release. Do not send users back into v2.2.1 with this session.
+connected in this release. Do not send users back into the existing v2 application with this session.
 
 The GitHub branch/PR itself does not deploy or merge anything. A manual Cloud Run
 and Hosting deployment publishes a pilot URL only after your cloud setup succeeds.
 To roll back a later pilot revision, restore the previously tested Cloud Run revision
 and compatible Hosting release in their consoles. This does not revert database
 writes. Keep tested backups. Do not delete the new project/secrets as a rollback.
-The original v2.2.1 site is unaffected throughout.
+The existing v2 site is unaffected throughout.
 
 ## Official references checked for this release
 

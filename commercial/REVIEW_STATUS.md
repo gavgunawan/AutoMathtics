@@ -22,6 +22,6 @@
 - A live URL, payments, learning-game integration and production readiness are NOT
   established by the version number or by unit-test success.
 
-The original v2.2.1 game and its database are not secured or replaced by adding this
+The existing v2 game and its database are not secured or replaced by adding this
 folder. Deploy v3.0 to a separate new project and complete the remaining work in
 README.md before any public paid launch.

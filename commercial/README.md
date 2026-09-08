@@ -5,7 +5,7 @@
 Start with [DEPLOY_V3.md](DEPLOY_V3.md) for GitHub upload and Firebase/Cloud Run deployment.
 The version number does not mean the old learning game has been integrated.
 
-This directory is independent of the v2.2.1 family prototype. It does not import,
+This directory is independent of the existing v2 family prototype. It does not import,
 rebuild or replace the root `index.html`, connect to its Realtime Database, or migrate
 its children. The commercial server explicitly refuses the legacy Firebase project.
 The spinning-ring design is retained with synthetic/illustrated profile icons.
