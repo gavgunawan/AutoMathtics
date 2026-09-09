@@ -56,6 +56,7 @@ NODE
 # Deny browser database access BEFORE publishing the new service.
 ./node_modules/.bin/firebase deploy --config firebase.staging.json --project "$PROJECT_ID" --only firestore:rules
 gcloud run deploy "$SERVICE" --project "$PROJECT_ID" --region "$REGION"   --source . --service-account "$RUNTIME_SA" --allow-unauthenticated   --port 8080 --memory 512Mi --cpu 1 --concurrency 4 --min-instances 0 --max-instances 3   --timeout 60 --env-vars-file "$ENV_FILE"   --set-secrets "SESSION_SECRET=am-v3-session:1,PIN_PEPPER=am-v3-pin-pepper:1,$([ "${PAYMENT_PROVIDER:-fake}" = stripe ] && echo 'STRIPE_SECRET_KEY=am-v3-stripe-key:1,WEBHOOK_SECRET_STRIPE=am-v3-webhook-stripe:1' || echo 'WEBHOOK_SECRET_FAKE=am-v3-webhook-fake:1')"
+mkdir -p .hosting  # deliberately empty; git keeps no empty directory, so make sure it exists
 ./node_modules/.bin/firebase deploy --config firebase.staging.json --project "$PROJECT_ID" --only hosting
 node --input-type=module - "$ORIGIN" <<'NODE'
 const origin = process.argv[2];
