@@ -2,8 +2,9 @@
 
 ## What this release is
 
-v3.0 is the Step 1 account/security foundation. It is NOT the old game with a new
-login screen: learning, progress, rewards and payments are not connected yet.
+v3 is the commercial build: the parent account and security foundation (Stage 1), the whole
+learning game behind the server (Stage 2), subscriptions and payments (Stage 3), and the Stage 4
+provider, recovery and pilot work (`STAGE4_PLAN.md`).
 Keep the existing root `index.html` and its v2 Firebase project unchanged.
 Deploy this `commercial/` folder separately to a NEW Firebase project.
 A successful deployment creates a browser-accessible pilot, not a commercial
@@ -32,8 +33,11 @@ an available ID similar to `automathtics-v3-staging`. Record the actual PROJECT 
 not its display name. Do not use `automathtics`; the server explicitly rejects it.
 
 - Link a billing account (Blaze is required for the Cloud Run integration).
-  This is cloud operating cost, not customer subscription payments. Set budgets
-  and alerts. Alerts and max-instance settings are NOT absolute spending caps.
+  This is cloud operating cost, not customer subscription payments. Blaze has no
+  monthly fee; the free allowances of Firestore, Cloud Run, Hosting, Secret Manager
+  and logging cover pilot scale, and SMS is billed per message. In Google Cloud
+  Billing → Budgets & alerts create a budget of 5 USD for the project with alerts
+  at 50, 90 and 100 %. Alerts and max-instance settings are NOT absolute spending caps.
 - Create the default Cloud Firestore database in Native mode, production/locked
   rules. Singapore (`asia-southeast1`) is the example location used by this guide;
   review your data-location obligations before choosing. Do not create an open
@@ -41,7 +45,9 @@ not its display name. Do not use `automathtics`; the server explicitly rejects i
 - Upgrade Authentication to Identity Platform. Enable Email/Password and, under
   Sign-in method > Advanced, SMS Multi-factor Authentication. This build requires
   email verification and phone MFA on the SAME parent account. SMS-only login is
-  not accepted. Configure allowed SMS countries, quotas and test numbers.
+  not accepted. Under Authentication > Settings > SMS region policy allow only the
+  countries your parents live in, so nobody elsewhere can run up SMS charges; set
+  a daily SMS quota; add your own numbers as test numbers while you try things out.
 - In Authentication settings, authorize `YOUR_PROJECT_ID.web.app` and
   `YOUR_PROJECT_ID.firebaseapp.com`; configure email templates, an enforced
   password policy (12+ characters) and email-enumeration protection.
@@ -124,13 +130,16 @@ for SECRET in am-v3-stripe-key am-v3-webhook-stripe; do
 done
 ```
 
-Register the endpoint `https://<service-url>/api/webhooks/stripe` in Stripe for the events
-`checkout.session.completed`, `invoice.paid`, `invoice.payment_failed`,
-`customer.subscription.deleted`, `charge.refunded`; create the three recurring prices and deploy
-with `PAYMENT_PROVIDER=stripe STRIPE_PRICE_STARTER=price_… STRIPE_PRICE_FAMILY=price_…
-STRIPE_PRICE_BIG=price_…` in front of `scripts/deploy-staging.sh`. Locally, `stripe listen
---forward-to 127.0.0.1:8787/api/webhooks/stripe` prints the `whsec_` for `WEBHOOK_SECRET_STRIPE` and
-forwards real test-mode events to the emulator-backed server (`PAYMENTS.md` → Stripe).
+The endpoint address is known before anything is deployed: it is
+`https://PROJECT_ID.web.app/api/webhooks/stripe`. In the Stripe sandbox (Developers → Webhooks →
+Add endpoint) register it for the events `checkout.session.completed`, `invoice.paid`,
+`invoice.payment_failed`, `customer.subscription.deleted`, `charge.refunded`, and copy the endpoint's
+signing secret (`whsec_…`) into `am-v3-webhook-stripe` above. Deploy with
+`PAYMENT_PROVIDER=stripe STRIPE_PRICE_STARTER=price_… STRIPE_PRICE_FAMILY=price_…
+STRIPE_PRICE_BIG=price_…` in front of `scripts/deploy-staging.sh`; the helper then requires the two
+Stripe secrets instead of the fake one. Locally, `stripe listen --forward-to
+127.0.0.1:8787/api/webhooks/stripe` prints a `whsec_` for `WEBHOOK_SECRET_STRIPE` and forwards real
+test-mode events to the emulator-backed server (`PAYMENTS.md` → Stripe).
 
 Run creation commands once. If a resource already exists, inspect and reuse it;
 do NOT generate replacement PIN peppers, overwrite secrets or delete resources to
@@ -195,12 +204,12 @@ connection from, so with N trusted proxies the last N entries are trustworthy an
 those is the real client. Rate limiting keys on that entry; a wrong count either throttles every
 visitor as one client (too small) or lets a client choose its own address (too large). Hosting in
 front of Cloud Run is normally 2. Measure it once on the real origin: deploy with
-`TRUSTED_PROXY_HOPS=2`, then from a machine whose public address you know (`curl ifconfig.me`)
-send `curl -H 'X-Forwarded-For: 203.0.113.250' https://PROJECT_ID.web.app/healthz` while a
-temporary log line in `/healthz` prints `req.headers['x-forwarded-for']` (remove it afterwards).
-In the Cloud Run log you should see `203.0.113.250, <your address>, <hosting address>`: the
-number of entries after the fake one is the value to set. If your address is missing, Hosting
-replaced the header and the value is one less.
+`TRUSTED_PROXY_HOPS=2`, then from any machine run
+`curl -H 'X-Forwarded-For: 203.0.113.250' https://PROJECT_ID.web.app/healthz`. The answer carries
+`forwarded`, the number of entries the server saw in that header, and `leading` when your fake
+entry survived (addresses are otherwise never returned). The value to keep is `forwarded` minus one
+if `leading` is present, else `forwarded`: `{"forwarded":3,"leading":"203.0.113.250"}` means 2. If
+it differs from 2, redeploy with that number.
 
 ```bash
 export TRUSTED_PROXY_HOPS=2

@@ -73,7 +73,13 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
         res.setHeader('Content-Type', `${type}; charset=utf-8`);
         return res.end(await readFile(new URL(file, publicDir)));
       }
-      if (req.method === 'GET' && path === '/healthz') return json(200, { status: 'ok', version: VERSION });
+      if (req.method === 'GET' && path === '/healthz') {
+        // `forwarded` counts the X-Forwarded-For entries the server saw, and `leading` echoes the first one only when it is an
+        // RFC 5737 documentation address (never a real client), so TRUSTED_PROXY_HOPS can be measured on the live origin
+        // with one curl and no code change (DEPLOY_V3.md §5).
+        const entries = req.headers['x-forwarded-for'] ? String(req.headers['x-forwarded-for']).split(',').map((s) => s.trim()) : [];
+        return json(200, { status: 'ok', version: VERSION, ...(entries.length ? { forwarded: entries.length, ...(/^203\.0\.113\.\d{1,3}$/.test(entries[0]) ? { leading: entries[0] } : {}) } : {}) });
+      }
       if (!path.startsWith('/api/')) fail(404, 'NOT_FOUND');
       // Provider webhooks (Stage 3.3). A payment server sends no cookie, CSRF token or Origin: the
       // signature over the raw bytes is the whole authentication, checked inside payments.receive().

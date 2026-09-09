@@ -28,7 +28,14 @@ RUNTIME_SA="automathtics-v3-runtime@${PROJECT_ID}.iam.gserviceaccount.com"
 ORIGIN="https://${PROJECT_ID}.web.app"
 # IAM and the exact secret versions must already exist. Do not create/rotate them here.
 gcloud iam service-accounts describe "$RUNTIME_SA" --project "$PROJECT_ID" >/dev/null
-for name in am-v3-session am-v3-pin-pepper am-v3-webhook-fake; do
+# the provider decides which secrets must exist: Stripe needs its key and endpoint secret, the fake provider its signing secret
+if [[ "${PAYMENT_PROVIDER:-fake}" == stripe ]]; then
+  for v in STRIPE_PRICE_STARTER STRIPE_PRICE_FAMILY STRIPE_PRICE_BIG; do [[ "${!v:-}" =~ ^price_[A-Za-z0-9]{8,}$ ]] || { echo "Set $v to the Stripe price id (price_...)." >&2; exit 1; }; done
+  PROVIDER_SECRETS='am-v3-stripe-key am-v3-webhook-stripe'
+else
+  PROVIDER_SECRETS='am-v3-webhook-fake'
+fi
+for name in am-v3-session am-v3-pin-pepper $PROVIDER_SECRETS; do
   gcloud secrets versions describe 1 --secret "$name" --project "$PROJECT_ID" >/dev/null
 done
 npm ci --ignore-scripts --no-fund --no-audit
