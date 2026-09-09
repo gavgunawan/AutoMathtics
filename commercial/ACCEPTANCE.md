@@ -11,6 +11,7 @@ end of the run. Nothing here requires code; every failure is a ticket for the ne
 
 | # | Do | Expect |
 |---|---|---|
+| P0 | Open the site on each device | the Mission Control shell: the grid and aurora behind a dark panel, the AUTOMATHTICS mark in Orbitron, mono `// STEP` labels, violet-to-magenta buttons — the same look as the game; every word readable without zooming; no request to Google Fonts (the faces are served by the app) |
 | P1 | Create a parent account; open the verification email on the phone | the app refuses the family screens until verified; after the link, *I have verified my email* continues |
 | P2 | Enrol the mobile: country code, consent box, SMS code | one SMS; a wrong code is refused; a second request within a minute is refused; after enrolment the app asks to sign in again |
 | P2b | Ask for a second code 2 minutes after the first, then a third straight away | the second arrives; the third is refused with "Try again in 15 minutes" (the SMS ladder, `DEPLOY_V3.md` section 5) |

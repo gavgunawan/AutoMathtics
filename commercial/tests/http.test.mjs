@@ -59,7 +59,7 @@ test('static server never exposes source, environment or legacy application', as
   const s = await serverTest(t);
   for (const path of ['/server/main.mjs', '/.env', '/package.json', '/index.html', '/src/automathtics-src.jsx']) assert.equal((await fetch(s.base + path)).status, 404);
   const home = await fetch(s.base + '/'); assert.equal(home.status, 200);
-  assert.ok((await home.text()).includes('Family access'));
+  const page = await home.text(); assert.ok(page.includes('AutoMathtics') && page.includes('MISSION CONTROL'), 'the parent shell');
 });
 test('parent cannot call child endpoint, and there is no entitlement/admin write endpoint', async (t) => {
   const s = await serverTest(t), a = await s.f.family();
