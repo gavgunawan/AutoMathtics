@@ -138,9 +138,33 @@ transaction 2: intent still creating → pending + providerCheckoutRef + result;
 A crash or a provider fault anywhere between transaction 1 and the session therefore never opens a second
 subscription over a live one: the resume finds `endPrevious.status: pending` and ends it before asking for
 the session (Stage 4 review, fourth round; `tests/round4-payments.test.mjs` covers a crash before the
-ending, a provider fault, and a crash after the ending). Two live subscriptions at the provider — a state
-the dashboard can make — stop every money-changing call with `MULTIPLE_PROVIDER_SUBSCRIPTIONS` until an
-operator has cancelled one (`RECONCILIATION.md`).
+ending, a provider fault, and a crash after the ending). The adversarial verification of that seam added
+the rest of the rules:
+
+- a resume settles the debt only against the family it was recorded for: the intent carries the
+  subscription's ref and version, and when the family moved meanwhile (the dunning invoice paid, a plan
+  changed, another checkout completed) or is no longer in a checkout state, the intent goes `stale`
+  (`STATE_MOVED`) and the click is refused as a fresh start would be (`USE_PLAN_CHANGE` /
+  `SUBSCRIPTION_CHANGED`) — a retried click never ends a subscription just paid for;
+- an intent from before the debts were recorded is owed whatever the family still shows, never presumed
+  settled;
+- the adapter ends only the subscription the family's record names (`subscriptionRef`); a different live
+  one is answered, never ended: with a checkout of ours pending it is that checkout completing
+  (`CHECKOUT_COMPLETING`: the older checkout is reinstated, the new one closed), otherwise a subscription
+  the family does not know (`PROVIDER_SUBSCRIPTION_LIVE`);
+- a provider that cannot find the subscription never settles the debt (`PROVIDER_SUBSCRIPTION_NOT_FOUND`,
+  the debt stays pending for the retry);
+- a checkout that owes no ending still inspects a customer this server already knows: two live
+  subscriptions (`MULTIPLE_PROVIDER_SUBSCRIPTIONS`) or one (`PROVIDER_SUBSCRIPTION_LIVE`) refuse the session;
+- the superseded session is expired before the ending, so a refused ending never leaves it payable; an
+  attempt superseded or completed while it stalled records its late session (`lateSessionRef`), expires it
+  and answers closed (`url: null`); a completed intent whose finalisation was lost answers closed too;
+- every such refusal is deterministic, not a fault: the family is marked (`providerAttention`), an audit row
+  `billing.refused` says so, a refused plan change closes its intent and releases the in-flight marker, the
+  nightly sweep names the family (`PROVIDER_ATTENTION`) and a clean `reconcile-provider` clears the mark.
+
+Two live subscriptions at the provider — a state the dashboard can make — stop every money-changing call
+with `MULTIPLE_PROVIDER_SUBSCRIPTIONS` until an operator has cancelled one (`RECONCILIATION.md`).
 
 The intent is durable before the provider is contacted. Two simultaneous requests with one
 operation id, or a crash between the intent and the provider, both resume the same intent and

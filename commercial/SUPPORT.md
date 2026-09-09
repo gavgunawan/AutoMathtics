@@ -9,7 +9,8 @@ account (`NO_TRANSFER.md`; `tests/support.test.mjs` scans the module for it).
 ## The parent's door
 
 - `GET /api/family/export` (recent sign-in): everything the family is — every audit row of the family read in
-  pages (`auditTruncated: true` only past 50,000 rows, years of use), and otherwise family, entitlement and
+  pages (`auditTruncated: true` only past 50,000 rows, years of use; then the rows kept are the first
+  50,000 by document id, an arbitrary set in time, not the oldest or the newest), and otherwise family, entitlement and
   subscription facts, the family's billing events, game configuration, each child with their
   progress and every ledger row, the audit trail for the family. No credentials, sessions, keys,
   fingerprints or phone keys. The browser offers it as a JSON download. It is a read the parent
