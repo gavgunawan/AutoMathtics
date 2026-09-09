@@ -1,0 +1,1 @@
+# Firebase Hosting public folder: deliberately empty, every request is rewritten to the Cloud Run service (firebase.staging.json). Dotfiles are never uploaded.

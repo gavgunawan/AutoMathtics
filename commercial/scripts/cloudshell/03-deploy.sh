@@ -18,4 +18,4 @@ if ! ./node_modules/.bin/firebase projects:list --project "$PROJECT_ID" >/dev/nu
   echo 'The Firebase CLI needs a sign-in: follow the link it prints, then paste the code back here.'
   ./node_modules/.bin/firebase login --no-localhost
 fi
-npm run deploy:staging && { echo; echo 'proxy depth probe:'; curl -s -H 'X-Forwarded-For: 203.0.113.250' "https://${PROJECT_ID}.web.app/healthz"; echo; echo 'BLOCK C DONE'; }
+npm run deploy:staging && { echo; echo 'proxy depth probe:'; curl -s -H 'X-Forwarded-For: 203.0.113.250' "https://${PROJECT_ID}.web.app/api/health"; echo; echo 'BLOCK C DONE'; }

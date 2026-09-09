@@ -212,7 +212,7 @@ those is the real client. Rate limiting keys on that entry; a wrong count either
 visitor as one client (too small) or lets a client choose its own address (too large). Hosting in
 front of Cloud Run is normally 2. Measure it once on the real origin: deploy with
 `TRUSTED_PROXY_HOPS=2`, then from any machine run
-`curl -H 'X-Forwarded-For: 203.0.113.250' https://PROJECT_ID.web.app/healthz`. The answer carries
+`curl -H 'X-Forwarded-For: 203.0.113.250' https://PROJECT_ID.web.app/api/health`. The answer carries
 `forwarded`, the number of entries the server saw in that header, and `leading` when your fake
 entry survived (addresses are otherwise never returned). The value to keep is `forwarded` minus one
 if `leading` is present, else `forwarded`: `{"forwarded":3,"leading":"203.0.113.250"}` means 2. If
@@ -238,7 +238,7 @@ on rewritten dynamic requests.
 
 Open `https://YOUR_PROJECT_ID.web.app`. Use that canonical address, not the raw
 Cloud Run URL or the alternative firebaseapp.com site; Origin checks require it.
-The footer should show `v3.0 · 6 Sep 2026` and `/healthz` should report `3.0.0`.
+The footer should show `v3.0 · 6 Sep 2026` and `/api/health` should report `3.0.0`.
 Cloud Run's infrastructure permits unauthenticated HTTP so the sign-in page can
 open; private API operations still require the application's authenticated session.
 No edge abuse-protection system is configured by this helper. Keep the pilot
