@@ -48,7 +48,7 @@ test('the key is an HMAC of the E.164 number under the pepper: the number is nev
 });
 test('the wiring: the function counts on the number, refuses with SMS_WAIT, writes a TTL timestamp; the browser turns the refusal into a wait; the deploy block and the config carry it; the image does not', async () => {
   const fn = await read('../functions/index.js');
-  for (const s of ['beforeSmsSent(', "defineSecret('AM_V3_SMS_PEPPER')", "defineString('SMS_LADDER_SERVICE_ACCOUNT')", 'collection(COLLECTION)', "const COLLECTION = 'smsLadder'", 'runTransaction', "'resource-exhausted'", 'new Date(next.expireAt)']) assert.ok(fn.includes(s), s);
+  for (const s of ['beforeSmsSent(', "defineSecret('AM_V3_SMS_PEPPER')", "defineString('SMS_LADDER_SERVICE_ACCOUNT')", 'collection(COLLECTION)', "const COLLECTION = 'smsLadder'", 'runTransaction', "'resource-exhausted'", 'new Date(next.expireAt)', 'timeoutSeconds: 7']) assert.ok(fn.includes(s), s); // 7 s: Identity Platform's ceiling for a blocking function
   const refusal = fn.match(/`SMS_WAIT:[^`]*`/)[0]; assert.ok(!/\s:\s/.test(refusal), 'no " : " inside the refusal: the browser SDK splits the provider message on it');
   execFileSync(process.execPath, ['--check', fileURLToPath(new URL('../functions/index.js', import.meta.url))]);
   const pkg = JSON.parse(await read('../functions/package.json')); assert.equal(pkg.type, 'module'); assert.equal(pkg.main, 'index.js'); assert.equal(pkg.engines.node, '22');
