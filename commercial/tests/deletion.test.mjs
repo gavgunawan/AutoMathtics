@@ -38,7 +38,7 @@ test('Blocker 1: deletion begins by freezing the family — nobody gets in, live
   const real = f.gateway.changePlan.bind(f.gateway); f.gateway.changePlan = async () => { throw Error('provider down'); };
   const idUp = randomUUID(); await assert.rejects(f.payments.changePlan(p.ctx, { plan: 'big', operationId: idUp }), /provider down/); f.gateway.changePlan = real; // an open intent
   await f.support.requestDeletion(p.ctx, op());
-  // crash right after the begin transaction (terminate is transaction 1, begin is 2, the first session sweep is 3)
+  // crash right after the terminate (the freeze is transaction 1, terminate is 2, the first session sweep is 3)
   crashAt(f, 3);
   await assert.rejects(f.support.executeDeletion(a.familyId, { operator: 'ops@example.test', force: true }), /crash/);
   const mid = await f.store.get(`families/${a.familyId}`);
@@ -51,7 +51,9 @@ test('Blocker 1: deletion begins by freezing the family — nobody gets in, live
   await assert.rejects(f.game.equip(childCtx, { kind: 'pet', itemId: null }), rejected('FAMILY_DELETED'));
   await assert.rejects(f.child(p.ctx, 'C'), rejected('FAMILY_DELETED'));
   await assert.rejects(f.payments.changePlan(p.ctx, { plan: 'big', operationId: idUp }), rejected('FAMILY_DELETED'));
-  f.advance(2000); p = await f.login('parentA'); await assert.rejects(f.service.me(p.ctx), rejected('FAMILY_DELETED'), 'a fresh sign-in reaches the same wall');
+  f.advance(2000); const before = (await f.store.query('sessions', 'uid', 'parentA', 50)).length;
+  await assert.rejects(f.login('parentA'), rejected('FAMILY_DELETED'), 'a fresh sign-in is refused before a session exists');
+  assert.equal((await f.store.query('sessions', 'uid', 'parentA', 50)).length, before, 'no new session document was written');
   assert.equal((await f.store.get(`families/${a.familyId}/learning/${A}`)) !== null, true, 'nothing destroyed yet');
   // rerun: the job resumes from the recorded phase and finishes
   const record = await f.support.executeDeletion(a.familyId, { operator: 'ops@example.test' });
@@ -129,4 +131,45 @@ test('operator reprocessing is attributable even if it crashes half-way: the ope
   assert.ok((await f.store.list('audit')).some((x) => x.action === 'support.reprocess_started' && x.uid === 'ops@example.test'));
   await f.support.reprocess(a.familyId, 'ops@example.test');
   const done = (await f.store.list('supportOperations')).find((r) => r.status === 'done'); assert.ok(done); assert.equal(done.results.length, 1); assert.equal(done.results[0].status, 'requires_action');
+});
+test('Exit follow-up: the freeze is the first thing that moves — a crash before it changes nothing, a crash after it leaves a frozen family that no payment, sign-in or child can touch', async () => {
+  const f = fixture(); const { a, co, ids: [A] } = await paidFamily(f, 'family', ['A']);
+  const { childCtx } = await play(f, a, A);
+  let p = await parentAgain(f); await f.support.requestDeletion(p.ctx, op());
+  const version = (await f.store.get(`families/${a.familyId}`)).subscription.version;
+  // 1. a crash before the freeze commits: the subscription is untouched and the request is still just a request
+  crashAt(f, 1);
+  await assert.rejects(f.support.executeDeletion(a.familyId, { operator: 'ops@example.test', force: true }), /crash/);
+  let fam = await f.store.get(`families/${a.familyId}`);
+  assert.equal(fam.subscription.state, 'active'); assert.equal(fam.subscription.version, version, 'no terminate ran ahead of the freeze'); assert.equal(fam.deletion.status, undefined); assert.equal(fam.deleted, undefined);
+  assert.equal((await f.service.me(p.ctx)).role, 'parent', 'the family is still usable: nothing happened');
+  assert.equal((await f.support.cancelDeletion(p.ctx, op())).pending, false, 'and the parent can still change their mind, with their subscription intact');
+  await f.support.requestDeletion(p.ctx, op());
+  // 2. a crash right after the freeze, before the terminate: frozen, subscription still on record, nothing can move it
+  crashAt(f, 2);
+  await assert.rejects(f.support.executeDeletion(a.familyId, { operator: 'ops@example.test', force: true }), /crash/);
+  fam = await f.store.get(`families/${a.familyId}`);
+  assert.equal(fam.deletion.status, 'executing'); assert.equal(fam.subscription.state, 'active', 'the terminate has not run yet');
+  // a signed renewal in this gap is recorded and never applied: no reactivation, no new period
+  const renewal = evt(f, co.customerRef, 'invoice.paid', { price: 'price_fake_family', periodEnd: f.now() + 60 * DAY });
+  assert.deepEqual(await deliver(f, renewal), { status: 'reconciliation_required', reason: 'FAMILY_DELETED' });
+  assert.equal((await f.store.get(`families/${a.familyId}`)).subscription.version, version);
+  // a fresh sign-in in this gap is refused before any session is written
+  f.advance(2000); const sessionsBefore = (await f.store.query('sessions', 'uid', 'parentA', 50)).length;
+  await assert.rejects(f.login('parentA'), rejected('FAMILY_DELETED'));
+  assert.equal((await f.store.query('sessions', 'uid', 'parentA', 50)).length, sessionsBefore);
+  // the live sessions are walls too, and a fresh checkout cannot be opened
+  await assert.rejects(f.service.me(p.ctx), rejected('FAMILY_DELETED')); await assert.rejects(f.learning.start(childCtx, { track: 'engine' }), rejected('FAMILY_DELETED'));
+  await assert.rejects(f.payments.checkout(p.ctx, { plan: 'starter', ...op() }), rejected('FAMILY_DELETED'));
+  // 3. the operator retries: the subscription ends as a recorded event and the tombstone is clean
+  const record = await f.support.executeDeletion(a.familyId, { operator: 'ops@example.test' });
+  const tomb = await f.store.get(`families/${a.familyId}`);
+  assert.equal(tomb.deleted, true); assert.equal(tomb.subscription.state, 'cancelled'); assert.ok(tomb.subscription.version > version);
+  assert.ok((await f.store.list(`families/${a.familyId}/billing`)).some((e) => e.type === 'terminate'), 'the terminate is on the financial record');
+  assert.equal(record.executionId, fam.deletion.executionId);
+  // 4. zero sessions of the family or its parent survive
+  assert.equal((await f.store.query('sessions', 'familyId', a.familyId, 50)).length, 0);
+  assert.equal((await f.store.query('sessions', 'uid', 'parentA', 50)).length, 0);
+  // and the returning parent signs in to no family, as designed
+  f.advance(2000); const back = await f.login('parentA'); assert.equal((await f.service.me(back.ctx)).family, null);
 });

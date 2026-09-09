@@ -24,9 +24,9 @@ Executed by an operator (`scripts/support.mjs delete FAMILY_UUID`, `CONFIRM_DELE
 `FORCE_BEFORE_GRACE=yes` executes early and is audited as forced) once the 14 days have passed.
 Idempotent. In order:
 
-1. an active subscription is ended as a recorded `terminate` event (Stage 4's adapter tells the
-   provider);
-2. per child, in one transaction: learning sessions, ledger rows, operation receipts, progress;
+1. the family is frozen (see below), then an active subscription is ended as a recorded `terminate`
+   event (Stage 4's adapter tells the provider);
+2. per child, in bounded batches: learning sessions, ledger rows, operation receipts, progress;
 3. in one transaction: children, credentials, PIN attempts, child-creation receipts, members,
    game configuration, every login session of the family or its parents; parent documents become
    tombstones (`deleted`, `familyId: null`, phone key kept); the family document becomes a
@@ -51,11 +51,13 @@ A job in phases, each phase a bounded transaction (`DELETION_BATCH` = 300 writes
 500), the whole thing **resumable** — a rerun after a crash continues from the recorded phase and
 reports the accumulated counts:
 
-0. **begin**, one transaction: `deletion.status = executing` — from here `Foundation.authorize()`
+0. **freeze**, the first mutating transaction: validate, then `deletion.status = executing` — from here `Foundation.authorize()`
    admits nobody (parent, selector or child: `FAMILY_DELETED`), so no Stage 1/2 write can land
    between sweeps; live checkouts become `superseded_by_deletion`, open change intents
    `frozen_by_deletion` (still reconcilable), the in-flight markers are cleared, and the audit row
    names the operator and the execution id;
+   `Foundation.login()` refuses a new session for the family too, so the sweep below finds none;
+0b. the subscription ends as a recorded `terminate` event — only now, when no payment can revive it and no parent can act;
 1. login sessions of the family and its parents, in batches;
 2. per child: learning sessions, ledger rows, operation receipts in batches, then the progress
    document;
