@@ -60,7 +60,7 @@ mkdir -p .hosting  # deliberately empty; git keeps no empty directory, so make s
 ./node_modules/.bin/firebase deploy --config firebase.staging.json --project "$PROJECT_ID" --only hosting
 node --input-type=module - "$ORIGIN" <<'NODE'
 const origin = process.argv[2];
-const health = await fetch(`${origin}/healthz`);
+const health = await fetch(`${origin}/api/health`);
 const result = await health.json();
 if (!health.ok || result.version !== '3.0.0') throw Error('Live v3.0 health check failed; inspect Cloud Run logs.');
 console.log(`v${result.version} is responding at ${origin}. Now complete the staging acceptance checklist.`);

@@ -73,7 +73,7 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
         res.setHeader('Content-Type', `${type}; charset=utf-8`);
         return res.end(await readFile(new URL(file, publicDir)));
       }
-      if (req.method === 'GET' && path === '/healthz') {
+      if (req.method === 'GET' && path === '/api/health') { // not /healthz: the Cloud Run frontend swallows that path
         // `forwarded` counts the X-Forwarded-For entries the server saw, and `leading` echoes the first one only when it is an
         // RFC 5737 documentation address (never a real client), so TRUSTED_PROXY_HOPS can be measured on the live origin
         // with one curl and no code change (DEPLOY_V3.md §5).
