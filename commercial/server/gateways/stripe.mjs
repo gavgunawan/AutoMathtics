@@ -15,7 +15,7 @@
 // Secrets never leave this module: a provider error surfaces as PROVIDER_ERROR with Stripe's error
 // code only. Test mode (sk_test_ / whsec_) costs nothing; that is how 4.2 runs.
 import { createHmac } from 'node:crypto';
-import { Fault, fail, equal } from '../security.mjs';
+import { Fault, fail, equal, sha256 } from '../security.mjs';
 
 export const STRIPE_TOLERANCE_MS = 5 * 60_000;
 const PLAN_KEYS = ['starter', 'family', 'big'];
@@ -54,7 +54,7 @@ export const bestLine = (lines) => {
   const positive = priced.filter((l) => !Number.isSafeInteger(l.amount) || l.amount > 0);
   return (positive.length ? positive : priced).sort((a, b) => (b.period?.end || 0) - (a.period?.end || 0))[0];
 };
-const NONE = Object.freeze({ price: null, periodEnd: null, familyId: null, checkoutId: null, amountCents: null, full: null, ref: null });
+const NONE = Object.freeze({ price: null, periodEnd: null, familyId: null, checkoutId: null, amountCents: null, full: null, ref: null, subscriptionRef: null });
 export function signStripe(secret, rawBody, atMs) { const t = Math.floor(atMs / 1000); return `t=${t},v1=${createHmac('sha256', secret).update(`${t}.`).update(rawBody).digest('hex')}`; }
 
 export class StripeGateway {
@@ -171,27 +171,29 @@ export class StripeGateway {
     verifyStripeSignature(this.webhookSecret, rawBody, headers['stripe-signature'], nowMs);
     let ev; try { ev = JSON.parse(rawBody.toString('utf8')); } catch { fail(400, 'INVALID_JSON'); }
     if (!ev || typeof ev.id !== 'string' || typeof ev.type !== 'string' || !Number.isSafeInteger(ev.created) || !ev.data?.object) fail(400, 'INVALID_REQUEST');
-    const o = ev.data.object, at = ev.created * 1000, base = { id: ev.id, at, seq: null };
+    // the event's own identity is its fingerprint — id, type, time and the object it is about — never what this adapter fetched at
+    // delivery time, so a retry after the customer's state moved is the same event, not a conflict (Stage 4 review, third round)
+    const o = ev.data.object, at = ev.created * 1000, base = { id: ev.id, at, seq: null, fingerprint: sha256(JSON.stringify({ id: ev.id, type: ev.type, created: ev.created, object: typeof o.id === 'string' ? o.id : null })) };
     if (at > nowMs + STRIPE_TOLERANCE_MS) fail(400, 'EVENT_IN_FUTURE'); // a far-future timestamp would make every later event stale
     const customer = typeof o.customer === 'string' ? o.customer : o.customer?.id || null;
     if (ev.type === 'checkout.session.completed') {
       if (!customer || !o.subscription) fail(400, 'INVALID_REQUEST');
       const sub = await this.api('GET', `/v1/subscriptions/${typeof o.subscription === 'string' ? o.subscription : o.subscription.id}`); // provider state, not our own metadata
-      return { ...base, type: 'checkout.completed', customer, data: { ...NONE, price: sub.items?.data?.[0]?.price?.id || null, periodEnd: periodEndOf(sub), familyId: o.metadata?.familyId || null, checkoutId: o.client_reference_id || o.metadata?.checkoutId || null } };
+      return { ...base, type: 'checkout.completed', customer, data: { ...NONE, price: sub.items?.data?.[0]?.price?.id || null, periodEnd: periodEndOf(sub), familyId: o.metadata?.familyId || null, checkoutId: o.client_reference_id || o.metadata?.checkoutId || null, subscriptionRef: typeof sub.id === 'string' ? sub.id : null } };
     }
     const passthrough = (type) => ({ ...base, type, customer: customer || 'none', data: { ...NONE } }); // recorded and ignored by the inbox
     if (ev.type === 'invoice.paid' || ev.type === 'invoice.payment_failed') {
       const details = o.parent?.subscription_details || o.subscription_details || null; // basil moved it under parent
       const subId = typeof details?.subscription === 'string' ? details.subscription : typeof o.subscription === 'string' ? o.subscription : null;
-      // the price the subscription is on now is the fact (a proration invoice lists the old and the new price on separate
-      // lines): a paid invoice is resolved against the subscription Stripe holds; otherwise the best line answers
-      let price = null, periodEnd = null;
-      if (ev.type === 'invoice.paid' && subId) { const sub = await this.api('GET', `/v1/subscriptions/${subId}`); price = sub.items?.data?.[0]?.price?.id || null; periodEnd = periodEndOf(sub); }
-      if (!price) { const line = bestLine(o.lines?.data); price = line ? linePrice(line) : null; periodEnd = line?.period?.end ? line.period.end * 1000 : null; }
-      // the invoice's own id travels as `ref`: a held upgrade is completed only by the payment of the invoice its intent recorded
-      return { ...base, type: ev.type, customer, data: { ...NONE, price, periodEnd, familyId: details?.metadata?.familyId || o.metadata?.familyId || null, ref: typeof o.id === 'string' ? o.id : null } };
+      // the invoice's own lines are the fact — what was paid, for which period — never the subscription as Stripe holds it at
+      // delivery time: a retry after the price moved (a scheduled downgrade, an upgrade) must say what the first delivery said
+      // (Stage 4 review, third round). A proration invoice lists the old price (negative) and the new one (positive): bestLine.
+      const line = bestLine(o.lines?.data), price = line ? linePrice(line) : null, periodEnd = line?.period?.end ? line.period.end * 1000 : null;
+      // the invoice's own id travels as `ref` (a held upgrade is completed only by the payment of the invoice its intent recorded)
+      // and the subscription it bills as `subscriptionRef` (an invoice of another subscription of the customer is not this family's)
+      return { ...base, type: ev.type, customer, data: { ...NONE, price, periodEnd, familyId: details?.metadata?.familyId || o.metadata?.familyId || null, ref: typeof o.id === 'string' ? o.id : null, subscriptionRef: subId } };
     }
-    if (ev.type === 'customer.subscription.deleted') return { ...base, type: 'subscription.deleted', customer, data: { ...NONE, familyId: o.metadata?.familyId || null } };
+    if (ev.type === 'customer.subscription.deleted') return { ...base, type: 'subscription.deleted', customer, data: { ...NONE, familyId: o.metadata?.familyId || null, subscriptionRef: typeof o.id === 'string' ? o.id : null } };
     // refunds and disputes hang off a charge: the charge names the customer (a refund object carries none) and says whether it is now refunded in full
     const chargeOf = async () => {
       const chargeId = typeof o.charge === 'string' ? o.charge : o.charge?.id; if (!chargeId || typeof o.id !== 'string') fail(400, 'INVALID_REQUEST');

@@ -88,8 +88,12 @@ export function transition(sub, event, now) {
       // A renewal never undoes a cancellation the parent asked for: only cancel.undo or a fresh
       // intent (checkout / operator) clears it. The paid period is honoured; the operator refunds.
       const cancelAtPeriodEnd = event.authorized ? false : !!sub?.cancelAtPeriodEnd;
-      return { ...(sub || {}), plan: p.id, seats: p.seats, state: 'active', trialEndsAt: null, periodEnd: event.periodEnd, cancelAtPeriodEnd, failedAt: null, failures: 0, scheduled: null,
-        lastPaymentAt: now, startedAt: sub?.startedAt || now, updatedAt: now, version, provider: event.provider || sub?.provider || 'manual', providerRef: event.providerRef ?? sub?.providerRef ?? null };
+      // A scheduled change is applied by the renewal on its plan (or replaced by a fresh intent); a renewal on the plan the family
+      // is already on - a retried older invoice, a provider that has not moved the price yet - leaves it waiting for the next one.
+      const scheduled = event.authorized || !sub?.scheduled || sub.scheduled.plan === p.id ? null : { ...sub.scheduled, at: event.periodEnd };
+      return { ...(sub || {}), plan: p.id, seats: p.seats, state: 'active', trialEndsAt: null, periodEnd: event.periodEnd, cancelAtPeriodEnd, failedAt: null, failures: 0, scheduled,
+        lastPaymentAt: now, startedAt: sub?.startedAt || now, updatedAt: now, version, provider: event.provider || sub?.provider || 'manual', providerRef: event.providerRef ?? sub?.providerRef ?? null,
+        providerSubscriptionRef: event.subscriptionRef ?? sub?.providerSubscriptionRef ?? null }; // the provider's subscription this payment was for: events about another one are not this family's
     }
     case 'payment.failed':
       if (!['active', 'grace', 'past_due'].includes(state)) fail(409, 'INVALID_TRANSITION');
@@ -174,7 +178,7 @@ export class Subscriptions {
     }
     const result = { state: deriveState(sub, now), entitlement: entitlementFor(sub, now), activeChildIds, activated, deactivated };
     tx.set(evPath, { id: event.id, type: event.type, plan: event.plan || null, periodEnd: event.periodEnd || null, provider: event.provider || null, providerRef: event.providerRef || null,
-      seatChildIds: event.seatChildIds ? [...new Set(event.seatChildIds)].sort() : null, amountCents: event.amountCents ?? null, full: event.full === true, proration: event.proration || null, authorized: event.authorized === true, fingerprint, actor, at: now, result });
+      seatChildIds: event.seatChildIds ? [...new Set(event.seatChildIds)].sort() : null, amountCents: event.amountCents ?? null, full: event.full === true, proration: event.proration || null, authorized: event.authorized === true, subscriptionRef: event.subscriptionRef || null, fingerprint, actor, at: now, result });
     this.audit(tx, `billing.${event.type}`, actor, familyId);
     return result;
   }

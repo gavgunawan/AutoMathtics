@@ -40,6 +40,7 @@ when there is a finding. On staging it runs every night as the Cloud Run job `au
 | `CUSTOMER_MAPPING_MISSING`, `CUSTOMER_MAPPING_MISMATCH`, `ORPHAN_CUSTOMER`, `CUSTOMER_NOT_ON_FAMILY` | provider customer references and families do not point at each other | `customer PROVIDER REF`, `reconcile-provider`; the mapping is idempotency evidence, never edited |
 | `PAID_WITHOUT_CUSTOMER`, `SUBSCRIPTION_PERIOD_ABSURD` | a paid subscription with no provider reference, or a period end more than 400 days out | `reconcile-provider` |
 | `STALE_INTENT`, `LAPSED_AWAITING_PAYMENT`, `STALE_CHECKOUT`, `STALE_INFLIGHT_MARKER`, `CHECKOUT_MISSING` | open work older than it should be | `reconcile-intent`, `reconcile-provider`; a lapsed upgrade is superseded by the parent's next change |
+| `INBOX_WAITING_STALE` | a `requires_action` row older than a day: the parent action it waits for (a seat choice, a checkout) never came | `reprocess` after the parent acts, or `resolve-event` |
 | `DELETION_DUE`, `DELETION_STUCK` | a requested deletion past its date, or one that began and never finished | `delete FAMILY_UUID` (resumable) |
 | `RECOVERY_STUCK`, `RECOVERY_LAPSED` | a claimed recovery the provider never answered, or a request past its window | the parent retries (it resumes); nothing for the operator but to watch |
 | `TOMBSTONE_RESIDUE`, `DELETED_FAMILY_PROVIDER_LIVE` | a deleted family still has documents, sessions, or a live provider subscription | `delete FAMILY_UUID` again (resumable); cancel at the provider |
@@ -108,8 +109,9 @@ Card `4242 4242 4242 4242` pays, `4000 0000 0000 0341` attaches but fails on ren
    `family FAMILY_UUID` shows `active`, `reconcile-provider` matches.
 3. **Supersede**: start a second checkout before paying the first → the first session is expired at Stripe;
    paying it is impossible; the second completes.
-4. **Redelivery and order**: `stripe events resend EVENT_ID` twice → `replayed`; resend an older invoice
-   after a newer one → `ignored: STALE_EVENT`.
+4. **Redelivery and order**: `stripe events resend EVENT_ID` twice → `replayed`, also after a plan change in
+   between; resend an older invoice after a newer one → `ignored: STALE_EVENT`; refund an older charge after a
+   renewal → `applied` all the same (access ends).
 5. **Upgrade** through the app with 4242 → Stripe invoices the proration and charges it; the intent is
    `applied` with the subscription and invoice reference; `reconcile-provider` matches. Then **upgrade with
    a card that needs authentication** (`4000 0025 0000 3155`) → the app says the payment is not complete, the
