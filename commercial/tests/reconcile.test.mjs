@@ -224,3 +224,49 @@ test('a proration invoice with the old and the new price on separate lines resol
   assert.equal(bestLine([]), null);
   void payments;
 });
+test('a held upgrade completes only from its own invoice, through plan.change: a cancellation made while it waited stands, an unrelated paid invoice grants nothing, an ended subscription is not revived, and the provider agrees', async () => {
+  const r = rig(), { f, account, payments, support } = r, a = await f.family('parentA', 0); await subscribed(r, a, 'starter');
+  const opB = randomUUID(); account.state.upgradePayment = 'requires_action';
+  assert.equal((await payments.changePlan(a.ctx, { plan: 'family', operationId: opB })).pending, true);
+  const intent = await f.store.get(`billingChangeIntents/stripe:${opB}`); assert.match(intent.proration.invoiceRef, /^in_/); assert.equal(intent.proration.invoiceRef, account.state.pendingInvoice, 'the intent names the invoice Stripe opened');
+  // the parent cancels at the period end while the payment waits: locally and at Stripe
+  f.advance(1000); assert.equal((await payments.cancel(a.ctx, op())).entitlement.cancelAtPeriodEnd, true); assert.equal(account.state.sub.cancel_at_period_end, true);
+  const end = account.state.sub.current_period_end, cus = account.state.customer.id, subLink = { subscription_details: { subscription: 'sub_1' } };
+  const invoice = (id, lines) => event(f, 'invoice.paid', { object: 'invoice', id, customer: cus, parent: subLink, lines: { data: lines.map(([price, amount]) => ({ amount, price: { id: price }, period: { end } })) } });
+  // an unrelated paid invoice for this customer — a renewal on the current price — is a renewal and nothing more
+  f.advance(1000); const renewal = invoice('in_renewal', [[PRICES.starter, 500]]);
+  let s = signed(f, renewal), out = await payments.receive('stripe', s.raw, s.headers); assert.equal(out.status, 'applied'); assert.equal(out.upgrade, undefined);
+  let fam = await family(f, a.familyId); assert.equal(fam.subscription.plan, 'starter'); assert.equal(fam.subscription.cancelAtPeriodEnd, true, 'a renewal never undoes a cancellation');
+  assert.equal((await f.store.get(`billingChangeIntents/stripe:${opB}`)).status, 'awaiting_payment'); assert.equal((await f.store.get(`billingEvents/stripe:${renewal.id}`)).invoiceRef, 'in_renewal');
+  // a paid invoice that is not the intent's, even while Stripe shows the target price: not this upgrade — unauthorised, for the operator
+  account.state.sub.items.data[0].price.id = PRICES.family; f.advance(1000);
+  s = signed(f, invoice('in_other', [[PRICES.family, 400]])); out = await payments.receive('stripe', s.raw, s.headers); assert.equal(out.status, 'requires_action'); assert.equal(out.reason, 'PLAN_CHANGE_NOT_AUTHORIZED');
+  account.state.sub.items.data[0].price.id = PRICES.starter;
+  fam = await family(f, a.familyId); assert.equal(fam.subscription.plan, 'starter'); assert.equal((await f.store.get(`billingChangeIntents/stripe:${opB}`)).status, 'awaiting_payment');
+  // the intent's own invoice: Stripe applies the held update and sends its payment — the target plan and seats apply once, through plan.change, and the cancellation stands
+  const invoiceId = account.payPending(); f.advance(1000);
+  const paid = invoice(invoiceId, [[PRICES.starter, -300], [PRICES.family, 700]]);
+  s = signed(f, paid); out = await payments.receive('stripe', s.raw, s.headers); assert.equal(out.status, 'applied'); assert.equal(out.upgrade, opB);
+  fam = await family(f, a.familyId); assert.equal(fam.subscription.plan, 'family'); assert.equal(fam.subscription.seats, 4); assert.equal(fam.subscription.cancelAtPeriodEnd, true, 'the cancellation the parent asked for stands'); assert.equal(fam.subscription.periodEnd, end * 1000, 'a proration invoice renews nothing'); assert.equal(fam.billingIntent, null);
+  const row = await f.store.get(`families/${a.familyId}/billing/${out.eventId}`); assert.equal(row.type, 'plan.change'); assert.equal(row.plan, 'family'); assert.equal(row.authorized, false); assert.equal(row.proration.invoiceRef, invoiceId);
+  const applied = await f.store.get(`billingChangeIntents/stripe:${opB}`); assert.equal(applied.status, 'applied'); assert.equal(applied.appliedBy, paid.id); assert.equal(applied.result.kind, 'upgrade');
+  s = signed(f, paid); assert.equal((await payments.receive('stripe', s.raw, s.headers)).replayed, true, 'a redelivery applies nothing twice');
+  const check = await support.reconcileProvider(a.familyId, OPERATOR); assert.equal(check.match, true); assert.deepEqual(check.findings, []); assert.equal(check.local.cancelAtPeriodEnd, true); assert.equal(check.providers[0].subscription.cancelAtPeriodEnd, true); assert.equal(check.providers[0].subscription.plan, 'family');
+  // an ended subscription is not revived by the late payment of a held upgrade: the row is rejected and the intent left for the operator
+  const g = rig(), b = await g.f.family('parentB', 0); await subscribed(g, b, 'starter');
+  const opC = randomUUID(); g.account.state.upgradePayment = 'requires_action'; assert.equal((await g.payments.changePlan(b.ctx, { plan: 'family', operationId: opC })).pending, true);
+  g.f.advance(1000); g.account.state.charge = { id: 'ch_1', object: 'charge', customer: g.account.state.customer.id, amount: 500, amount_refunded: 500, refunded: true };
+  let t = signed(g.f, event(g.f, 'refund.created', { object: 'refund', id: 're_1', charge: 'ch_1', amount: 500, status: 'succeeded' }));
+  assert.equal((await g.payments.receive('stripe', t.raw, t.headers)).state, 'cancelled', 'a full refund ended access');
+  const lateId = g.account.payPending(); g.f.advance(1000);
+  t = signed(g.f, event(g.f, 'invoice.paid', { object: 'invoice', id: lateId, customer: g.account.state.customer.id, parent: subLink, lines: { data: [{ amount: 400, price: { id: PRICES.family }, period: { end: g.account.state.sub.current_period_end } }] } }));
+  const late = await g.payments.receive('stripe', t.raw, t.headers); assert.equal(late.status, 'rejected'); assert.equal(late.reason, 'INVALID_TRANSITION');
+  const gone = await family(g.f, b.familyId); assert.equal(gone.subscription.state, 'cancelled'); assert.equal(gone.subscription.plan, 'starter'); assert.equal((await g.f.store.get(`billingChangeIntents/stripe:${opC}`)).status, 'awaiting_payment', 'left for the operator');
+  // the intent's invoice paid, but Stripe's subscription on some other price: the operator decides
+  const h = rig(), c = await h.f.family('parentC', 0); await subscribed(h, c, 'starter');
+  const opD = randomUUID(); h.account.state.upgradePayment = 'requires_action'; assert.equal((await h.payments.changePlan(c.ctx, { plan: 'family', operationId: opD })).pending, true);
+  const dId = h.account.payPending(); h.account.state.sub.items.data[0].price.id = PRICES.big; h.f.advance(1000);
+  t = signed(h.f, event(h.f, 'invoice.paid', { object: 'invoice', id: dId, customer: h.account.state.customer.id, parent: subLink, lines: { data: [{ amount: 900, price: { id: PRICES.big }, period: { end: h.account.state.sub.current_period_end } }] } }));
+  const odd = await h.payments.receive('stripe', t.raw, t.headers); assert.equal(odd.status, 'rejected'); assert.equal(odd.reason, 'UPGRADE_PLAN_MISMATCH');
+  assert.equal((await family(h.f, c.familyId)).subscription.plan, 'starter'); assert.equal((await h.f.store.get(`billingChangeIntents/stripe:${opD}`)).status, 'awaiting_payment');
+});

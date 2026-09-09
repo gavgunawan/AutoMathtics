@@ -8,3 +8,5 @@ node_modules
 firebase-debug.log
 firestore-debug.log
 .gcloudignore
+# the SMS ladder function deploys through the Firebase CLI, never inside the Cloud Run build context
+functions

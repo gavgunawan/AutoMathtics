@@ -48,6 +48,9 @@ not its display name. Do not use `automathtics`; the server explicitly rejects i
   not accepted. Under Authentication > Settings > SMS region policy allow only the
   countries your parents live in, so nobody elsewhere can run up SMS charges; set
   a daily SMS quota; add your own numbers as test numbers while you try things out.
+  The app adds its own resend ladder on top (section 5, block F): one code at once,
+  then 2 minutes, 15 minutes, 1 hour, 6 hours and 12 hours before the next ones,
+  and a day before the seventh.
 - In Authentication settings, authorize `YOUR_PROJECT_ID.web.app` and
   `YOUR_PROJECT_ID.firebaseapp.com`; configure email templates, an enforced
   password policy (12+ characters) and email-enumeration protection.
@@ -229,6 +232,23 @@ with `scripts/cloudshell/05-sweep-job.sh`: a Cloud Run job from the same image r
 `node scripts/support.mjs sweep` under the runtime account, triggered by Cloud Scheduler at 03:15
 Singapore time. Both are inside the free tiers at pilot scale; a failed job is the alert.
 
+Then the SMS resend ladder (`scripts/cloudshell/06-sms-ladder.sh`, block F): an Identity Platform
+*blocking function* (`functions/index.js`, Cloud Functions 2nd gen, inside the free tier at pilot scale)
+that the provider consults before every verification SMS — a parent enrolling a mobile, the second
+factor at sign-in — and that refuses while the number is on a rung it has not waited out: 2 minutes
+after the first code, then 15 minutes, 1 hour, 6 hours, 12 hours, and a day before the seventh; a day
+without a code to that number starts the ladder over (`functions/ladder.mjs`). The record
+(`smsLadder/{hmac}`) holds timestamps under an HMAC of the number (secret `AM_V3_SMS_PEPPER`), never
+the number, and expires by TTL after two days. The block creates the secret, the TTL policy and
+`functions/.env.PROJECT_ID` (the runtime account the function runs as), deploys the function with the
+Firebase CLI — which registers it under Authentication → Settings → Blocking functions → *Before SMS
+is sent* — and prints that registration. The browser shows "Try again in …" when the provider refuses.
+The provider's own SMS quota and the region policy (section 2) still apply underneath.
+
+```bash
+source <(curl -fsSL https://raw.githubusercontent.com/gavgunawan/AutoMathtics/release/v3.0/commercial/scripts/cloudshell/06-sms-ladder.sh)
+```
+
 This helper verifies the new project and secret metadata, runs unit and emulator
 tests, deploys deny-all client Firestore rules, builds/deploys Cloud Run, then deploys
 Firebase Hosting. The service is `automathtics-v3` in `asia-southeast1`.
@@ -293,4 +313,5 @@ The existing v2 site is unaffected throughout.
 - Cloud Run with Hosting: https://firebase.google.com/docs/hosting/cloud-run
 - Source deploy/IAM: https://cloud.google.com/run/docs/deploying-source-code
 - SMS MFA and authorized domains: https://firebase.google.com/docs/auth/web/multi-factor
+- Blocking functions (Identity Platform), including *before SMS is sent*: https://cloud.google.com/identity-platform/docs/blocking-functions
 - Cookie forwarding: https://firebase.google.com/docs/hosting/manage-cache
