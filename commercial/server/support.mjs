@@ -181,6 +181,8 @@ export class Support {
     const audit = (await this.store.list('audit')).filter((a) => a.familyId === familyId).sort((a, b) => a.at - b.at).map((a) => ({ action: a.action, uid: a.uid, at: a.at, childId: a.childId || null }));
     const reconciliations = (await this.store.list('billingReconciliations')).filter((r) => r.familyId === familyId);
     const providerChecks = reconciliations.filter((r) => r.kind === 'provider_state').sort((a, b) => b.at - a.at);
+    const members = family.deleted ? [] : await this.store.entries(`families/${familyId}/members`), recoveries = []; // Stage 4.4: the parents' recovery requests
+    for (const [uid] of members) { const r = await this.store.get(`recoveries/${uid}`); if (r) recoveries.push({ uid, status: r.status, requestedAt: r.requestedAt, readyAt: r.readyAt, cancelledBy: r.cancelledBy || null }); }
     const sub = family.subscription || null;
     const attention = {
       requiresAction: inbox.filter((e) => e.outcome?.status === 'requires_action').length,
@@ -192,10 +194,11 @@ export class Support {
       inFlight: family.billingIntent || null, liveCheckout: family.checkoutIntent || null,
       ledgerDamaged: children.filter((c) => c.ledger?.damaged).map((c) => c.id), ledgerDrift: children.filter((c) => c.ledger && !c.ledger.match && !c.ledger.damaged).map((c) => c.id),
       deletion: family.deletion || null, deleted: family.deleted === true,
+      pendingRecoveries: recoveries.filter((r) => r.status === 'pending').map((r) => r.uid),
     };
     return { familyId, deleted: family.deleted === true, label: family.deleted ? null : family.label, createdAt: family.createdAt, phoneKey: family.phoneKey || null, timeZone: family.timeZone || null,
       entitlement: effectiveEntitlement(family, now), subscription: sub ? { ...sub, state: deriveState(sub, now) } : null, manualGrant: family.entitlement || null,
-      children, customers, inbox, intents, checkouts, billing, reconciliations, audit, attention };
+      children, customers, inbox, intents, checkouts, billing, reconciliations, recoveries, audit, attention };
   }
   /** Provider customer reference → family. */
   async customerLookup(provider, ref) {
@@ -227,6 +230,18 @@ export class Support {
       this.audit(tx, 'support.reprocess', operator, familyId, { operationId: id, results: results.map((r) => `${r.id}:${r.status}`) });
     });
     return results;
+  }
+  /** Stage 4.4: the operator's only recovery verb — protective and audited; nothing here removes a factor or completes a request (RECOVERY.md). */
+  async cancelRecovery(uid, operator, note) {
+    text(uid, 1, 128); this.operator(operator); text(note, 1, 500);
+    return this.store.transaction(async (tx) => {
+      const rec = await tx.get(`recoveries/${uid}`); if (!rec) fail(404, 'RECOVERY_NOT_FOUND');
+      if (rec.status !== 'pending') fail(409, 'RECOVERY_NOT_PENDING');
+      const parent = await tx.get(`parents/${uid}`), next = { ...rec, status: 'cancelled_by_operator', cancelledAt: this.now(), cancelledBy: operator, note };
+      tx.set(`recoveries/${uid}`, next);
+      this.audit(tx, 'support.recovery_cancelled', operator, parent?.familyId || null);
+      return next;
+    });
   }
   /**
    * Stage 4.2: the provider's truth against the family's record, read-only at the provider, one

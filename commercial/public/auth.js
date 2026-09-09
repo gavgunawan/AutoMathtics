@@ -25,7 +25,7 @@ export async function signIn(email, password) {
     resolver = sdk.getMultiFactorResolver(auth, error);
     const hint = resolver.hints.find((h) => h.factorId === sdk.PhoneMultiFactorGenerator.FACTOR_ID);
     if (!hint) throw Error('A verified mobile factor is required.');
-    return { stage: 'challenge', phone: hint.phoneNumber };
+    return { stage: 'challenge', phone: hint.phoneNumber, email };
   }
 }
 export async function signUp(email, password) {
