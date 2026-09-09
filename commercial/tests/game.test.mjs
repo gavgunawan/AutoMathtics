@@ -27,7 +27,7 @@ test('game shop is server-priced, idempotent, auto-equips normal buys and makes 
   const crate = await f.game.buy(k.childCtx, { itemId: 'crate', operationId: randomUUID() });
   assert.ok(crate.awarded); assert.ok(['outfit', 'shout', 'timer', 'title', 'namefx', 'map'].includes(crate.awarded.kind));
   assert.ok(crate.wallet.inventory.includes(crate.awarded.id)); assert.equal(crate.wallet.gc, 4200);
-  const log = [...f.store.data.entries()].find(([p]) => p.includes('/ledger/') && p.endsWith(op)); assert.ok(log); assert.equal(log[1].amount, -500);
+  const log = [...f.store.data.entries()].find(([p]) => p.includes('/ledger/') && p.endsWith(op)); assert.ok(log); assert.equal(log[1].gc, -500); assert.equal(log[1].balance.gc, 4500); // Stage 3.1 ledger row
 });
 
 test('equipping requires ownership and cannot use a mismatched slot', async () => {

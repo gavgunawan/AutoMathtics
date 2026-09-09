@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { fail, object, uuid } from './security.mjs';
 import { TRACKS, LEVELS, GC_PASS, RP_PASS, PAPERS_PER_LEVEL, PAPERS_PER_SESSION, normalizeProgress, trk, withTrk, trackDone, bossDue, settleJumps, nextRun, buildQuestions, buildScanQuestions, grade, answerText, bonusesFor, dayISO, weekISO, scanState } from './progress.mjs';
 import { applyGameDerived, heatmap } from './game.mjs';
+import { entry, post } from './ledger.mjs';
 
 const MINUTE = 60_000, HOUR = 60 * MINUTE;
 const SESSION_LIFE = 2 * HOUR;
@@ -43,13 +44,16 @@ export class Learning {
     object(body, ['track', 'mode']); let track = body.track; if (!TRACKS.includes(track)) fail(400, 'INVALID_REQUEST');
     const requestedMode = body.mode === undefined || body.mode === null ? null : body.mode;
     if (requestedMode !== null && requestedMode !== 'scan') fail(400, 'INVALID_REQUEST'); if (requestedMode === 'scan') track = 'engine';
-    const id = randomUUID();
+    const id = randomUUID(), shieldRowId = randomUUID();
     return this.store.transaction(async (tx) => {
       const { p, prog: original, s, family } = await this.child(tx, ctx); const active = original.activeSession ? await tx.get(p.session(original.activeSession)) : null;
       if (active && active.status === 'active' && this.now() < active.createdAt + SESSION_LIFE)
         return { session: this.publicSession(active), question: this.publicQuestion(active, active.index), resumed: true };
       const commitRate = await this.foundation.rateIn(tx, `learning-start:${s.familyId}:${s.childId}`, 20, HOUR);
-      const tz = family.timeZone || DEFAULT_TIME_ZONE; const derived = applyGameDerived(original, this.now(), tz); const prog = derived.progress;
+      const tz = family.timeZone || DEFAULT_TIME_ZONE; const derived = applyGameDerived(original, this.now(), tz); let prog = derived.progress;
+      // A streak shield bridging yesterday may have paid a bonus block; that money enters through the ledger, not by mutation.
+      const shieldGc = prog.wallet.gc - original.wallet.gc, shieldRp = prog.wallet.rp - original.wallet.rp;
+      if (shieldGc || shieldRp) prog = post(tx, p.doc, { ...prog, wallet: { ...prog.wallet, gc: original.wallet.gc, rp: original.wallet.rp } }, entry({ id: shieldRowId, type: 'streak.shield', gc: shieldGc, rp: shieldRp, at: this.now() }));
       let run, questions;
       if (requestedMode === 'scan') {
         const state = scanState(prog, this.now(), tz); if (!state.available) fail(409, state.unlocked ? 'SCAN_ALREADY_DONE' : 'SCAN_LOCKED');
@@ -72,7 +76,16 @@ export class Learning {
       const secs = Math.max(0, Math.round((now - sess.askedAt) / 1000)); const result = now > sess.askedAt + q.seconds * 1000 + GRACE_MS ? 'timeout' : graded;
       const next = { ...sess, results: [...sess.results, { r: result, secs, tier: q.tier, level: q.level, track: q.track || sess.track, allowed: q.seconds }], index: sess.index + 1, askedAt: now };
       const done = next.index >= next.questions.length, response = { result, correct: result === 'correct', expected: answerText(q), index: sess.index };
-      if (done) { const { progress, summary } = this.finish(prog, next, now, family.timeZone || DEFAULT_TIME_ZONE); next.status = 'done'; next.finishedAt = now; tx.set(p.doc, progress); response.done = true; response.summary = summary; }
+      if (done) {
+        const { progress, summary } = this.finish(prog, next, now, family.timeZone || DEFAULT_TIME_ZONE);
+        // finish() is pure; whatever it awarded (pass, bonus, shield) becomes one ledger row keyed by the session id.
+        let final = { ...progress, wallet: { ...progress.wallet, gc: prog.wallet.gc, rp: prog.wallet.rp } };
+        if (summary.gcEarned || summary.rpEarned) {
+          final = post(tx, p.doc, final, entry({ id: sess.id, type: sess.mode === 'scan' ? 'learn.scan' : sess.mode === 'boss' ? 'learn.checkpoint' : 'learn.session', gc: summary.gcEarned, rp: summary.rpEarned, ref: sess.id, note: summary.papers, at: now }));
+        }
+        summary.wallet = final.wallet;
+        next.status = 'done'; next.finishedAt = now; tx.set(p.doc, final); response.done = true; response.summary = summary;
+      }
       else response.question = this.publicQuestion(next, next.index);
       next.lastAttempt = { id: body.attemptId, response }; tx.set(p.session(sess.id), next); return response;
     });

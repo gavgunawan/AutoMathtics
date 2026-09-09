@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { fail, uuid, text } from './security.mjs';
 import { GC_PASS, RP_PASS, LEVELS, PAPERS_PER_LEVEL, Q_PER_PAPER, EQUIP_SLOTS, freshProgress, normalizeWallet, bonusesFor } from './progress.mjs';
 import { SHOP_ITEMS } from './game.mjs';
+import { entry, post } from './ledger.mjs';
 
 const KNOWN_ITEMS = new Set(SHOP_ITEMS.map((x) => x.id));
 const str = (v, max = 80) => (typeof v === 'string' ? v.slice(0, max) : '');
@@ -84,7 +85,11 @@ export async function importLearning(store, { familyId, childId, record, actor, 
     if (!family || !child || !family.childIds.includes(childId)) fail(404, 'CHILD_NOT_FOUND');
     if (child.status !== 'active') fail(409, 'CHILD_INACTIVE');
     if (existing) fail(409, 'ALREADY_HAS_PROGRESS'); // never merge, never overwrite — an operator deletes by hand if it was wrong
-    tx.set(`families/${familyId}/learning/${childId}`, doc);
+    // The carried balance is the ledger's opening row, so the child's ledger derives to the wallet from day one.
+    const base = `families/${familyId}/learning/${childId}`;
+    const opened = post(tx, base, { ...doc, wallet: { ...doc.wallet, gc: 0, rp: 0, ledgerSeq: 0, ledgerLast: null } },
+      entry({ id: 'migrate-opening', type: 'migrate.opening', gc: doc.wallet.gc, rp: doc.wallet.rp, note: 'carried from v2', at: now }));
+    tx.set(base, opened);
     tx.set(`audit/${randomUUID()}`, { action: 'learning.migrated', familyId, childId, actor, reason, at: now, expireAt: now + 400 * DAY,
       summary: { rows: summary.rows, kept: summary.kept, passes: summary.passes, gc: summary.gc, rp: summary.rp, engine: `${LEVELS[doc.engine.level].id}${doc.engine.paper}`, nav: `${LEVELS[doc.nav.level].id}${doc.nav.paper}` } });
     return summary;
