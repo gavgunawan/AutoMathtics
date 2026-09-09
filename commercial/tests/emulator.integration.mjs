@@ -283,16 +283,23 @@ test('real Firestore: a requested deletion removes the people and the game and l
   const started = await learning.start(childCtx, { track: 'nav' }); assert.ok(started.session.id);
   // a long history: 520 ledger rows, more than one Firestore transaction may write
   for (let start = 0; start < 520; start += 400) { const b = db.batch(); for (let i = start; i < Math.min(520, start + 400); i++) b.set(db.doc(`families/${fam.id}/learning/${child.id}/ledger/row-${i}`), { id: `row-${i}`, seq: i + 1, gc: 1, rp: 0, type: 'parent.adjust', at: Date.now(), balance: { gc: i + 1, rp: 0 } }); await b.commit(); }
-  // the process dies right after the begin transaction (terminate = 1, begin = 2, the first sweep = 3)
-  const orig = store.transaction.bind(store); let k = 0; store.transaction = (fn, o) => { k++; if (k === 3) { store.transaction = orig; return Promise.reject(Error('crash')); } return orig(fn, o); };
+  // the process dies right after the freeze, before the terminate (freeze = 1, terminate = 2)
+  const orig = store.transaction.bind(store); let k = 0; store.transaction = (fn, o) => { k++; if (k === 2) { store.transaction = orig; return Promise.reject(Error('crash')); } return orig(fn, o); };
   await assert.rejects(support.executeDeletion(fam.id, { operator: 'emulator-operator', force: true }), /crash/);
   const mid = (await db.doc(`families/${fam.id}`).get()).data(); assert.equal(mid.deletion.status, 'executing'); assert.equal(mid.deleted, undefined);
+  assert.equal(mid.subscription.state, 'active', 'frozen before the terminate: the subscription is still on record');
+  const gapEvent = { id: `evt_${randomUUID()}`, type: 'invoice.paid', at: Date.now(), customer: co.customerRef, data: { price: 'price_fake_starter', periodEnd: Date.now() + 60 * 86_400_000 } };
+  const gapRaw = Buffer.from(JSON.stringify(gapEvent));
+  assert.deepEqual(await payments.receive('fake', gapRaw, { 'x-webhook-signature': signWebhook(webhookSecret, gapRaw, Date.now()) }), { status: 'reconciliation_required', reason: 'FAMILY_DELETED' }, 'a renewal in the gap is recorded, never applied');
+  assert.equal((await db.doc(`families/${fam.id}`).get()).data().subscription.version, mid.subscription.version);
   await assert.rejects(learning.start(childCtx, { track: 'engine' }), rejected('FAMILY_DELETED'), 'Blocker 1: no Stage 2 write lands while the deletion runs');
   await assert.rejects(service.me(childCtx), rejected('FAMILY_DELETED'), 'the live child session is refused too (the parent session was retired by the handover)');
   assert.equal((await db.doc(`families/${fam.id}/learning/${child.id}`).get()).exists, true, 'nothing destroyed before the freeze');
   const record = await support.executeDeletion(fam.id, { operator: 'emulator-operator' }); // resumed
   assert.equal(record.counts.children, 1); assert.equal(record.counts.sessions, 1); assert.equal(record.counts.ledgerRows, 520); assert.equal(record.forced, true); assert.equal(record.executionId, mid.deletion.executionId);
   assert.equal((await db.collection(`families/${fam.id}/learning/${child.id}/ledger`).get()).size, 0, 'Blocker 2: 520 rows went in bounded batches');
+  assert.equal((await db.collection('sessions').where('familyId', '==', fam.id).get()).size, 0, 'no family session survives');
+  assert.equal((await db.collection('sessions').where('uid', '==', p.uid).get()).size, 0, 'no parent session survives');
   assert.equal((await db.doc(`families/${fam.id}/children/${child.id}`).get()).exists, false);
   assert.equal((await db.doc(`families/${fam.id}/credentials/${child.id}`).get()).exists, false);
   assert.equal((await db.doc(`families/${fam.id}/learning/${child.id}`).get()).exists, false);

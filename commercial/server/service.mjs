@@ -106,8 +106,11 @@ export class Foundation {
       const path = `parents/${who.uid}`;
       const parent = await tx.get(path);
       const old = oldKey ? await tx.get(`sessions/${oldKey}`) : null;
+      const family = parent?.familyId ? await tx.get(`families/${parent.familyId}`) : null;
       // Also blocks a copied pre-handover ID token presented with a new cookie.
       if (parent && who.authTime <= (parent.reauthAfter || 0)) fail(403, 'REAUTHENTICATE');
+      // Stage 3.5: a family being deleted, or deleted, gets no new session at all — the sweep must find none (after the tombstone the parent record points at no family, so a returning parent signs in and starts fresh)
+      if (family && (family.deleted === true || family.deletion?.status === 'executing')) fail(403, 'FAMILY_DELETED');
       const s = { ...who, familyId: parent?.familyId || null, role: 'parent', childId: null,
         csrf: randomToken(), createdAt: this.now(), expiresAt: this.now() + 30 * MINUTE, expireAt: this.now() + 30 * MINUTE };
       if (!parent) tx.set(path, { familyId: null, reauthAfter: 0, createdAt: this.now(), phoneKey });

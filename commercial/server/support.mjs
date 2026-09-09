@@ -232,21 +232,20 @@ export class Support {
    */
   async executeDeletion(familyId, { operator, force = false, batch = DELETION_BATCH } = {}) {
     uuid(familyId); this.operator(operator);
-    const family0 = await this.store.get(`families/${familyId}`);
-    if (!family0) fail(404, 'FAMILY_NOT_FOUND');
-    if (family0.deleted) return await this.store.get(`deletions/${familyId}`);
-    if (!family0.deletion) fail(409, 'NO_DELETION_PENDING');
-    if (family0.deletion.status !== 'executing' && family0.deletion.effectiveAt > this.now() && force !== true) fail(409, 'DELETION_NOT_DUE');
-    // the subscription ends first, as a financial event the records keep (Stage 4's adapter tells the provider); a rerun finds it already ended
-    if (family0.subscription && ACCESS.has(deriveState(family0.subscription, this.now()))) await this.billing.apply(familyId, { id: randomUUID(), type: 'terminate' }, operator);
-    // phase 0 — begin, atomically
+    // phase 0 — validate, then freeze, in the FIRST mutating transaction. Nothing has moved when this
+    // commits: no subscription event, no sweep. From here authorize() and login() admit nobody and a
+    // payment event is recorded for reconciliation, so a crash at any later point leaves a frozen,
+    // resumable family — never a terminated-but-usable one.
     const family = await this.store.transaction(async (tx) => {
       const f = await tx.get(`families/${familyId}`);
-      if (!f || f.deleted) return f;
-      if (f.deletion?.status === 'executing') return f; // resuming
+      if (!f) fail(404, 'FAMILY_NOT_FOUND');
+      if (f.deleted) return f;
+      if (!f.deletion) fail(409, 'NO_DELETION_PENDING');
+      if (f.deletion.status === 'executing') return f; // resuming
+      if (f.deletion.effectiveAt > this.now() && force !== true) fail(409, 'DELETION_NOT_DUE');
       const now = this.now();
       const checkouts = []; for (const [provider, id] of Object.entries(f.checkoutIntent || {})) if (id) checkouts.push([`checkouts/${provider}:${id}`, await tx.get(`checkouts/${provider}:${id}`)]);
-      const intents = (await tx.entries('billingChangeIntents')).filter(([, i]) => i.familyId === familyId && i.status === 'creating');
+      const intents = (await tx.query('billingChangeIntents', 'familyId', familyId, 100)).filter(([, i]) => i.status === 'creating'); // family-scoped lookup, not a collection scan
       const deletion = { ...f.deletion, status: 'executing', executionId: randomUUID(), startedAt: now, executedBy: operator, forced: force === true, phase: 'begun', counts: {} };
       const next = { ...f, deletion, billingIntent: null, checkoutIntent: null };
       tx.set(`families/${familyId}`, next);
@@ -255,8 +254,10 @@ export class Support {
       this.audit(tx, 'family.deletion_started', operator, familyId, { executionId: deletion.executionId, forced: force === true });
       return next;
     });
-    if (!family || family.deleted) return await this.store.get(`deletions/${familyId}`);
-    // phase 1 — login sessions of the family and of its parents (nobody could use them: authorize refuses an executing family)
+    if (family.deleted) return await this.store.get(`deletions/${familyId}`);
+    // phase 0b — the subscription ends as a recorded financial event, now that nothing can revive it (a rerun finds it ended)
+    if (family.subscription && ACCESS.has(deriveState(family.subscription, this.now()))) await this.billing.apply(familyId, { id: randomUUID(), type: 'terminate' }, operator);
+    // phase 1 — login sessions of the family and of its parents (nobody could use them: authorize and login refuse an executing family)
     const members = await this.store.entries(`families/${familyId}/members`), uids = members.map(([uid]) => uid);
     await this.sweepWhere('sessions', 'familyId', familyId, batch, familyId, 'loginSessions');
     for (const uid of uids) await this.sweepWhere('sessions', 'uid', uid, batch, familyId, 'loginSessions');
