@@ -22,6 +22,12 @@ every week and the same child would keep progressing for nothing.
    the Family Rocket arrives it pools within one family only).
 6. **The parent workspace shows progress but cannot set it.** There is no parent route that writes
    papers, crowns or coins. Operator adjustments, if ever needed, are CLI-only like `grant.mjs`.
+7. **The one exception is the one-off v2 import** (`scripts/migrate-v2.mjs` → `server/migrate.mjs`),
+   used to bring the owner's own children over from the old game. It is CLI-only with the same
+   project guards as the grant tool, takes the v2 record as a file (it never connects to the v2
+   project), refuses a child who already has any progress (`ALREADY_HAS_PROGRESS`), never merges,
+   writes an audit row, and is a dry run unless `CONFIRM_MIGRATION=write`. Tested in
+   `tests/migrate.test.mjs`.
 
 ## The one thing a fresh account cannot fake: the verified phone
 
