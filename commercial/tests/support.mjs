@@ -3,6 +3,7 @@ import { Foundation, grantEntitlement } from '../server/service.mjs';
 import { FirebaseIdentity } from '../server/firebase.mjs';
 import { Learning } from '../server/learning.mjs';
 import { Game } from '../server/game.mjs';
+import { Subscriptions } from '../server/subscription.mjs';
 import { mac } from '../server/security.mjs';
 
 // Firestore rejects `undefined` values and arrays nested directly inside arrays; fail the same way
@@ -53,6 +54,7 @@ export function fixture() {
   const service = new Foundation({ store, identity, hasher: fakeHasher, secret, now: () => clock });
   const learning = new Learning({ foundation: service, store, now: () => clock });
   const game = new Game({ foundation: service, store, now: () => clock, pickIndex: () => 0 });
+  const billing = new Subscriptions({ foundation: service, store, now: () => clock });
   function token(uid, patch = {}) {
     if (!users.has(uid)) users.set(uid, { uid, email: `${uid}@example.test`, emailVerified: true, disabled: false,
       tokensValidAfterTime: new Date(0).toUTCString(), multiFactor: { enrolledFactors: [{ uid: `mfa-${uid}`, factorId: 'phone', phoneNumber: `+65${String(Math.abs([...uid].reduce((h, c) => (h * 31 + c.charCodeAt(0)) | 0, 7)) % 1e8).padStart(8, '0')}` }] } }); // a distinct fake number per uid
@@ -82,7 +84,7 @@ export function fixture() {
     const childCtx = await service.authenticate(await service.selectChild(selCtx, kid.id, '763829'));
     return { p, child: kid, selCtx, childCtx };
   }
-  return { service, learning, game, store, identity, users, tokens, auth, token, login, family, child, childSession, now: () => clock, advance: (ms) => { clock += ms; } };
+  return { service, learning, game, billing, store, identity, users, tokens, auth, token, login, family, child, childSession, now: () => clock, advance: (ms) => { clock += ms; } };
 }
 export const rejected = (code) => (err) => err.code === code;
 // the answer the server holds, in the shape the browser would send — and a nearby wrong one

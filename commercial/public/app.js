@@ -13,6 +13,8 @@ const messages = {
   INCORRECT_PIN: 'That PIN did not match.', REAUTHENTICATE: 'Please sign in again for this parent action.',
   SIGN_IN_REQUIRED: 'Please sign in.', PARENT_REQUIRED: 'Return to parent sign-in to manage your family.',
   CHILD_SESSION_REVOKED: 'The child PIN changed. Select the child and enter the new PIN.',
+  TRIAL_ALREADY_USED: 'A free trial has already been used with this mobile number.', TRIAL_REQUIRES_VERIFIED_PHONE: 'A verified mobile number is needed for the free trial.',
+  SUBSCRIPTION_EXISTS: 'This family already has a subscription.', NO_SUBSCRIPTION: 'There is no subscription to change.', INVALID_TRANSITION: 'That change is not possible in the current state.',
   INSUFFICIENT_GRID_COINS: 'Not enough Grid Coins yet.', INSUFFICIENT_REWARD_POINTS: 'Not enough Reward Points yet.',
   ITEM_ALREADY_OWNED: 'You already own that item.', SHIELD_LIMIT: 'You can hold at most two streak shields.',
   EGG_ALREADY_WARMING: 'Your Mystery Egg is already warming.', REWARD_DAILY_LIMIT: 'That reward has reached its daily limit.',
@@ -199,14 +201,27 @@ function cards(children, action) {
   return grid;
 }
 function parentScreen() {
-  const family = model.family, e = family.entitlement;
+  const family = model.family, e = family.entitlement || { status: 'inactive', seatLimit: 0, accessUntil: 0 };
   const active = e.status === 'active' && e.accessUntil > Date.now(); // Display only; API is authoritative.
   const box = panel('PARENT WORKSPACE', family.label, 'Manage your children here. Hand over the device to remove parent access.');
   const summary = el('div', null, 'allowance');
+  const STATE = { trial: 'FREE TRIAL', active: 'SUBSCRIBED', grace: 'RENEWAL DUE', past_due: 'PAYMENT OVERDUE', cancelled: 'CANCELLED', expired: 'EXPIRED' };
   summary.append(el('strong', `${family.activeCount} / ${e.seatLimit}`, 'count'), el('span', 'child slots in use'),
-    el('span', active ? 'PILOT ACCESS ACTIVE' : 'AWAITING PILOT ACTIVATION', active ? 'badge' : 'badge pending'));
+    el('span', e.state ? STATE[e.state] || e.state : (active ? 'PILOT ACCESS ACTIVE' : 'AWAITING ACTIVATION'), active ? 'badge' : 'badge pending'));
   box.append(summary, cards(family.children));
-  if (!active) box.append(el('p', 'Your parent account is ready. The pilot operator must activate a child allowance on the server. There is no payment or self-activation button in this build.', 'notice'));
+  if (e.state) { // a subscription: what it is and when it turns (dates are the server's; the browser only shows them)
+    const when = e.accessUntil ? new Date(e.accessUntil).toLocaleDateString() : null;
+    const line = e.state === 'trial' ? `${e.planName}${e.cancelAtPeriodEnd ? ', ending' : ', ends'} ${when}. Subscribe before then to keep going.`
+      : e.state === 'active' ? `${e.planName} plan, ${e.seatLimit} child slots. ${e.cancelAtPeriodEnd ? `Ends ${when}.` : `Renews ${when}.`}`
+      : e.state === 'grace' ? `${e.planName} plan. The renewal payment has not arrived; access continues until ${when}.`
+      : e.state === 'past_due' ? `${e.planName} plan. Access is paused until a payment goes through.`
+      : e.state === 'cancelled' ? 'The subscription has ended. Subscribe again to reopen the grid.' : 'The subscription expired. Subscribe again to reopen the grid.';
+    box.append(el('p', line, 'notice'));
+    if (['trial', 'active', 'grace'].includes(e.state)) box.append(button(e.cancelAtPeriodEnd ? 'Keep my subscription' : 'Cancel at the end of the period', async () => { await api('/billing/cancel', { undo: e.cancelAtPeriodEnd }); await refresh(); }, 'text-button'));
+  } else if (!active) {
+    box.append(el('p', 'Your parent account is ready. Start the free trial to open child slots, or ask the pilot operator to activate them.', 'notice'),
+      button('Start the 7-day free trial', async () => { await api('/billing/trial', {}); note('Trial started.'); await refresh(); }, 'primary'));
+  }
   const row = el('div', null, 'actions');
   if (active && family.activeCount < e.seatLimit) row.append(button('Add a child', addChildScreen, 'primary'));
   if (family.children.length) row.append(button('Hand over to kids', async () => {
