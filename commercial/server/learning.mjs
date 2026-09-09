@@ -133,21 +133,26 @@ export class Learning {
     let np = { ...prog, activeSession: null, history: [row, ...prog.history].slice(0, HISTORY_MAX),
       stats: { sessions: (prog.stats?.sessions || 0) + 1, passes: (prog.stats?.passes || 0) + (passed ? 1 : 0) }, wallet: { ...prog.wallet } };
     let gcEarned = 0, rpEarned = 0, jumped = [];
+    // A finished sector's practice runs are unpaid and count for no streak: passing the same papers
+    // again while the other track catches up must not become a way to farm coins.
+    const rewarded = passed && sess.mode !== 'practice';
     if (passed) {
-      const mult = sess.mode === 'boss' ? 2 : 1;
-      gcEarned += GC_PASS * mult; rpEarned += RP_PASS * mult;
       const cur = trk(np, sess.track);
       if (sess.mode === 'boss') np = withTrk(np, sess.track, { bossCleared: Math.min(5, cur.bossCleared + 1) });
       else if (sess.mode === 'paper') np = withTrk(np, sess.track, { paper: Math.min(sess.startPaper + PAPERS_PER_SESSION, PAPERS_PER_LEVEL + 1) });
+      const settled = settleJumps(np); np = settled.p; jumped = settled.jumped;
+    }
+    if (rewarded) {
+      const mult = sess.mode === 'boss' ? 2 : 1;
+      gcEarned += GC_PASS * mult; rpEarned += RP_PASS * mult;
       const passDays = [...new Set([...(prog.passDays || []), date])].sort().slice(-PASS_DAYS_MAX);
       const bonuses = bonusesFor(passDays);
       const newBonuses = Math.max(0, bonuses - (prog.wallet.bonuses || 0));
       gcEarned += newBonuses * GC_PASS; rpEarned += newBonuses * RP_PASS;
       np.passDays = passDays; np.wallet.bonuses = bonuses;
-      const settled = settleJumps(np); np = settled.p; jumped = settled.jumped;
     }
     np.wallet.gc = (prog.wallet.gc || 0) + gcEarned; np.wallet.rp = (prog.wallet.rp || 0) + rpEarned;
-    const summary = { passed, correct, incorrect, timeout, total, gcEarned, rpEarned, wallet: np.wallet, track: sess.track, mode: sess.mode, papers: row.papers,
+    const summary = { passed, rewarded, correct, incorrect, timeout, total, gcEarned, rpEarned, wallet: np.wallet, track: sess.track, mode: sess.mode, papers: row.papers,
       leveledUp: jumped.includes(sess.track), jumped, newLevel: trk(np, sess.track).level, newLevelId: LEVELS[trk(np, sess.track).level].id,
       bossNext: passed && sess.mode !== 'boss' && bossDue(np, sess.track), trackNowDone: passed && !jumped.includes(sess.track) && trackDone(np, sess.track) && !trackDone(prog, sess.track) };
     return { progress: np, summary };

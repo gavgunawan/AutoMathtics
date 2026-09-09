@@ -28,7 +28,7 @@ or selector cookie, a revoked child, or a lapsed family gets nothing.
 - Six sectors A–F, 100 papers each, five-paper sessions: 25 Engine questions or 15 Navigator.
 - A session passes only with every question right. Pass → next five papers, ⚡50 🏆100.
 - A 👑 check point is due at paper 21, 41, 61, 81 and 101 (25 / 15 questions from that tier); pass → a crown, ×2 loot.
-- A sector is done at paper 100 with five crowns; the track then runs practice sessions (which still pay) until the other track finishes the sector, then both jump.
+- A sector is done at paper 100 with five crowns; the track then runs practice sessions until the other track finishes the sector, then both jump. **Practice sessions pay nothing and count for no streak** (a deliberate departure from v2, which paid every passed session: replaying finished papers must not farm coins). They are still recorded as passed rows.
 - Streak bonus: every block of three consecutive pass-days (family time zone, default `Asia/Singapore`, stored on the family) pays ⚡50 🏆100 once.
 - The per-question clock is the v2 one (sector base + 5 s per tier for Engine; 50 s + 5 s per sector and tier for Navigator). An answer that arrives after it, plus five seconds of grace, is a timeout.
 
