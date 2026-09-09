@@ -48,14 +48,17 @@ provider ──POST /api/webhooks/{provider}, X-Webhook-Signature──▶ verif
   completed checkout must agree with the price it was opened for (`CHECKOUT_MISMATCH`). A payload
   carrying `plan`, `seats` or `state` is malformed (400) and never recorded. `periodEnd` is the
   provider's signed statement of the paid period and is range-checked by the state machine.
-  `subscription.updated` is deliberately **not** mapped: a webhook cannot change seat capacity;
-  paid upgrade/downgrade with proration and the seat choice are Stage 3.4.
+  `subscription.updated` is deliberately **not** mapped: a webhook cannot change seat capacity.
+  Plan changes are the parent's (`POST /api/billing/plan`, 3.4, `SUBSCRIPTIONS.md` → Lifecycle);
+  the provider then bills the prorated difference or renews at the scheduled price.
 - **Outcomes are acknowledged.** `applied`, `ignored` (unsupported type, stale) and `rejected`
   (unknown customer, unknown price, mismatch, or the state machine refused — e.g. a renewal on a
   plan smaller than the seated children, `SELECT_CHILDREN_FOR_DOWNGRADE`) all return 200 so the
-  provider stops retrying; the inbox row is the operator's audit trail and 3.4 resolves the
-  rejected ones. Only signature failures (401), malformed events (400), size (413) and
-  infrastructure errors (500, retry) are not.
+  provider stops retrying; the inbox row is the operator's audit trail. A **rejected** event applied
+  nothing, so a redelivery with the same content is processed again (`attempts` counts them) — that
+  is how a renewal refused for want of a seat choice lands once the parent has scheduled the
+  downgrade (3.4); an `applied` or `ignored` event is a replay. Only signature failures (401),
+  malformed events (400), size (413) and infrastructure errors (500, retry) are not acknowledged.
 
 ## Provider events → machine events
 
@@ -65,6 +68,7 @@ provider ──POST /api/webhooks/{provider}, X-Webhook-Signature──▶ verif
 | `invoice.paid` | `payment.succeeded` | `price` → plan, `periodEnd` |
 | `invoice.payment_failed` | `payment.failed` | — |
 | `subscription.deleted` | `terminate` | — |
+| `charge.refunded` | `refund` | `amountCents`, `full` (a full refund ends access now) |
 | `subscription.updated` (and anything else) | — | recorded, ignored until 3.4 |
 
 The family's own record `families/{f}/billing/{uuid}` is written by the same `commit()` as every

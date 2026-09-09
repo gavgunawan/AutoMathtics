@@ -28,7 +28,7 @@ export const PLANS = Object.freeze({
   big: { id: 'big', name: 'Big family', seats: 6, priceCents: 1400, purchasable: true },
 });
 export const STATES = Object.freeze(['none', 'trial', 'active', 'grace', 'past_due', 'cancelled', 'expired']);
-export const EVENTS = Object.freeze(['trial.start', 'payment.succeeded', 'payment.failed', 'plan.change', 'cancel.request', 'cancel.undo', 'terminate', 'seats.assign']);
+export const EVENTS = Object.freeze(['trial.start', 'payment.succeeded', 'payment.failed', 'plan.change', 'plan.schedule', 'cancel.request', 'cancel.undo', 'terminate', 'seats.assign', 'refund']);
 const ACCESS = new Set(['trial', 'active', 'grace']);
 export const publicPlan = (p) => ({ id: p.id, name: p.name, seats: p.seats, priceCents: p.priceCents, purchasable: p.purchasable });
 
@@ -58,7 +58,9 @@ export function entitlementFor(sub, now) {
   const state = deriveState(sub, now), until = accessUntil(sub, now);
   return { status: ACCESS.has(state) && until > now ? 'active' : 'inactive', seatLimit: sub.seats, accessUntil: until, version: sub.version, source: 'subscription',
     state, plan: sub.plan, planName: PLANS[sub.plan]?.name || sub.plan, cancelAtPeriodEnd: !!sub.cancelAtPeriodEnd, periodEnd: sub.periodEnd || null, trialEndsAt: sub.trialEndsAt || null,
-    graceUntil: sub.state === 'active' && sub.periodEnd ? sub.periodEnd + GRACE_DAYS * DAY : null, failedAt: sub.failedAt || null };
+    graceUntil: sub.state === 'active' && sub.periodEnd ? sub.periodEnd + GRACE_DAYS * DAY : null, failedAt: sub.failedAt || null,
+    scheduled: sub.scheduled ? { plan: sub.scheduled.plan, planName: PLANS[sub.scheduled.plan]?.name || sub.scheduled.plan, seats: sub.scheduled.seats, at: sub.scheduled.at } : null,
+    refunds: (sub.refunds || []).length };
 }
 /** A subscription wins over a manual pilot grant; a family with neither has no entitlement. */
 export function effectiveEntitlement(family, now) {
@@ -77,7 +79,7 @@ export function transition(sub, event, now) {
     case 'payment.succeeded': {
       const p = plan(event.plan);
       if (!Number.isSafeInteger(event.periodEnd) || event.periodEnd <= now || event.periodEnd > now + 400 * DAY) fail(400, 'INVALID_PERIOD');
-      return { ...(sub || {}), plan: p.id, seats: p.seats, state: 'active', trialEndsAt: null, periodEnd: event.periodEnd, cancelAtPeriodEnd: false, failedAt: null, failures: 0,
+      return { ...(sub || {}), plan: p.id, seats: p.seats, state: 'active', trialEndsAt: null, periodEnd: event.periodEnd, cancelAtPeriodEnd: false, failedAt: null, failures: 0, scheduled: null,
         lastPaymentAt: now, startedAt: sub?.startedAt || now, updatedAt: now, version, provider: event.provider || sub?.provider || 'manual', providerRef: event.providerRef ?? sub?.providerRef ?? null };
     }
     case 'payment.failed':
@@ -86,7 +88,19 @@ export function transition(sub, event, now) {
     case 'plan.change': {
       const p = plan(event.plan);
       if (!['trial', 'active', 'grace'].includes(state)) fail(409, 'INVALID_TRANSITION');
-      return { ...sub, plan: p.id, seats: p.seats, updatedAt: now, version };
+      return { ...sub, plan: p.id, seats: p.seats, scheduled: null, updatedAt: now, version };
+    }
+    case 'plan.schedule': { // 3.4: a downgrade waits for the period end — nobody loses a seat mid-cycle (3.2-A); the renewal applies it with the choice recorded here
+      if (!['active', 'grace'].includes(state)) fail(409, 'INVALID_TRANSITION');
+      if (!event.plan || plan(event.plan).id === sub.plan) return { ...sub, scheduled: null, updatedAt: now, version };
+      const p = PLANS[event.plan];
+      return { ...sub, scheduled: { plan: p.id, seats: p.seats, seatChildIds: event.seatChildIds ? [...new Set(event.seatChildIds)] : null, at: sub.periodEnd, requestedAt: now }, updatedAt: now, version };
+    }
+    case 'refund': { // 3.4: money went back through the provider. A partial refund is a record; a full one ends access now. Never a wallet.
+      if (state === 'none') fail(409, 'INVALID_TRANSITION');
+      if (!Number.isSafeInteger(event.amountCents) || event.amountCents < 0 || (event.full !== undefined && typeof event.full !== 'boolean')) fail(400, 'INVALID_REQUEST');
+      const refunds = [...(sub.refunds || []), { amountCents: event.amountCents, full: event.full === true, providerRef: event.providerRef || null, at: now }];
+      return { ...sub, refunds, ...(event.full === true ? { state: 'cancelled', endedAt: now, scheduled: null } : {}), updatedAt: now, version };
     }
     case 'cancel.request':
       if (!['trial', 'active', 'grace'].includes(state)) fail(409, 'INVALID_TRANSITION');
@@ -96,7 +110,7 @@ export function transition(sub, event, now) {
       return { ...sub, cancelAtPeriodEnd: false, updatedAt: now, version };
     case 'terminate':
       if (state === 'none') fail(409, 'INVALID_TRANSITION');
-      return { ...sub, state: 'cancelled', endedAt: now, updatedAt: now, version };
+      return { ...sub, state: 'cancelled', endedAt: now, scheduled: null, updatedAt: now, version };
     case 'seats.assign':
       if (!ACCESS.has(state)) fail(409, 'INVALID_TRANSITION');
       return { ...sub, updatedAt: now, version }; // capacity unchanged; the occupants change in assignSeats()
@@ -120,7 +134,7 @@ export function assignSeats(family, seats, seatChildIds) {
   if (next.length > seats || next.some((id) => !all.includes(id))) fail(409, 'SELECT_CHILDREN_FOR_DOWNGRADE');
   return { activeChildIds: next, activated: next.filter((id) => !active.includes(id)), deactivated: active.filter((id) => !next.includes(id)) };
 }
-const fingerprintOf = (event) => sha256(JSON.stringify({ type: event.type, provider: event.provider || null, providerRef: event.providerRef || null, plan: event.plan || null, periodEnd: event.periodEnd || null, seatChildIds: event.seatChildIds ? [...new Set(event.seatChildIds)].sort() : null }));
+const fingerprintOf = (event) => sha256(JSON.stringify({ type: event.type, provider: event.provider || null, providerRef: event.providerRef || null, plan: event.plan || null, periodEnd: event.periodEnd || null, seatChildIds: event.seatChildIds ? [...new Set(event.seatChildIds)].sort() : null, amountCents: event.amountCents ?? null, full: event.full === true }));
 
 export class Subscriptions {
   constructor({ foundation = null, store, now = Date.now, audit = null }) {
@@ -137,8 +151,12 @@ export class Subscriptions {
     }
     const children = [];
     for (const id of family.childIds || []) children.push([id, await tx.get(`${path}/children/${id}`)]);
-    const sub = transition(family.subscription || null, event, now);
-    const { activeChildIds, activated, deactivated } = assignSeats(family, sub.seats, event.seatChildIds);
+    const prior = family.subscription || null, sub = transition(prior, event, now);
+    // A scheduled downgrade records the parent's seat choice without applying it; the renewal on
+    // that plan applies it (the provider never sends seat ids). Everything else uses the event's own.
+    const scheduledIds = event.type === 'payment.succeeded' && prior?.scheduled && prior.scheduled.plan === sub.plan ? prior.scheduled.seatChildIds ?? undefined : undefined;
+    const seatIds = event.type === 'plan.schedule' ? undefined : (event.seatChildIds ?? scheduledIds);
+    const { activeChildIds, activated, deactivated } = assignSeats(family, sub.seats, seatIds);
     tx.set(path, { ...family, subscription: sub, activeChildIds });
     for (const [id, c] of children) {
       if (!c) continue;
@@ -147,13 +165,13 @@ export class Subscriptions {
     }
     const result = { state: deriveState(sub, now), entitlement: entitlementFor(sub, now), activeChildIds, activated, deactivated };
     tx.set(evPath, { id: event.id, type: event.type, plan: event.plan || null, periodEnd: event.periodEnd || null, provider: event.provider || null, providerRef: event.providerRef || null,
-      seatChildIds: event.seatChildIds ? [...new Set(event.seatChildIds)].sort() : null, fingerprint, actor, at: now, result });
+      seatChildIds: event.seatChildIds ? [...new Set(event.seatChildIds)].sort() : null, amountCents: event.amountCents ?? null, full: event.full === true, proration: event.proration || null, fingerprint, actor, at: now, result });
     this.audit(tx, `billing.${event.type}`, actor, familyId);
     return result;
   }
   /** Operator / webhook path (no browser session). Idempotent by event id + content. */
   async apply(familyId, event, actor = 'system') {
-    uuid(familyId); object(event, ['id', 'type', 'plan', 'periodEnd', 'seatChildIds', 'provider', 'providerRef']); uuid(event.id);
+    uuid(familyId); object(event, ['id', 'type', 'plan', 'periodEnd', 'seatChildIds', 'provider', 'providerRef', 'amountCents', 'full']); uuid(event.id);
     if (!EVENTS.includes(event.type)) fail(400, 'INVALID_EVENT');
     if (event.type === 'trial.start') fail(400, 'TRIAL_IS_PARENT_ACTION'); // eligibility lives with the parent's verified phone
     return this.store.transaction(async (tx) => {

@@ -160,6 +160,7 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
       if (billing && path === '/api/billing/cancel') return json(200, await billing.cancel(ctx, data));
       if (billing && path === '/api/billing/seats') return json(200, await billing.seats(ctx, data));
       if (payments && path === '/api/billing/checkout') return json(200, await payments.checkout(ctx, data));
+      if (payments && path === '/api/billing/plan') return json(200, await payments.changePlan(ctx, data));
       if (game && path === '/api/game/shop/buy') return json(200, await game.buy(ctx, data));
       if (game && path === '/api/game/shop/equip') return json(200, await game.equip(ctx, data));
       if (game && path === '/api/game/rewards/redeem') return json(200, await game.redeem(ctx, data));

@@ -7,6 +7,7 @@
 //   WEBHOOK_SECRET_FAKE=... node scripts/fake-webhook.mjs ORIGIN CUSTOMER_REF invoice.paid PLAN PERIOD_END_ISO
 //   WEBHOOK_SECRET_FAKE=... node scripts/fake-webhook.mjs ORIGIN CUSTOMER_REF invoice.payment_failed
 //   WEBHOOK_SECRET_FAKE=... node scripts/fake-webhook.mjs ORIGIN CUSTOMER_REF subscription.deleted
+//   WEBHOOK_SECRET_FAKE=... node scripts/fake-webhook.mjs ORIGIN CUSTOMER_REF charge.refunded AMOUNT_CENTS [full]
 //
 // EVENT_ID (default evt_<uuid>) lets you re-deliver the same event to see the replay; EVENT_AT
 // (unix ms, default now) lets you deliver an old event to see it ignored as stale. The customer
@@ -27,6 +28,9 @@ if (['checkout.completed', 'invoice.paid'].includes(type)) {
   data.price = Object.keys(FAKE_PRICES).find((p) => FAKE_PRICES[p] === rest[0]); data.periodEnd = Date.parse(rest[1] || '');
   if (!data.price || !Number.isSafeInteger(data.periodEnd)) throw Error(`PLAN (one of ${Object.values(FAKE_PRICES).join(', ')}) and PERIOD_END_ISO are required for a payment event.`);
   if (type === 'checkout.completed' && rest[2]) data.checkoutId = rest[2];
+} else if (type === 'charge.refunded') {
+  data.amountCents = Number(rest[0]); data.full = rest[1] === 'full';
+  if (!Number.isSafeInteger(data.amountCents)) throw Error('AMOUNT_CENTS is required for a refund.');
 }
 const at = Number(process.env.EVENT_AT || Date.now());
 const event = { id: process.env.EVENT_ID || `evt_${randomUUID()}`, type, at, customer, data };
