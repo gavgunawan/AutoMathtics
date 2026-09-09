@@ -7,7 +7,7 @@ for development by the review team on 9 Sep 2026). Order agreed with the team:
 |---|---|---|
 | 3.1 | Commercial ledger hardening — balances reconcilable and derived before money enters | merged (PR #9); hardened per audit (bootstrap, never-overwrite, safe repair) |
 | 3.2 | Subscription + entitlement state machine: trial, active, grace, past-due, cancelled, expired; seat plans; one trial per `phoneKey` — see `SUBSCRIPTIONS.md` | merged (PR #10); hardened per audit (seat reactivation, event fingerprints, retry-safe parent actions, real-Firestore trial race) |
-| 3.3 | Payment gateway abstraction + webhook security, with local/fake payment events (the $0 constraint holds); global provider-event inbox — see `PAYMENTS.md` | **this branch** |
+| 3.3 | Payment gateway abstraction + webhook security, with local/fake payment events (the $0 constraint holds); global provider-event inbox — see `PAYMENTS.md` | merged (PR #12); hardened per the second review (price ids → plans, no `plan.change` over webhooks) |
 | 3.4 | Upgrade / downgrade / cancel / refund lifecycle (including resolving a provider downgrade that needs a seat choice — 3.3 records it as rejected) | next |
 | 3.5 | Recovery, export, deletion, commercial admin/support tooling | |
 | Stage 4 | Real provider, staging environment, private pilot | |
@@ -34,6 +34,18 @@ for development by the review team on 9 Sep 2026). Order agreed with the team:
 - Tests (`tests/ledger.test.mjs`): validation, chaining, overdraft refusal, tamper and gap detection,
   an end-to-end run where every kind of movement is followed by a full reconciliation, idempotent
   replays writing no second row, the shield bonus, and a migrated child's opening row.
+
+## Second review follow-ups (9 Sep 2026, after PR #11 and PR #12)
+
+| Item | Status |
+|---|---|
+| **S3-F1** expired 24-hour operation receipt could replay non-ledger side effects (shield, egg, rocket fuel) once TTL deletes `operations/*` | **closed**: `post()` refuses an identical row (`LEDGER_REPLAYED`) — the ledger row is the durable receipt, so the transaction that rebuilt the side effects aborts; regression in `tests/game.test.mjs` deletes the receipt and replays buy and fuel |
+| 3.1 opening rows only as sequence 1 | closed: `LEDGER_OPENING_NOT_FIRST` |
+| 3.1 bootstrap must stop when rows exist without metadata | closed: `bootstrap()` lists the rows first, `LEDGER_DAMAGED`; the script reports and exits 3 |
+| 3.2 operation ids mandatory for browser billing mutations | closed: `OPERATION_ID_REQUIRED`, uuid-validated |
+| Policy: manual pilot grant vs trial | decided: an active manual grant blocks the trial (`MANUAL_GRANT_ACTIVE`); the operator chooses when a family moves to subscription management |
+| 3.3 must resolve the family from the provider-customer mapping and map provider price ids to plans; never trust plan/seats/family from the payload | closed: `billingCustomers` mapping (PR #12) + price table (`FAKE_PRICES`), `UNKNOWN_PRICE`, payload naming a plan is malformed |
+| 3.3 keep `plan.change` out of webhook mapping | closed: `subscription.updated` is recorded and ignored until 3.4 |
 
 ## Rules for 3.2 onward
 

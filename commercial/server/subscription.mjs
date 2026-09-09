@@ -16,7 +16,6 @@
 // it for the cycle, so a downgrade deactivates and a later upgrade can reactivate a child with
 // all their progress intact. A parent may only *add* a child to a free seat between events —
 // never swap children within a paid cycle.
-import { randomUUID } from 'node:crypto';
 import { fail, object, uuid, sha256 } from './security.mjs';
 
 const DAY = 86_400_000;
@@ -169,33 +168,38 @@ export class Subscriptions {
     const ledger = a.parent.phoneKey ? await tx.get(`phones/${a.parent.phoneKey}`) : null;
     return { ...a, ledger };
   }
-  trialEligibility(family, parent, ledger) {
+  trialEligibility(family, parent, ledger, now) {
     if (family.subscription) return { eligible: false, reason: 'SUBSCRIPTION_EXISTS' };
+    // Pilot policy: a family on an active manual grant is not offered the trial. Starting one would
+    // move the family under subscription management for good, which the operator did not choose.
+    const grant = family.entitlement;
+    if (grant && grant.status === 'active' && Number.isSafeInteger(grant.accessUntil) && grant.accessUntil > now) return { eligible: false, reason: 'MANUAL_GRANT_ACTIVE' };
     if (!parent.phoneKey) return { eligible: false, reason: 'TRIAL_REQUIRES_VERIFIED_PHONE' };
     if (ledger?.trialFamilyId) return { eligible: false, reason: 'TRIAL_ALREADY_USED' }; // one trial per verified phone, however many emails
     return { eligible: true, reason: null };
   }
-  // A browser-supplied operation id makes a lost response retry-safe; without one the server mints an id.
-  eventId(body) { return body && typeof body.operationId === 'string' ? uuid(body.operationId) : randomUUID(); }
+  // Every browser billing mutation names its operation, so a retried click after a lost response is
+  // the same event. A request that forgets is refused rather than silently losing that guarantee.
+  eventId(body) { if (!body || typeof body.operationId !== 'string') fail(400, 'OPERATION_ID_REQUIRED'); return uuid(body.operationId); }
   async view(ctx) {
     return this.store.transaction(async (tx) => {
       const { s, family, parent, ledger } = await this.parent(tx, ctx, false);
       const now = this.now();
       return { plans: Object.values(PLANS).filter((p) => p.purchasable).map(publicPlan), trialDays: TRIAL_DAYS, graceDays: GRACE_DAYS,
         subscription: family.subscription ? entitlementFor(family.subscription, now) : null, manualGrant: family.subscription ? null : (family.entitlement || null),
-        trial: this.trialEligibility(family, parent, ledger), activeChildIds: family.activeChildIds || [], familyId: s.familyId, customer: family.billing || null };
+        trial: this.trialEligibility(family, parent, ledger, now), activeChildIds: family.activeChildIds || [], familyId: s.familyId, customer: family.billing || null };
     }, { readOnly: true });
   }
   /** The parent starts the free trial. The server decides eligibility from the verified phone. */
-  async startTrial(ctx, body = {}) {
+  async startTrial(ctx, body) {
     object(body, ['operationId']); const eventId = this.eventId(body);
     return this.store.transaction(async (tx) => {
       const { s, family, parent, ledger } = await this.parent(tx, ctx, true);
       const replay = await tx.get(`families/${s.familyId}/billing/${eventId}`);
       if (replay && replay.type === 'trial.start') return replay.result; // a retried click after a lost response
-      const e = this.trialEligibility(family, parent, ledger);
-      if (!e.eligible) fail(e.reason === 'TRIAL_REQUIRES_VERIFIED_PHONE' ? 403 : 409, e.reason);
       const now = this.now();
+      const e = this.trialEligibility(family, parent, ledger, now);
+      if (!e.eligible) fail(e.reason === 'TRIAL_REQUIRES_VERIFIED_PHONE' ? 403 : 409, e.reason);
       const result = await this.commit(tx, s.familyId, family, { id: eventId, type: 'trial.start', provider: 'trial' }, s.uid, now);
       tx.set(`phones/${parent.phoneKey}`, { ...(ledger || { families: [s.familyId], count: 1, firstAt: now, lastAt: now }), trialFamilyId: s.familyId, trialAt: now });
       return result;

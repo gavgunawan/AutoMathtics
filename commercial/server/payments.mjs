@@ -26,14 +26,18 @@ export const CHECKOUT_TTL_MS = 30 * DAY;
 export const PROVIDERS = Object.freeze(['fake']);
 
 // Provider event types the machine understands, and the internal event each becomes. Anything
-// else a provider sends is acknowledged, recorded and ignored.
+// else a provider sends is acknowledged, recorded and ignored — including a provider-announced
+// plan change: paid upgrade/downgrade with proration and seat choice is Stage 3.4, so 3.3 does
+// not let a webhook change seat capacity directly.
 export const PROVIDER_EVENTS = Object.freeze({
   'checkout.completed': 'payment.succeeded',
   'invoice.paid': 'payment.succeeded',
   'invoice.payment_failed': 'payment.failed',
-  'subscription.updated': 'plan.change',
   'subscription.deleted': 'terminate',
 });
+// The fake provider's price ids. A payload never names a server plan; the gateway's own table
+// turns the provider's price id into one (a real provider's price ids go in its adapter's table).
+export const FAKE_PRICES = Object.freeze({ price_fake_starter: 'starter', price_fake_family: 'family', price_fake_big: 'big' });
 
 /** A uuid-shaped id derived from the provider event, so a re-delivered event maps to the same family billing record and commit() sees a replay, never a second event. */
 export function derivedEventId(seed) {
@@ -59,12 +63,12 @@ export function normalizeEvent(body) {
   object(body, ['id', 'type', 'at', 'customer', 'data']);
   const id = ref(body.id), customer = ref(body.customer), type = text(body.type, 1, 64);
   if (!Number.isSafeInteger(body.at) || body.at < 0) fail(400, 'INVALID_REQUEST');
-  const d = object(body.data ?? {}, ['plan', 'periodEnd', 'familyId', 'checkoutId']);
-  if (d.plan !== undefined && (typeof d.plan !== 'string' || !PLANS[d.plan])) fail(400, 'INVALID_PLAN');
+  const d = object(body.data ?? {}, ['price', 'periodEnd', 'familyId', 'checkoutId']); // no plan, no seats: those are the server's to decide
+  if (d.price !== undefined) ref(d.price);
   if (d.periodEnd !== undefined && !Number.isSafeInteger(d.periodEnd)) fail(400, 'INVALID_REQUEST');
   if (d.familyId !== undefined) text(d.familyId, 1, 64);
   if (d.checkoutId !== undefined) ref(d.checkoutId);
-  return { id, type, at: body.at, customer, data: { plan: d.plan ?? null, periodEnd: d.periodEnd ?? null, familyId: d.familyId ?? null, checkoutId: d.checkoutId ?? null } };
+  return { id, type, at: body.at, customer, data: { price: d.price ?? null, periodEnd: d.periodEnd ?? null, familyId: d.familyId ?? null, checkoutId: d.checkoutId ?? null } };
 }
 
 /** The zero-cost gateway: a checkout is a record, a webhook is a signed fixture. */
@@ -74,9 +78,11 @@ export class FakeGateway {
     if (!/^[a-f0-9]{64,}$/.test(secret || '')) throw Error('FakeGateway needs a hex webhook secret of at least 32 bytes.');
     this.secret = secret;
   }
+  planFor(price) { return Object.hasOwn(FAKE_PRICES, price) ? FAKE_PRICES[price] : null; }
+  priceFor(plan) { return Object.keys(FAKE_PRICES).find((p) => FAKE_PRICES[p] === plan) || null; }
   // No money moves and no browser is redirected: the operator completes the checkout with a signed checkout.completed event.
   async createCheckout({ checkoutId, customerRef, plan }) {
-    return { provider: this.name, checkoutId, customerRef, plan: plan.id, url: null, simulated: true };
+    return { provider: this.name, checkoutId, customerRef, plan: plan.id, priceId: this.priceFor(plan.id), url: null, simulated: true };
   }
   sign(rawBody, at) { return signWebhook(this.secret, rawBody, at); }
   verify(rawBody, headers, now) {
@@ -147,18 +153,21 @@ export class Payments {
       const familyId = mapping?.familyId || null;
       const checkoutPath = ev.data.checkoutId ? `checkouts/${gw.name}:${ev.data.checkoutId}` : null;
       const checkout = checkoutPath ? await tx.get(checkoutPath) : null; // read now: commit() writes next
+      const plan = ev.data.price ? gw.planFor(ev.data.price) : null; // the provider's price id through the gateway's table; the payload never names a plan
       let outcome;
       if (!internalType) outcome = { status: 'ignored', reason: 'UNSUPPORTED_EVENT' };
       else if (!mapping) outcome = { status: 'rejected', reason: 'UNKNOWN_CUSTOMER' };
       else if (ev.data.familyId && ev.data.familyId !== familyId) outcome = { status: 'rejected', reason: 'FAMILY_MISMATCH' };
       else if (checkout && checkout.familyId !== familyId) outcome = { status: 'rejected', reason: 'CHECKOUT_MISMATCH' };
+      else if (internalType === 'payment.succeeded' && !plan) outcome = { status: 'rejected', reason: 'UNKNOWN_PRICE' };
+      else if (checkout && plan && checkout.plan !== plan) outcome = { status: 'rejected', reason: 'CHECKOUT_MISMATCH' }; // paid for a different plan than the one this checkout was opened for
       else if (ev.at < mapping.lastEventAt) outcome = { status: 'ignored', reason: 'STALE_EVENT' }; // an older event arriving after a newer one never rolls the facts back
       else {
         const family = await tx.get(`families/${familyId}`);
         if (!family) outcome = { status: 'rejected', reason: 'FAMILY_NOT_FOUND' };
         else {
           const event = { id: derivedEventId(`${gw.name}:${ev.id}`), type: internalType, provider: gw.name, providerRef: ev.customer,
-            ...(ev.data.plan ? { plan: ev.data.plan } : {}), ...(ev.data.periodEnd ? { periodEnd: ev.data.periodEnd } : {}) };
+            ...(plan ? { plan } : {}), ...(ev.data.periodEnd ? { periodEnd: ev.data.periodEnd } : {}) };
           try {
             const result = await this.billing.commit(tx, familyId, family, event, `webhook:${gw.name}`, now);
             outcome = { status: 'applied', state: result.state, eventId: event.id };

@@ -119,3 +119,26 @@ test('child game projections do not disclose sibling reward eligibility or Rocke
   assert.equal(state.rocket.crewChildIds, undefined); assert.equal(state.rocket.fuel, undefined);
   assert.equal(state.rocket.isCrew, true); assert.equal(state.rocket.myFuel, 0);
 });
+
+test('S3-F1: once the 24-hour operation receipt is gone, a reused operation id is refused by the ledger and no side effect lands twice', async () => {
+  const f = fixture(), k = await f.childSession(); await earn(f, k, 1000, 0);
+  const op = randomUUID(); const first = await f.game.buy(k.childCtx, { itemId: 'shield', operationId: op });
+  assert.equal(first.wallet.shields, 1); assert.equal(first.wallet.gc, 1000 - SHOP_ITEMS.find((x) => x.id === 'shield').cost);
+  assert.deepEqual((await f.game.buy(k.childCtx, { itemId: 'shield', operationId: op })).wallet, first.wallet); // inside the receipt's life: the stored response
+  const opPath = `${progPath(k)}/operations/${op}`; assert.ok(await f.store.get(opPath));
+  await f.store.transaction(async (tx) => tx.delete(opPath)); // what the Firestore TTL policy will do after a day
+  await assert.rejects(f.game.buy(k.childCtx, { itemId: 'shield', operationId: op }), rejected('LEDGER_REPLAYED'));
+  const st = await f.game.state(k.childCtx); assert.equal(st.wallet.shields, 1, 'no free shield'); assert.equal(st.wallet.gc, first.wallet.gc, 'no second charge either');
+  assert.equal((await f.store.list(`${progPath(k)}/ledger`)).filter((r) => r.id === op).length, 1);
+  // the same for rocket fuel, whose count is bumped before the charge
+  const parent = await parentAgain(f);
+  const built = await f.game.rocket(parent.ctx, { action: 'build', prize: { emoji: '🍦', name: 'Ice cream' }, currency: 'gc', goal: 300, minEach: 100, crewChildIds: [k.child.id] });
+  const fuelOp = randomUUID(); const fueled = await f.game.fuel(k.childCtx, { rocketId: built.rocket.id, amount: 100, operationId: fuelOp });
+  assert.equal(fueled.rocket.status, 'fueling');
+  await f.store.transaction(async (tx) => tx.delete(`${progPath(k)}/operations/${fuelOp}`));
+  await assert.rejects(f.game.fuel(k.childCtx, { rocketId: built.rocket.id, amount: 100, operationId: fuelOp }), rejected('LEDGER_REPLAYED'));
+  const cfg = await f.store.get(`families/${k.p.familyId}/game/config`); assert.equal(cfg.rocket.fuel[k.child.id], 100, 'the fuel count did not move twice');
+  assert.equal((await f.game.state(k.childCtx)).wallet.gc, fueled.wallet.gc);
+  // a different item under the old id is not a replay but a conflict
+  await assert.rejects(f.game.buy(k.childCtx, { itemId: 'fit_hat', operationId: op }), rejected('LEDGER_CONFLICT'));
+});

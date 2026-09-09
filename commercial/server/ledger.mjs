@@ -8,8 +8,13 @@
 //
 // Three invariants the primitive itself enforces (audit findings 3.1-A/B/C):
 //   - a non-zero balance with no rows is refused until an opening row exists (`bootstrap()`);
-//   - a row id is never overwritten: same id + same content is a harmless replay, same id +
-//     different content is LEDGER_CONFLICT;
+//   - a row id is never overwritten: same id + same content is LEDGER_REPLAYED, same id +
+//     different content is LEDGER_CONFLICT. The row is the durable receipt (review S3-F1): a
+//     caller that reaches the same row again — after its own 24-hour operation receipt has
+//     expired — is refused, so the non-currency side effects it built up are never committed
+//     a second time without the charge;
+//   - an opening row is legal only as sequence 1, and bootstrap stops when rows exist that
+//     the wallet's metadata does not know about;
 //   - repair happens inside one transaction over the wallet and its rows, and stops on a
 //     structurally damaged ledger.
 import { fail } from './security.mjs';
@@ -40,10 +45,14 @@ export async function post(tx, base, prog, e) {
   const w = prog.wallet || {};
   const seq0 = w.ledgerSeq || 0;
   if (seq0 === 0 && ((w.gc || 0) !== 0 || (w.rp || 0) !== 0) && !OPENING.has(e.type)) fail(409, 'LEDGER_NOT_BOOTSTRAPPED');
+  if (OPENING.has(e.type) && seq0 !== 0) fail(409, 'LEDGER_OPENING_NOT_FIRST');
   const path = `${base}/ledger/${e.id}`;
   const existing = await tx.get(path);
   if (existing) {
-    if (sameContent(existing, e)) return prog; // the earlier transaction committed this row and the balance it carries
+    // The earlier transaction committed this row and everything that came with it. Refusing here
+    // makes economic idempotency as durable as the ledger itself, whatever shorter receipt the
+    // caller checked first (S3-F1).
+    if (sameContent(existing, e)) fail(409, 'LEDGER_REPLAYED');
     fail(409, 'LEDGER_CONFLICT');
   }
   const gc = (w.gc || 0) + e.gc, rp = (w.rp || 0) + e.rp;
@@ -54,10 +63,12 @@ export async function post(tx, base, prog, e) {
   return { ...prog, wallet: { ...w, gc, rp, ledgerSeq: seq, ledgerLast: e.id } };
 }
 
-/** Give a pre-ledger wallet its opening row once. Idempotent: a wallet with rows, or with nothing to carry, is untouched. */
+/** Give a pre-ledger wallet its opening row once. Idempotent: a wallet with rows, or with nothing to carry, is untouched. Rows the wallet does not know about stop it (LEDGER_DAMAGED). */
 export async function bootstrap(tx, base, prog, now) {
   const w = prog.wallet || {};
-  if ((w.ledgerSeq || 0) > 0 || ((w.gc || 0) === 0 && (w.rp || 0) === 0)) return { prog, opened: false };
+  if ((w.ledgerSeq || 0) > 0) return { prog, opened: false };
+  if ((await tx.list(`${base}/ledger`)).length) fail(409, 'LEDGER_DAMAGED'); // metadata says no rows, rows exist: a human looks, nothing is opened
+  if ((w.gc || 0) === 0 && (w.rp || 0) === 0) return { prog, opened: false };
   const next = await post(tx, base, { ...prog, wallet: { ...w, gc: 0, rp: 0, ledgerSeq: 0, ledgerLast: null } },
     entry({ id: OPENING_ROW_ID, type: 'ledger.opening', gc: w.gc || 0, rp: w.rp || 0, note: 'balance carried from before the ledger', at: now }));
   return { prog: next, opened: true };
