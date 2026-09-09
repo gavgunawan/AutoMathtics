@@ -15,7 +15,7 @@ const runtimeAccount = defineString('SMS_LADDER_SERVICE_ACCOUNT');  // functions
 const COLLECTION = 'smsLadder';
 initializeApp();
 
-export const smsLadder = beforeSmsSent({ region: 'asia-southeast1', serviceAccount: runtimeAccount, secrets: [pepper], memory: '256MiB', maxInstances: 3, timeoutSeconds: 10 }, async (event) => {
+export const smsLadder = beforeSmsSent({ region: 'asia-southeast1', serviceAccount: runtimeAccount, secrets: [pepper], memory: '256MiB', maxInstances: 3, timeoutSeconds: 7 }, async (event) => {
   const phone = event.additionalUserInfo?.phoneNumber || event.data?.phoneNumber || null;
   const key = ladderKey(pepper.value(), phone);
   if (!key) { console.warn(JSON.stringify({ smsLadder: 'no usable number on the event', smsType: event.smsType || null, hasPhone: !!phone })); return; } // the provider validates numbers itself; nothing to count
