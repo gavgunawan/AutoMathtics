@@ -52,8 +52,9 @@ export function stripeAccount(f, { customerId = 'cus_live1' } = {}) {
     },
     'GET /v1/charges/': () => state.charge || missing,
     'DELETE /v1/subscriptions/': (body, calls) => {
-      if (!state.sub || state.sub.status === 'canceled') return { status: 400, json: { error: { code: 'resource_missing', type: 'invalid_request_error' } } };
-      state.sub.status = 'canceled'; state.sub.canceled_at = Math.floor(f.now() / 1000); state.deleted.push(calls.at(-1).path); return state.sub;
+      const id = calls.at(-1).path.split('/').pop(), target = [state.sub, ...(state.extraSubs || [])].find((s) => s && s.id === id);
+      if (!target || target.status === 'canceled') return { status: 400, json: { error: { code: 'resource_missing', type: 'invalid_request_error' } } };
+      target.status = 'canceled'; target.canceled_at = Math.floor(f.now() / 1000); state.deleted.push(calls.at(-1).path); return target;
     },
   };
   const { gw, calls } = gateway(routes);
