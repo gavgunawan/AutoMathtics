@@ -155,7 +155,16 @@ test('real SMS MFA token, Firestore seat contention, private rules and expiry', 
   const rawSession = (await db.doc(sessionPath).get()).data();
   assert.ok(rawSession.expireAt instanceof Timestamp, 'expireAt is stored as a Firestore Timestamp');
   assert.ok(rawSession.questions.every((q) => q.answer));
-  let q = started.question, last;
+  // Real-Firestore concurrency proof: two distinct attempts race the same current question.
+  // Firestore retries one transaction; exactly one answer advances the index and the other fails stale.
+  const race = await Promise.allSettled([randomUUID(), randomUUID()].map((attemptId) =>
+    learning.answer(childCtx, { sessionId: started.session.id, index: 0, attemptId, answer: canonical(rawSession.questions[0]) })));
+  assert.equal(race.filter((r) => r.status === 'fulfilled').length, 1);
+  assert.equal(race.filter((r) => r.status === 'rejected').length, 1);
+  assert.equal(race.find((r) => r.status === 'rejected').reason.code, 'STALE_QUESTION');
+  const afterRace = (await db.doc(sessionPath).get()).data();
+  assert.equal(afterRace.index, 1); assert.equal(afterRace.results.length, 1);
+  let last = race.find((r) => r.status === 'fulfilled').value, q = last.question || null;
   while (q) {
     last = await learning.answer(childCtx, { sessionId: started.session.id, index: q.index, attemptId: randomUUID(), answer: canonical(rawSession.questions[q.index]) });
     q = last.question || null;

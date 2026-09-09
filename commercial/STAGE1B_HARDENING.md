@@ -15,9 +15,10 @@ Every change below has a regression test in `tests/stage1b.test.mjs`; the existi
   Hosting in front of Cloud Run is 2. `0` uses the socket address.
 - Config refuses staging/production without an explicit `TRUSTED_PROXY_HOPS` (0–5), because the
   socket address behind Hosting/Cloud Run is the proxy itself and would throttle every visitor as one.
-- Only **failed** logins are counted per address (`peek()` before, `rate()` on failure; 30 per
-  10 min). Successful sign-ins spend nothing there and are limited **per account** inside
-  `login()` after the token is proven (10 per 10 min).
+- Only **failed** logins are counted per address (30 per 10 min). There is no pre-login address
+  denial anymore: a saturated office/NAT address may still present a valid signed token. Invalid
+  attempts remain 429. Successful sign-ins spend nothing in the address bucket and are limited
+  **per account** inside `login()` after the token UID is cryptographically proven (10 per 10 min).
 - Still to do on the real origin: measure how many trailing entries Hosting + Cloud Run add and set
   the value in the deploy environment (see DEPLOY_V3.md). Until then, staging refuses to start.
 
@@ -65,12 +66,23 @@ Every change below has a regression test in `tests/stage1b.test.mjs`; the existi
 ### F12 — cookie lifetime exceeded the session (Informational)
 - Parent cookies carry `Max-Age=1800`; selector/child cookies `43200`.
 
+
+### Follow-up S1B-A / S1B-B - login quota and shared-IP hardening
+- Login performs `verifyIdToken(token, false)` first. This verifies the signed Firebase token without
+  asking Auth for a second revocation lookup. Once the signed UID is available, the distributed
+  account limiter runs **before** the one fresh `getUser(uid)` call.
+- The fresh user record remains authoritative for disabled state, current verified email, current
+  phone MFA enrollment and `tokensValidAfterTime` revocation.
+- A failed-address bucket no longer pre-blocks a subsequently valid signed login from that address.
+  This closes the remaining same-NAT denial found in the follow-up audit.
+- Regression tests verify that the 11th signed login does not perform another `getUser` lookup and
+  that a valid user can sign in after 30 bad attempts from the same public address.
+
 ## Not code — still open
 
-- **F4** Firestore TTL policies for `rateLimits`, `pinAttempts`, `operations`, `audit`
-  (needs `Timestamp` fields and `gcloud firestore fields ttls update` on the real project).
-- **F11** idempotency fingerprint still commits to the PIN under the session secret; fold into F4/TTL work.
-- **F13** repository rulesets on `main`/`release/*`; move GitHub Pages off `main` before PR #1 merges.
+- **F4:** code now stamps Firestore `Timestamp` TTL fields and deployment commands are documented; the real project TTL policies still need to be enabled once at staging.
+- **F11:** closed in the staff Stage 2 merge; child-create replay fingerprints no longer commit to the PIN.
+- **F13:** closed operationally: the active `release-lines` GitHub ruleset covers the default branch and `release/*`, blocks deletion/non-fast-forward, requires PRs and requires `unit`, `emulator`, and `container-build`. It currently requires zero approving reviews.
 - **F14** digest-pin the Docker base image; add an informational `npm audit` job.
 - **F15** the live v2 database — addressed separately on `main` (v2.3.1 anonymous sign-in + rules).
 - Measure `TRUSTED_PROXY_HOPS` and the Auth Admin `accounts:lookup` quota on the staging origin.

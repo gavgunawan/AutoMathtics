@@ -90,8 +90,10 @@ export class Foundation {
   }
   async login(idToken, previousToken) {
     text(idToken, 20, 8192);
-    const { phone, ...who } = await this.identity.verifyLogin(idToken, this.now());
-    await this.rate(`login:${who.uid}`, 10, 10 * MINUTE); // per account, once the token is proven
+    // The token's signature is verified locally first; the account throttle then runs on the proven
+    // uid before the single fresh Auth lookup (review finding S1B-A).
+    const { phone, ...who } = await this.identity.verifyLogin(idToken, this.now(),
+      (uid) => this.rate(`login:${uid}`, 10, 10 * MINUTE));
     // The parent's verified phone, keyed and never stored raw. A parent who signs up again with a
     // new email keeps the same phoneKey, which is how a free trial can be granted once per phone.
     const phoneKey = phone ? mac(this.secret, `phone:${phone}`) : null;

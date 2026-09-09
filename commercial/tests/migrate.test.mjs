@@ -7,6 +7,7 @@ import { fixture, rejected } from './support.mjs';
 import { convertV2, importLearning } from '../server/migrate.mjs';
 import { assertFirestoreShape } from './support.mjs';
 
+const pick = (w) => ({ gc: w.gc, rp: w.rp, bonuses: w.bonuses });
 // A synthetic record in the live game's shape (not a real child's data).
 const row = (o) => ({ date: '2026-09-01', ts: Date.parse('2026-09-01T10:00:00Z'), when: '9/1/2026 06:00 PM', levelIdx: 0, levelId: 'A', papers: '1–5', correct: 25, incorrect: 0, timeout: 0, total: 25, passed: true, mins: '5:12', ...o });
 const v2 = () => ({
@@ -37,21 +38,27 @@ test('convertV2 applies v2\'s economy to v2\'s rows and produces a valid v3 docu
   // pass-days: 09-01, 09-02, 09-04, 09-05, 09-06, 09-07 (scan day excluded on its own but 09-06 has the CP) + shield 08-30 → runs: 01-02, 04-05-06-07 → 1 bonus
   assert.equal(summary.bonuses, 1);
   assert.equal(summary.earnedGc, 9 * 50 + 50); assert.equal(summary.earnedRp, 9 * 100 + 100);
-  assert.deepEqual(doc.wallet, { gc: 500 - 600 < 0 ? 0 : 500 - 600, rp: 1000 - 6500 < 0 ? 0 : 1000 - 6500, bonuses: 1 });
-  assert.deepEqual(doc.wallet, { gc: 0, rp: 0, bonuses: 1 }); // spent more than earned under v2's manual credits → clamps at zero, never negative
+  assert.deepEqual(pick(doc.wallet), { gc: 0, rp: 0, bonuses: 1 }); // spent more than earned under v2's manual credits → clamps at zero, never negative
+  // the v2 wallet becomes the v3 game wallet
+  assert.deepEqual(doc.wallet.inventory, ['pet_fox', 'title_dragon']); assert.equal(doc.wallet.activePet, 'pet_fox'); assert.equal(doc.wallet.activeTitle, 'title_dragon'); assert.equal(doc.wallet.activeBg, null);
+  assert.equal(doc.wallet.gcSpent, 600); assert.equal(doc.wallet.rpSpent, 6500); assert.equal(doc.wallet.lastScanWeek, '2026-W36');
+  assert.equal(doc.wallet.purchases.length, 1); assert.equal(doc.wallet.purchases[0].id, 'title_dragon'); assert.equal(doc.wallet.purchases[0].cost, 200);
+  assert.equal(doc.wallet.redemptions.length, 1); assert.equal(doc.wallet.redemptions[0].status, 'approved'); assert.equal(doc.wallet.redemptions[0].rewardId, 'rocket');
+  assert.equal(doc.wallet.egg, null); assert.deepEqual(doc.legacy.droppedItems, []);
   assert.equal(doc.history.length, 9); assert.equal(doc.history[0].quit, true); assert.equal(doc.history[0].track, 'nav'); assert.equal(doc.history[0].papers, '86–90'); assert.equal(doc.history[0].total, 15);
   const cp = doc.history.find((h) => h.mode === 'boss'); assert.equal(cp.papers, 'CP T1'); assert.deepEqual(cp.qlog, [{ t: 1, s: 4, ok: 1 }, { t: 1, s: 6, ok: 1 }]);
   assert.equal(doc.history.find((h) => h.mode === 'scan').papers, 'SCAN'); assert.equal(doc.history.find((h) => h.mode === 'practice').papers, 'practice 6–10');
   assert.equal(doc.history.find((h) => h.papers === '1–5').secs, 312); assert.equal(doc.history.find((h) => h.papers === '6–10').secs, null);
-  assert.equal(doc.activeSession, null); assert.equal(doc.legacy.gcSpent, 600); assert.deepEqual(doc.legacy.inventory, ['pet_fox', 'title_dragon']); assert.deepEqual(doc.legacy.active, { activePet: 'pet_fox', activeTitle: 'title_dragon' });
+  assert.equal(doc.activeSession, null); assert.equal(doc.legacy.gcSpent, 600);
   assert.ok(!JSON.stringify(doc).includes('8520'), 'the v2 PIN never enters the v3 document');
 });
-test('a record with more earned than spent carries the balance, and bad records are refused', () => {
-  const r = v2(); r.wallet.gcSpent = 100; r.wallet.rpSpent = 0;
-  const { doc } = convertV2(r, { now: 0 });
-  assert.deepEqual(doc.wallet, { gc: 400, rp: 1000, bonuses: 1 });
+test('a record with more earned than spent carries the balance; unknown items are dropped and reported; bad records are refused', () => {
+  const r = v2(); r.wallet.gcSpent = 100; r.wallet.rpSpent = 0; r.wallet.inventory.push('pet_unknown_thing'); r.wallet.activePet = 'pet_unknown_thing';
+  const { doc, summary } = convertV2(r, { now: 0 });
+  assert.deepEqual(pick(doc.wallet), { gc: 400, rp: 1000, bonuses: 1 });
+  assert.deepEqual(doc.wallet.inventory, ['pet_fox', 'title_dragon']); assert.equal(doc.wallet.activePet, null); assert.deepEqual(summary.droppedItems, ['pet_unknown_thing']);
   for (const bad of [null, [], { level: 9 }, { paper: 0 }, { nav: { bossCleared: 6 } }, { paper: 1.5 }]) assert.throws(() => convertV2(bad, { now: 0 }), /V2_RECORD_INVALID/);
-  const { doc: empty } = convertV2({}, { now: 0 }); assert.deepEqual(empty.engine, { level: 0, paper: 1, bossCleared: 0 }); assert.deepEqual(empty.wallet, { gc: 0, rp: 0, bonuses: 0 });
+  const { doc: empty } = convertV2({}, { now: 0 }); assert.deepEqual(empty.engine, { level: 0, paper: 1, bossCleared: 0 }); assert.deepEqual(pick(empty.wallet), { gc: 0, rp: 0, bonuses: 0 });
 });
 test('importLearning writes once, audits, and the child can carry on from where v2 left them', async () => {
   const f = fixture(); const k = await f.childSession();

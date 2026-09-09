@@ -32,14 +32,14 @@ test('a session hands the browser questions without answers, and keeps the answe
   const stored = await f.store.get(sessPath(k, r.session.id));
   assert.equal(stored.questions.length, 25); assert.ok(stored.questions.every((q) => q.answer));
   const state = await f.learning.state(k.childCtx);
-  assert.equal(state.active.session.id, r.session.id); assert.equal(state.engine.paper, 1); assert.deepEqual(state.wallet, { gc: 0, rp: 0, bonuses: 0 });
+  assert.equal(state.active.session.id, r.session.id); assert.equal(state.engine.paper, 1); assert.deepEqual({ gc: state.wallet.gc, rp: state.wallet.rp, bonuses: state.wallet.bonuses }, { gc: 0, rp: 0, bonuses: 0 });
 });
 test('a clean sheet passes: five papers on, ⚡50 🏆100, a history row, no active session', async () => {
   const f = fixture(); const k = await f.childSession();
   const { last } = await play(f, k, 'engine');
   assert.equal(last.done, true); assert.equal(last.summary.passed, true); assert.equal(last.summary.gcEarned, 50); assert.equal(last.summary.rpEarned, 100);
   const st = await f.learning.state(k.childCtx);
-  assert.equal(st.engine.paper, 6); assert.deepEqual(st.wallet, { gc: 50, rp: 100, bonuses: 0 }); assert.equal(st.active, null);
+  assert.equal(st.engine.paper, 6); assert.deepEqual({ gc: st.wallet.gc, rp: st.wallet.rp, bonuses: st.wallet.bonuses }, { gc: 50, rp: 100, bonuses: 0 }); assert.equal(st.active, null);
   assert.equal(st.history[0].passed, true); assert.equal(st.history[0].papers, '1–5'); assert.equal(st.stats.passes, 1);
   const nav = await play(f, k, 'nav'); // the other track has its own sector and papers
   assert.equal(nav.started.session.count, 15); assert.equal(nav.last.summary.passed, true);
@@ -113,7 +113,7 @@ test('a finished sector is practice until the other track catches up, then both 
   assert.equal(practice.started.session.mode, 'practice'); assert.equal(practice.last.summary.passed, true);
   assert.equal(practice.last.summary.rewarded, false); assert.equal(practice.last.summary.gcEarned, 0); assert.equal(practice.last.summary.rpEarned, 0); // practice pays nothing
   let st = await f.learning.state(k.childCtx); assert.equal(st.engine.paper, 101); assert.equal(st.engine.level, 0);
-  assert.deepEqual(st.wallet, { gc: 0, rp: 0, bonuses: 0 }); assert.equal((await f.store.get(progPath(k))).passDays.length, 0); // and counts for no streak
+  assert.equal(st.wallet.gc, 0); assert.equal(st.wallet.rp, 0); assert.equal(st.wallet.bonuses, 0); assert.equal((await f.store.get(progPath(k))).passDays.length, 0); // and counts for no streak
   assert.equal(st.history[0].passed, true); assert.equal(st.history[0].papers.startsWith('practice '), true);
   const finish = await play(f, k, 'nav');
   assert.equal(finish.last.summary.passed, true); assert.deepEqual(finish.last.summary.jumped.sort(), ['engine', 'nav']); assert.equal(finish.last.summary.newLevelId, 'B');
@@ -126,9 +126,9 @@ test('streak bonuses arrive with the third consecutive pass-day, once', () => {
     questions: Array.from({ length: 25 }, () => ({ paper: 1, tier: 1, seconds: 25, display: {}, answer: { type: 'int', v: 1 } })), results: Array.from({ length: 25 }, () => ({ r: 'correct', secs: 3, tier: 1 })) });
   let prog = freshProgress();
   for (const day of ['2026-09-01T10:00:00Z', '2026-09-02T10:00:00Z']) prog = f.learning.finish(prog, sess(day), Date.parse(day), 'Asia/Singapore').progress;
-  assert.deepEqual(prog.wallet, { gc: 100, rp: 200, bonuses: 0 });
+  assert.deepEqual({ gc: prog.wallet.gc, rp: prog.wallet.rp, bonuses: prog.wallet.bonuses }, { gc: 100, rp: 200, bonuses: 0 });
   const third = f.learning.finish(prog, sess('2026-09-03T10:00:00Z'), Date.parse('2026-09-03T10:00:00Z'), 'Asia/Singapore');
-  assert.equal(third.summary.gcEarned, 100); assert.deepEqual(third.progress.wallet, { gc: 200, rp: 400, bonuses: 1 });
+  assert.equal(third.summary.gcEarned, 100); assert.deepEqual({ gc: third.progress.wallet.gc, rp: third.progress.wallet.rp, bonuses: third.progress.wallet.bonuses }, { gc: 200, rp: 400, bonuses: 1 });
   const again = f.learning.finish(third.progress, sess('2026-09-03T12:00:00Z'), Date.parse('2026-09-03T12:00:00Z'), 'Asia/Singapore');
   assert.equal(again.summary.gcEarned, 50); assert.equal(again.progress.wallet.bonuses, 1); // same day, no second bonus
 });
@@ -151,4 +151,38 @@ test('a child cannot reach another family\'s session, even with its id', async (
   await assert.rejects(f.learning.answer(b.childCtx, { sessionId: open.session.id, index: 0, attemptId: randomUUID(), answer: '1' }), rejected('SESSION_NOT_FOUND'));
   await assert.rejects(f.learning.quit(b.childCtx, { sessionId: open.session.id }), rejected('SESSION_NOT_FOUND'));
   assert.equal((await f.learning.state(a.childCtx)).active.session.id, open.session.id);
+});
+
+
+test('Stage 2 hardening: answer grammar rejects leading zeroes, negative zero and extra fraction fields without spending the question', async () => {
+  const f = fixture(), { childCtx } = await f.childSession();
+  const started = await f.learning.start(childCtx, { track: 'engine' });
+  const path = `families/${(await f.service.me(childCtx)).child.id}`; // only to keep the test independent of a question type
+  const sessionKey = [...f.store.data.keys()].find((k) => k.endsWith(`/sessions/${started.session.id}`));
+  const sess = await f.store.get(sessionKey);
+  const cases = [
+    { answer: '01', q: { answer: { type: 'int', v: 1 } } },
+    { answer: '-0', q: { answer: { type: 'int', v: 0 } } },
+    { answer: '01.00', q: { answer: { type: 'dec', v: 1 } } },
+    { answer: '-0.00', q: { answer: { type: 'dec', v: 0 } } },
+    { answer: { n: '1', d: '2', extra: 'ignored' }, q: { answer: { type: 'frac', n: 1, d: 2 } } },
+    { answer: { n: '01', d: '02' }, q: { answer: { type: 'frac', n: 1, d: 2 } } },
+  ];
+  const { grade } = await import('../server/progress.mjs');
+  for (const c of cases) assert.equal(grade({ display: { choices: [] }, ...c.q }, c.answer), null);
+  assert.equal((await f.store.get(sessionKey)).index, sess.index);
+});
+
+test('Stage 2 hardening: creating more than 20 abandoned learning sessions in an hour is denied, while resume is free', async () => {
+  const f = fixture(), k = await f.childSession(), { childCtx } = k;
+  await grantEntitlement(f.store, { familyId: k.p.familyId, seatLimit: 1, accessUntil: f.now() + 2 * 60 * 60_000, reason: 'start-throttle test', actor: 'test' }, f.now());
+  for (let i = 0; i < 20; i++) {
+    const started = await f.learning.start(childCtx, { track: 'engine' });
+    const resumed = await f.learning.start(childCtx, { track: 'nav' });
+    assert.equal(resumed.resumed, true); assert.equal(resumed.session.id, started.session.id);
+    await f.learning.quit(childCtx, { sessionId: started.session.id });
+  }
+  await assert.rejects(f.learning.start(childCtx, { track: 'engine' }), rejected('TOO_MANY_ATTEMPTS'));
+  f.advance(60 * 60_000 + 1);
+  assert.equal((await f.learning.start(childCtx, { track: 'engine' })).resumed, false);
 });

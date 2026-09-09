@@ -1,9 +1,21 @@
 # Stage 1 hardening verification - 8 September 2026
 
-The initial record below is historical, not the status of the hardening patch.
-Read [STAGE1_HARDENING.md](STAGE1_HARDENING.md) for the changes, executed checks,
-and remaining acceptance work. Stage 1 sign-off is still pending. No public
-launch or production-security certification is implied by a green test run.
+The older records below are historical checkpoints. Current Stage 1b/Stage 2 completion work is described in
+[STAGE1B_HARDENING.md](STAGE1B_HARDENING.md), [STAGE2_LEARNING.md](STAGE2_LEARNING.md), and
+[STAGE2_COMPLETION.md](STAGE2_COMPLETION.md). No public-launch or production-security certification is implied
+by a green test run.
+
+## Stage 1b + Stage 2 completion candidate - 9 September 2026
+
+- Base release entering the completion pass: `dbc189f20e74231b978c1ca447cc4c5e58af0777`.
+- S1B-A/S1B-B follow-up login quota/shared-address hardening implemented.
+- Stage 2 learning hardening adds durable per-child start throttling, canonical answer validation and a real-emulator concurrent-answer race regression.
+- The remaining v2 game/economy product surface is migrated behind v3 server authority: shop/inventory/cosmetics, pets/eggs/shields, Reward Store, Family Rocket, System Scan, pace, map/fluency, read-aloud and parent game/progress controls.
+- A guarded dry-run-first v2 JSON history/wallet/config migration path is included; it never connects to the old Firebase project.
+- Local deterministic suite: **140/140 passed, 0 failed, 0 skipped**.
+- Required GitHub `unit`, `emulator`, and `container-build` checks remain the merge gate for this candidate.
+- Real iPhone Safari / Android Chrome interaction remains a manual private-pilot acceptance item.
+- Stage 3 commercial payments/subscriptions/account lifecycle have not started in this branch.
 
 ## Developer-PC hardening acceptance - 8 September 2026
 
