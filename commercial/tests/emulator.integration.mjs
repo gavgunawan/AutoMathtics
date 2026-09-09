@@ -275,12 +275,12 @@ test('real Firestore: a requested deletion removes the people and the game and l
   const raw = Buffer.from(JSON.stringify(event));
   assert.equal((await payments.receive('fake', raw, { 'x-webhook-signature': signWebhook(webhookSecret, raw, Date.now()) })).status, 'applied');
   const { child } = await service.createChild(ctx, { nickname: 'Leaver', icon: 'fox', pin: '763829' }, randomUUID());
+  // the parent asks and exports before handing the device over (the handover retires this parent session, S1-001)
+  const req = await support.requestDeletion(ctx, { operationId: randomUUID() }); assert.ok(req.pending);
+  const x = await support.exportFamily(ctx); assert.equal(x.children.length, 1); assert.equal(x.children[0].nickname, 'Leaver');
   const sel = await service.authenticate(await service.lock(ctx));
   const childCtx = await service.authenticate(await service.selectChild(sel, child.id, '763829'));
   const started = await learning.start(childCtx, { track: 'nav' }); assert.ok(started.session.id);
-  const again = await service.authenticate(await service.login(p.idToken));
-  const req = await support.requestDeletion(again, { operationId: randomUUID() }); assert.ok(req.pending);
-  const x = await support.exportFamily(again); assert.equal(x.children.length, 1); assert.equal(x.children[0].nickname, 'Leaver');
   const record = await support.executeDeletion(fam.id, { operator: 'emulator-operator', force: true });
   assert.equal(record.counts.children, 1); assert.equal(record.counts.sessions, 1); assert.equal(record.forced, true);
   assert.equal((await db.doc(`families/${fam.id}/children/${child.id}`).get()).exists, false);
@@ -293,5 +293,5 @@ test('real Firestore: a requested deletion removes the people and the game and l
   assert.equal((await db.doc(`billingEvents/fake:${event.id}`).get()).exists, true);
   assert.equal((await db.doc(`parents/${p.uid}`).get()).data().deleted, true);
   await assert.rejects(service.me(childCtx), rejected('SIGN_IN_REQUIRED'));
-  await assert.rejects(service.me(again), rejected('SIGN_IN_REQUIRED'));
+  await assert.rejects(service.me(sel), rejected('SIGN_IN_REQUIRED'));
 });
