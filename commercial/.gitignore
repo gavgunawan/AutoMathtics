@@ -9,3 +9,6 @@ playwright-report/
 
 .staging-env.*
 .staging-hosting.*
+
+# the root .gitignore (v2) drops every lockfile; v3 pins its dependencies, in commercial/ and in functions/
+!package-lock.json
