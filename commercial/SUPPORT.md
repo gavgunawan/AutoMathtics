@@ -70,6 +70,12 @@ entitlement; Stage 4 reconciles, refunds or cancels at the provider.
 
 ### The sign-in account (Stage 4)
 
+From the moment the deletion is asked for, the sign-in account admits nobody: `login()` and every
+authorization refuse the uid (`ACCOUNT_DELETED`), whatever the identity provider did since — a provider
+fault leaves `identityDeletion.requestedAt` without `deletedAt`, and only the operator's retry
+(`delete-account UID`) finishes it. Sessions are swept in bounded batches.
+
+
 Family deletion removes the family and its data; the parent's Firebase Authentication account is
 separate. Once no family points at the parent — the family tombstone left `familyId: null`, or none
 was ever created — the parent may delete the sign-in account itself: `POST /api/account/deletion

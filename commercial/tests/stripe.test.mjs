@@ -61,8 +61,15 @@ test('a plan change moves the live subscription to the new price with prorations
   });
   const r = await gw.changePlan({ idempotencyKey: 'op_1', customerRef: 'cus_ours', from: 'starter', to: 'family' });
   assert.equal(r.providerOperationRef, 'sub_1:in_2'); assert.equal(r.simulated, false); assert.equal(r.chargeCents, null, 'Stripe computes the proration; the invoice says what was charged');
+  assert.equal(r.applied, true); assert.equal(r.pending, false);
   const update = calls.find((c) => c.path === '/v1/subscriptions/sub_1');
   assert.equal(update.headers['Idempotency-Key'], 'op_1'); assert.equal(update.body['items[0][id]'], 'si_1'); assert.equal(update.body['items[0][price]'], 'price_1Family000'); assert.equal(update.body.proration_behavior, 'always_invoice');
+  assert.equal(update.body.payment_behavior, 'pending_if_incomplete', 'the new price applies only once its invoice is paid'); assert.equal(update.body['expand[0]'], 'latest_invoice');
+  // the update held by Stripe until the payment lands: pending, with the invoice the parent must finish
+  const held = gateway({ 'GET /v1/customers/search': { data: [{ id: 'cus_stripe1' }] }, 'GET /v1/subscriptions?customer=cus_stripe1': { data: [sub('price_1Starter00', Date.now() + 30 * DAY)] },
+    'POST /v1/subscriptions/sub_1': { id: 'sub_1', pending_update: { expires_at: 1, subscription_items: [{ id: 'si_1', price: { id: 'price_1Family000' } }] }, items: { data: [{ id: 'si_1', price: { id: 'price_1Starter00' } }] }, latest_invoice: { id: 'in_3', status: 'open', amount_paid: 0, hosted_invoice_url: 'https://invoice.stripe.com/i/x' } } });
+  const h = await held.gw.changePlan({ idempotencyKey: 'op_2', customerRef: 'cus_ours', from: 'starter', to: 'family' });
+  assert.equal(h.pending, true); assert.equal(h.applied, false); assert.equal(h.invoiceRef, 'in_3'); assert.equal(h.invoiceUrl, 'https://invoice.stripe.com/i/x'); assert.equal(h.providerOperationRef, 'sub_1:in_3');
   const none = gateway({ 'GET /v1/customers/search': { data: [{ id: 'cus_x' }] }, 'GET /v1/subscriptions': { data: [] } });
   await assert.rejects(none.gw.changePlan({ idempotencyKey: 'o', customerRef: 'c', from: 'starter', to: 'big' }), rejected('NO_PROVIDER_SUBSCRIPTION'));
   const broken = gateway({ 'GET /v1/customers/search': { status: 401, json: { error: { code: 'api_key_expired', type: 'authentication_error' } } } });
@@ -76,13 +83,23 @@ test('webhooks: signature before parsing, then Stripe\'s events become the inbox
   const done = event(f, 'checkout.session.completed', { object: 'checkout.session', customer: 'cus_stripe1', subscription: 'sub_1', client_reference_id: 'chk_1', metadata: { familyId: 'fam_1', checkoutId: 'chk_1', price: 'price_1BigFam000' } });
   const { raw, headers } = signed(f, done);
   const n = await gw.verify(raw, headers, f.now());
-  assert.deepEqual(n, { id: done.id, at: done.created * 1000, seq: null, type: 'checkout.completed', customer: 'cus_stripe1', data: { price: 'price_1Family000', periodEnd: Math.floor(end / 1000) * 1000, familyId: 'fam_1', checkoutId: 'chk_1', amountCents: null, full: null } });
+  assert.deepEqual(n, { id: done.id, at: done.created * 1000, seq: null, type: 'checkout.completed', customer: 'cus_stripe1', data: { price: 'price_1Family000', periodEnd: Math.floor(end / 1000) * 1000, familyId: 'fam_1', checkoutId: 'chk_1', amountCents: null, full: null, ref: null } });
   assert.equal(calls.length, 1, 'the price came from the subscription Stripe holds, not from the metadata we authored');
   const paid = event(f, 'invoice.paid', { object: 'invoice', customer: 'cus_stripe1', lines: { data: [{ price: { id: 'price_1Starter00' }, period: { end: Math.floor(end / 1000) } }] }, subscription_details: { metadata: { familyId: 'fam_1' } } });
   const np = await gw.verify(...Object.values(signed(f, paid)).slice(0, 2), f.now());
   assert.equal(np.type, 'invoice.paid'); assert.equal(np.data.price, 'price_1Starter00'); assert.equal(np.data.periodEnd, Math.floor(end / 1000) * 1000); assert.equal(np.data.familyId, 'fam_1');
-  const refund = event(f, 'charge.refunded', { object: 'charge', customer: 'cus_stripe1', amount: 900, amount_refunded: 900, refunded: true });
-  const nr = await gw.verify(...Object.values(signed(f, refund)).slice(0, 2), f.now()); assert.equal(nr.type, 'charge.refunded'); assert.equal(nr.data.amountCents, 900); assert.equal(nr.data.full, true);
+  // refunds: the per-refund object, its own amount and id; the charge answers who the customer is and whether it is now refunded in full
+  const charged = gateway({ 'GET /v1/charges/ch_1': { id: 'ch_1', customer: 'cus_stripe1', amount: 900, amount_refunded: 500, refunded: false } });
+  const partial = event(f, 'refund.created', { object: 'refund', id: 're_1', charge: 'ch_1', amount: 300, status: 'succeeded' });
+  const np1 = await charged.gw.verify(...Object.values(signed(f, partial)).slice(0, 2), f.now());
+  assert.equal(np1.type, 'refund.created'); assert.equal(np1.customer, 'cus_stripe1'); assert.equal(np1.data.amountCents, 300, 'the refund object, not the running total'); assert.equal(np1.data.full, false); assert.equal(np1.data.ref, 're_1');
+  const last = gateway({ 'GET /v1/charges/ch_1': { id: 'ch_1', customer: 'cus_stripe1', amount: 900, amount_refunded: 900, refunded: true } });
+  const closing = event(f, 'refund.created', { object: 'refund', id: 're_2', charge: 'ch_1', amount: 400, status: 'succeeded' });
+  const np2 = await last.gw.verify(...Object.values(signed(f, closing)).slice(0, 2), f.now()); assert.equal(np2.data.amountCents, 400); assert.equal(np2.data.full, true);
+  const pendingRefund = event(f, 'refund.created', { object: 'refund', id: 're_3', charge: 'ch_1', amount: 100, status: 'pending' });
+  assert.equal((await last.gw.verify(...Object.values(signed(f, pendingRefund)).slice(0, 2), f.now())).type, 'stripe.refund.created:pending', 'a refund not yet succeeded is recorded and ignored');
+  const total = event(f, 'charge.refunded', { object: 'charge', customer: 'cus_stripe1', amount: 900, amount_refunded: 900, refunded: true });
+  assert.equal((await gw.verify(...Object.values(signed(f, total)).slice(0, 2), f.now())).type, 'stripe.charge.refunded', 'the charge running total is never a refund event');
   const gone = event(f, 'customer.subscription.deleted', { object: 'subscription', customer: 'cus_stripe1', metadata: { familyId: 'fam_1' } });
   assert.equal((await gw.verify(...Object.values(signed(f, gone)).slice(0, 2), f.now())).type, 'subscription.deleted');
   const other = event(f, 'customer.updated', { object: 'customer', id: 'cus_stripe1' });
@@ -120,8 +137,17 @@ test('the whole flow through the Stage 3 inbox: checkout, Stripe\'s own customer
   const renew = event(f, 'invoice.paid', { object: 'invoice', customer: 'cus_stripe1', lines: { data: [{ price: { id: 'price_1Starter00' }, period: { end: Math.floor((end + 30 * DAY) / 1000) } }] } });
   s = signed(f, renew); assert.equal((await payments.receive('stripe', s.raw, s.headers)).status, 'applied');
   assert.equal((await f.store.get(`families/${a.familyId}`)).subscription.periodEnd, Math.floor((end + 30 * DAY) / 1000) * 1000);
-  const refund = event(f, 'charge.refunded', { object: 'charge', customer: 'cus_stripe1', amount: 500, amount_refunded: 500, refunded: true });
-  s = signed(f, refund); assert.equal((await payments.receive('stripe', s.raw, s.headers)).state, 'cancelled');
+  // two partial refunds, each its own object; a redelivery of the first under a new event id counts nothing; the last one ends access
+  const chargeState = { id: 'ch_9', customer: 'cus_stripe1', amount: 500, amount_refunded: 200, refunded: false };
+  const stripeWithCharge = gateway({ 'GET /v1/customers/search': () => ({ data: customers }), 'GET /v1/subscriptions/sub_1': sub('price_1Starter00', end), 'GET /v1/charges/ch_9': () => chargeState });
+  const pay2 = new Payments({ foundation: f.service, store: f.store, billing: f.billing, provider: 'stripe', gateways: { stripe: stripeWithCharge.gw }, now: f.now });
+  const r1 = event(f, 'refund.created', { object: 'refund', id: 're_a', charge: 'ch_9', amount: 200, status: 'succeeded' });
+  s = signed(f, r1); assert.equal((await pay2.receive('stripe', s.raw, s.headers)).status, 'applied');
+  const again = { ...r1, id: `evt_${randomUUID().replace(/-/g, '')}` }; s = signed(f, again); assert.deepEqual(await pay2.receive('stripe', s.raw, s.headers), { status: 'ignored', reason: 'DUPLICATE_REFUND' });
+  chargeState.amount_refunded = 500; chargeState.refunded = true;
+  const r2 = event(f, 'refund.created', { object: 'refund', id: 're_b', charge: 'ch_9', amount: 300, status: 'succeeded' });
+  s = signed(f, r2); assert.equal((await pay2.receive('stripe', s.raw, s.headers)).state, 'cancelled');
+  const refunds = (await f.store.get(`families/${a.familyId}`)).subscription.refunds; assert.deepEqual(refunds.map((x) => x.amountCents), [200, 300], 'the record holds each refund once: 500 in total, not 700');
   assert.equal((await f.service.me(a.ctx)).family.entitlement.status, 'inactive');
   // an unknown Stripe customer, or one that belongs to another family, never reaches this family — and a Stripe id
   // already bound to family A can never be attached to family B (NO_TRANSFER), whatever Stripe answers

@@ -36,6 +36,11 @@ what was done at the provider. Money moves only at the provider (the dashboard),
 | `UNKNOWN_PROVIDER_PRICE` | the provider bills a price id the adapter does not know | a price was created or changed in the dashboard: fix the `STRIPE_PRICE_*` configuration or move the subscription to a known price |
 | `PROVIDER_UNREACHABLE` | no verdict this run | retry; if it persists, the key or the network, not the family |
 
+An intent in `awaiting_payment` is an upgrade Stripe holds until its proration invoice is paid: nothing to do
+for a day (the parent finishes the payment on the hosted invoice, `invoice.paid` grants the plan); after that
+it lapses, a new change supersedes it, and `reconcile-intent … no_provider_change` closes it if Stripe never
+applied anything (`reconcile-provider` shows the provider's price).
+
 Open change intents are listed with `providerEvidence`: `provider_on_target_plan` means the provider
 applied a change we could not finalise (a `creating`/`stale` upgrade after a crash) — record it with
 `reconcile-intent PROVIDER OPERATION_UUID applied_by_operator "…"` after applying the plan through the
@@ -72,8 +77,13 @@ Card `4242 4242 4242 4242` pays, `4000 0000 0000 0341` attaches but fails on ren
    paying it is impossible; the second completes.
 4. **Redelivery and order**: `stripe events resend EVENT_ID` twice → `replayed`; resend an older invoice
    after a newer one → `ignored: STALE_EVENT`.
-5. **Upgrade** through the app → Stripe invoices the proration; the intent is `applied` with the
-   subscription and invoice reference; `reconcile-provider` matches.
+5. **Upgrade** through the app with 4242 → Stripe invoices the proration and charges it; the intent is
+   `applied` with the subscription and invoice reference; `reconcile-provider` matches. Then **upgrade with
+   a card that needs authentication** (`4000 0025 0000 3155`) → the app says the payment is not complete, the
+   plan and the seats are unchanged, the intent is `awaiting_payment`, a second change is refused
+   (`PAYMENT_PENDING`); complete the authentication on the hosted invoice → `invoice.paid` grants the plan
+   once (the intent `applied`, the marker released); resend that event → `replayed`. And with a card that
+   fails (`4000 0000 0000 0002`) → the old plan stays; the invoice open at Stripe lapses.
 6. **Crash between provider and finalisation**: stop the server right after Stripe answers the upgrade
    (or set `INTENT_INFLIGHT_MS` low and interrupt) → the intent is `creating`, the report lists it,
    `reconcile-provider` says `provider_on_target_plan`, a retry with the same operation id finalises it.
@@ -84,8 +94,10 @@ Card `4242 4242 4242 4242` pays, `4000 0000 0000 0341` attaches but fails on ren
    period end with the flag set → `customer.subscription.deleted` → `terminate`.
 9. **Dunning**: subscribe with 0341, advance the clock → `invoice.payment_failed` → `grace`, then
    `past_due`; pay the open invoice in the dashboard → `invoice.paid` → `active`.
-10. **Refund**: refund the last charge in the dashboard (partial, then full) → `refund` recorded, then access
-    ends; cancel the subscription too; `reconcile-provider` matches.
+10. **Refund**: refund the last charge in the dashboard (partial, then full) → one `refund.created` per
+    refund, each recorded with its own amount (the family's `refunds[]` shows both amounts, not a running
+    total), then access ends on the full one; `stripe events resend` the first → `DUPLICATE_REFUND`; cancel
+    the subscription too; `reconcile-provider` matches.
 11. **Deletion**: request and force-execute a deletion → the subscription is cancelled at Stripe, the deletion
     record says so; resend the `customer.subscription.deleted` → `reconciliation_required`; `resolve-event`.
 12. **Dashboard drift**: change the price in the dashboard → `reconcile-provider` reports `PLAN_MISMATCH`;

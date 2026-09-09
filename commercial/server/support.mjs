@@ -15,6 +15,7 @@ import { fail, object, uuid, text } from './security.mjs';
 import { normalizeProgress, freshProgress } from './progress.mjs';
 import { reconcile } from './ledger.mjs';
 import { deriveState, effectiveEntitlement } from './subscription.mjs';
+import { sweepSessions } from './recovery.mjs';
 
 const DAY = 86_400_000, AUDIT_RETENTION_MS = 400 * DAY;
 export const DELETION_GRACE_MS = 14 * DAY;
@@ -131,22 +132,28 @@ export class Support {
     });
     return this.finishIdentityDeletion(uid, operator);
   }
-  async beginIdentityDeletion(tx, uid, parent, actor) {
-    const now = this.now(), sessions = await tx.query('sessions', 'uid', uid, 200);
-    for (const [key] of sessions) tx.delete(`sessions/${key}`);
+  /**
+   * Step one, in the caller's transaction: the marker that closes the door. From this write on,
+   * login() and authorize() refuse the uid (ACCOUNT_DELETED), so the sweep and the provider call
+   * that follow can fail and be retried without a fresh token reopening anything (Stage 4 review).
+   */
+  beginIdentityDeletion(tx, uid, parent, actor) {
+    const now = this.now();
     tx.set(`parents/${uid}`, { ...parent, deleted: true, deletedAt: parent.deletedAt || now, familyId: null, reauthAfter: Math.max(parent.reauthAfter || 0, Math.floor(now / 1000)), phoneKey: parent.phoneKey || null,
-      identityDeletion: { requestedAt: parent.identityDeletion?.requestedAt || now, requestedBy: actor, deletedAt: parent.identityDeletion?.deletedAt || null } });
-    this.audit(tx, 'account.deletion_started', actor, null, { subject: uid, sessions: sessions.length });
+      identityDeletion: { requestedAt: parent.identityDeletion?.requestedAt || now, requestedBy: parent.identityDeletion?.requestedBy || actor, deletedAt: parent.identityDeletion?.deletedAt || null } });
+    this.audit(tx, 'account.deletion_started', actor, null, { subject: uid });
     return { uid };
   }
+  /** Steps two and three: every session of the uid in bounded batches, the identity at the provider, then the record. A provider fault leaves requestedAt without deletedAt; the operator retries. */
   async finishIdentityDeletion(uid, actor) {
+    const sessions = await sweepSessions(this.store, uid, DELETION_BATCH);
     try { await this.foundation.identity.deleteUser(uid); }
     catch (error) { if (error?.code === 'auth/user-not-found' || /not.found|missing/i.test(String(error?.message))) { /* already gone at the provider: finish the record */ } else throw error; }
     return this.store.transaction(async (tx) => {
       const parent = await tx.get(`parents/${uid}`), now = this.now();
       const record = { ...parent, identityDeletion: { ...(parent.identityDeletion || { requestedAt: now, requestedBy: actor }), deletedAt: now } };
       tx.set(`parents/${uid}`, record);
-      this.audit(tx, 'account.deleted', actor, null, { subject: uid });
+      this.audit(tx, 'account.deleted', actor, null, { subject: uid, sessions });
       return { deleted: true, deletedAt: now };
     });
   }
@@ -189,7 +196,7 @@ export class Support {
       reconciliationRequired: inbox.filter((e) => e.outcome?.status === 'reconciliation_required' && !e.outcome.resolution).length, // late provider events on a deleted family, until resolve-event
       rejected: inbox.filter((e) => e.outcome?.status === 'rejected' && !e.outcome.resolution).length,
       providerCheck: providerChecks[0] ? { at: providerChecks[0].at, match: providerChecks[0].match, findings: providerChecks[0].findings.map((x) => x.code) } : null, // the latest reconcile-provider run
-      openIntents: flagged(intents, 'status', ['creating', 'stale', 'superseded', 'frozen_by_deletion']).map((i) => i.operationId),
+      openIntents: flagged(intents, 'status', ['creating', 'awaiting_payment', 'stale', 'superseded', 'frozen_by_deletion']).map((i) => i.operationId),
       openCheckouts: flagged(checkouts, 'status', ['creating', 'superseded', 'superseded_by_deletion']).map((c) => c.checkoutId),
       inFlight: family.billingIntent || null, liveCheckout: family.checkoutIntent || null,
       ledgerDamaged: children.filter((c) => c.ledger?.damaged).map((c) => c.id), ledgerDrift: children.filter((c) => c.ledger && !c.ledger.match && !c.ledger.damaged).map((c) => c.id),
@@ -274,7 +281,7 @@ export class Support {
       providers.push({ provider, ref, available: st.available, simulated: st.simulated === true, error: st.error || null, customer: st.customer || null, subscription: ps, findings });
     }
     const target = (i) => (i.kind === 'clear' ? i.fromPlan : i.toPlan);
-    const intents = (await this.store.query('billingChangeIntents', 'familyId', familyId, 100)).map(([, i]) => i).filter((i) => ['creating', 'stale', 'superseded', 'frozen_by_deletion'].includes(i.status)).sort((a, b) => a.createdAt - b.createdAt)
+    const intents = (await this.store.query('billingChangeIntents', 'familyId', familyId, 100)).map(([, i]) => i).filter((i) => ['creating', 'awaiting_payment', 'stale', 'superseded', 'frozen_by_deletion'].includes(i.status)).sort((a, b) => a.createdAt - b.createdAt)
       .map((i) => { const p = providers.find((x) => x.provider === i.provider), ps = p?.subscription; return { operationId: i.operationId, provider: i.provider, kind: i.kind, fromPlan: i.fromPlan, toPlan: i.toPlan, status: i.status, providerOperationRef: i.providerOperationRef || null,
         providerEvidence: !p || !p.available || p.simulated || p.error ? 'unknown' : !ps?.live ? 'no_live_provider_subscription' : ps.plan === target(i) ? 'provider_on_target_plan' : 'provider_on_other_plan' }; });
     const findings = providers.flatMap((p) => p.findings.map((x) => ({ provider: p.provider, ...x }))), compared = providers.some((p) => p.available && !p.simulated && !p.error);
@@ -318,7 +325,7 @@ export class Support {
     return this.store.transaction(async (tx) => {
       const intent = await tx.get(path);
       if (!intent) fail(404, 'INTENT_NOT_FOUND');
-      if (!['creating', 'stale', 'superseded', 'frozen_by_deletion'].includes(intent.status)) fail(409, 'INTENT_NOT_OPEN');
+      if (!['creating', 'awaiting_payment', 'stale', 'superseded', 'frozen_by_deletion'].includes(intent.status)) fail(409, 'INTENT_NOT_OPEN');
       const id = randomUUID(), now = this.now();
       const record = { id, kind: 'intent', provider, operationId, familyId: intent.familyId, previousStatus: intent.status, providerOperationRef: intent.providerOperationRef || null, outcome, note, operator, at: now };
       tx.set(`billingReconciliations/${id}`, record);
@@ -376,7 +383,7 @@ export class Support {
       if (f.deletion.effectiveAt > this.now() && force !== true) fail(409, 'DELETION_NOT_DUE');
       const now = this.now();
       const checkouts = []; for (const [provider, id] of Object.entries(f.checkoutIntent || {})) if (id) checkouts.push([`checkouts/${provider}:${id}`, await tx.get(`checkouts/${provider}:${id}`)]);
-      const intents = (await tx.query('billingChangeIntents', 'familyId', familyId, 100)).filter(([, i]) => i.status === 'creating'); // family-scoped lookup, not a collection scan
+      const intents = (await tx.query('billingChangeIntents', 'familyId', familyId, 100)).filter(([, i]) => i.status === 'creating' || i.status === 'awaiting_payment'); // family-scoped lookup, not a collection scan
       const deletion = { ...f.deletion, status: 'executing', executionId: randomUUID(), startedAt: now, executedBy: operator, forced: force === true, phase: 'begun', counts: {} };
       const next = { ...f, deletion, billingIntent: null, checkoutIntent: null };
       tx.set(`families/${familyId}`, next);

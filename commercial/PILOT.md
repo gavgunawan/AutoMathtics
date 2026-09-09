@@ -25,7 +25,7 @@ the same summary and stops unless `CONFIRM_MIGRATION=write` is set.
 |---|---|---|
 | Engine | Sector A complete (paper 101), 5 crowns | Sector B paper 21, 1 crown |
 | Navigator | Sector A paper 81, 3 crowns | Sector A paper 86, 4 crowns |
-| History rows | 61 (last 60 carried), 45 sessions, 43 passes, 4 streak bonuses | 71 (last 60 carried), 56 sessions, 52 passes, 4 streak bonuses |
+| History rows | 61 in v2; the last 60 carried, **1 older row not carried**; 45 sessions, 43 passes, 4 streak bonuses | 71 in v2; the last 60 carried, **11 older rows not carried**; 56 sessions, 52 passes, 4 streak bonuses |
 | Earned under v2's economy | 2,700 GC / 5,400 RP | 3,250 GC / 6,500 RP |
 | Spent (v2 ledgers) | 1,600 GC / 5,100 RP | 600 GC / 6,500 RP |
 | **Carried balance** (ledger opening row) | **1,100 GC / 300 RP** | **2,650 GC / 0 RP** |
@@ -35,7 +35,7 @@ the same summary and stops unless `CONFIRM_MIGRATION=write` is set.
 | Mystery Egg | none pending | none pending |
 | System Scan week | 2026-W36 | 2026-W36 |
 | v2 PIN in the v3 document | no | no |
-| Dropped items | none | none |
+| Unrecognised inventory items dropped | none | none |
 
 **Decisions the export cannot make** (the owner, before cutover):
 
@@ -46,12 +46,19 @@ the same summary and stops unless `CONFIRM_MIGRATION=write` is set.
    rocket goal in v3 (*Game & progress* → Family Rocket) and decides the starting fuel from what v2 shows on the day.
 3. **Mystery Egg**: nothing to refund — neither child has one pending.
 4. **Font scale and sound** (60 / 90, sound on) are device settings in v2; v3 has its own.
+5. **History beyond the last 60 rows.** The importer carries at most 60 history rows per child
+   (`HISTORY_MAX`), so 12 older session rows in total (Allison 1, Geralt 11) are not part of the
+   children's active v3 progress. Balances, sectors and crowns are unaffected — those come from the
+   whole record. Accept this, or ask for the limit to be raised before cutover. Either way, keep the
+   final raw v2 export files as the historical archive: store them with the cutover record, outside
+   the app, and do not delete them.
 
 ## Cutover, in order
 
 1. **Announce the stop.** Pick the day; the children finish their v2 session; nobody plays v2 after it.
 2. **Export again from v2** the same way as the dry-run files (the v2 database records for each child and
    the family settings), and check the `lastScanWeek` and the last history row are the ones just played.
+   These files are the archive (decision 5): keep them.
 3. **Create the family in v3** on staging; grant two seats (`npm run grant:cloud -- FAMILY 2 <expiry> 'pilot'`).
 4. **Add the children with the *start from A1* option** — it writes no progress document, which the
    importer requires (it refuses a child who already has any). Age and year level as they are today.

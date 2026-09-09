@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { fixture, rejected } from './support.mjs';
 import { DELETION_GRACE_MS } from '../server/support.mjs';
+import { sha256, randomToken } from '../server/security.mjs';
 
 const op = () => ({ operationId: randomUUID() });
 const samePhone = (f, ...uids) => { for (const u of uids) { f.token(u); f.users.get(u).multiFactor.enrolledFactors[0].phoneNumber = '+6591239999'; } };
@@ -47,7 +48,14 @@ test('a provider failure leaves a record that says so, and the retry finishes; t
   f.auth.failDelete = Error('identity provider unavailable');
   await assert.rejects(f.support.deleteAccount(p.ctx, op()), /identity provider unavailable/);
   const mid = await f.store.get('parents/parentA'); assert.ok(mid.identityDeletion.requestedAt); assert.equal(mid.identityDeletion.deletedAt, null); assert.deepEqual(f.auth.deleted, []);
-  assert.equal((await f.store.query('sessions', 'uid', 'parentA', 50)).length, 0, 'the sessions went in step one regardless');
+  assert.equal((await f.store.query('sessions', 'uid', 'parentA', 50)).length, 0, 'the sessions went regardless');
+  // Stage 4 review: the identity still exists at the provider, so the parent can mint a fresh token — the door stays shut
+  f.advance(2000);
+  await assert.rejects(f.service.login(f.token('parentA')), rejected('ACCOUNT_DELETED'), 'no fresh sign-in');
+  assert.equal((await f.store.query('sessions', 'uid', 'parentA', 50)).length, 0, 'and no session was written');
+  const stray = randomToken(); await f.store.put(`sessions/${sha256(stray)}`, { uid: 'parentA', familyId: null, role: 'parent', childId: null, csrf: 'c', createdAt: f.now(), expiresAt: f.now() + 600_000, expireAt: f.now() + 600_000, mfaUid: 'mfa-parentA', email: 'parentA@example.test', authTime: Math.floor(f.now() / 1000) }); // a session the sweep somehow missed
+  await assert.rejects(f.service.me(await f.service.authenticate(stray)), rejected('ACCOUNT_DELETED'), 'a surviving session cannot be used either');
+  assert.equal((await f.store.list('families')).length, 1, 'no new family appeared');
   await assert.rejects(f.support.deleteAccountFor('parentA', ''), rejected('OPERATOR_REQUIRED'));
   await assert.rejects(f.support.deleteAccountFor('nobody', 'ops@example.test'), rejected('PARENT_NOT_FOUND'));
   const done = await f.support.deleteAccountFor('parentA', 'ops@example.test'); assert.equal(done.deleted, true);
@@ -61,4 +69,12 @@ test('the account deletion needs the parent\'s own recent session', async () => 
   const k = await f.childSession('parentB'); await assert.rejects(f.support.deleteAccount(k.childCtx, op()), rejected('PARENT_REQUIRED'));
   f.advance(6 * 60_000); await assert.rejects(f.support.deleteAccount(p.ctx, op()), rejected('REAUTHENTICATE'));
   assert.deepEqual(f.auth.deleted, []);
+});
+test('the sweep of sessions is bounded and complete: more than one batch of old session rows goes with the account', async () => {
+  const f = fixture(); const { p } = await deletedFamily(f);
+  for (let i = 0; i < 260; i++) await f.store.put(`sessions/old-${i}`, { uid: 'parentA', familyId: null, role: 'parent', childId: null, csrf: 'c', createdAt: f.now() - 86_400_000, expiresAt: f.now() - 3_600_000, expireAt: f.now() - 3_600_000 }); // expired long ago; TTL has not caught up
+  assert.equal((await f.store.query('sessions', 'uid', 'parentA', 1000)).length, 261);
+  assert.equal((await f.support.deleteAccount(p.ctx, op())).deleted, true);
+  assert.equal((await f.store.query('sessions', 'uid', 'parentA', 1000)).length, 0, 'every row went, in batches under the transaction limit');
+  const done = (await f.store.list('audit')).find((x) => x.action === 'account.deleted'); assert.equal(done.sessions, 261);
 });

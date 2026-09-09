@@ -15,7 +15,7 @@ const messages = {
   CHILD_SESSION_REVOKED: 'The child PIN changed. Select the child and enter the new PIN.',
   TRIAL_ALREADY_USED: 'A free trial has already been used with this mobile number.', TRIAL_REQUIRES_VERIFIED_PHONE: 'A verified mobile number is needed for the free trial.',
   SUBSCRIPTION_EXISTS: 'This family already has a subscription.', NO_SUBSCRIPTION: 'There is no subscription to change.', INVALID_TRANSITION: 'That change is not possible in the current state.',
-  FAMILY_DELETED: 'This family has been deleted.', NO_DELETION_PENDING: 'No deletion is scheduled.', FAMILY_STILL_EXISTS: 'Delete the family first; the sign-in account can go after that.', PLACEMENT_PENDING: 'The placement test comes first.', PLACEMENT_NOT_PENDING: 'There is no placement test to take.', ALREADY_STARTED: 'This child has already started playing; the starting point can no longer be changed.', INVALID_START: 'Choose a year level for that starting option.', RECOVERY_NOT_FOUND: 'No recovery request exists for that account.', RECOVERY_NOT_PENDING: 'That recovery request is no longer pending.', IDENTITY_UNAVAILABLE: 'The sign-in service did not answer. Try again in a moment.',
+  FAMILY_DELETED: 'This family has been deleted.', NO_DELETION_PENDING: 'No deletion is scheduled.', FAMILY_STILL_EXISTS: 'Delete the family first; the sign-in account can go after that.', PLACEMENT_PENDING: 'The placement test comes first.', PLACEMENT_NOT_PENDING: 'There is no placement test to take.', ALREADY_STARTED: 'This child has already started playing; the starting point can no longer be changed.', INVALID_START: 'Choose a year level for that starting option.', RECOVERY_NOT_FOUND: 'No recovery request exists for that account.', ACCOUNT_DELETED: 'This sign-in account has been deleted.', PAYMENT_PENDING: 'A plan change is still waiting for its payment. Complete that payment, or wait for it to lapse, before changing the plan again.', RECOVERY_NOT_PENDING: 'That recovery request is no longer pending.', IDENTITY_UNAVAILABLE: 'The sign-in service did not answer. Try again in a moment.',
   MANUAL_GRANT_ACTIVE: 'This family already has pilot access, so the free trial is not needed.', CHECKOUT_REQUIRED: 'Choose a plan to subscribe first; a trial cannot be changed.', PLAN_CHANGE_NOT_AUTHORIZED: 'That payment does not match the plan on record.', RENEWAL_REQUIRED: 'The renewal payment comes first; upgrade after it goes through.', CHANGE_IN_PROGRESS: 'A plan change is already in progress. Try again in a moment.', USE_PLAN_CHANGE: 'Your family is subscribed: change the plan from the subscription controls.', SUBSCRIPTION_CHANGED: 'The subscription changed while this was in progress. Refresh and try again.', LEDGER_REPLAYED: 'That was already done. Refresh to see the result.',
   SEATS_CANNOT_REMOVE: 'Seats can be added here, not taken away.', INVALID_PLAN: 'That plan is not available.', SELECT_CHILDREN_FOR_DOWNGRADE: 'Not enough seats for that many children.', IDEMPOTENCY_CONFLICT: 'That request was already made differently. Refresh and try again.',
   INSUFFICIENT_GRID_COINS: 'Not enough Grid Coins yet.', INSUFFICIENT_REWARD_POINTS: 'Not enough Reward Points yet.',
@@ -117,12 +117,12 @@ function recoveryScreen(email) {
   const box = panel('ACCOUNT RECOVERY', 'Lost your phone?', 'Recovery takes seven days and needs your email inbox. Nobody can shorten it. Your family and children stay exactly as they are.');
   box.append(el('p', `1. Start recovery for ${email}.  2. Reset your password from the emailed link \u2014 that proves the inbox is yours.  3. After the waiting period, complete recovery here, then sign in and verify your new mobile.`, 'notice'));
   const when = (ms) => new Date(ms).toLocaleString();
-  box.append(button('1. Start recovery', async () => { const r = await api('/auth/recovery/start', { email }); note(`Recovery requested. It can be completed from ${when(r.readyAt)}. Now reset your password from the email link.`); }, 'primary'),
+  box.append(button('1. Start recovery', async () => { const r = await api('/auth/recovery/start', { email }); note(`Recovery requested. If this account exists, it can be completed from ${when(r.readyAt)} at the earliest. Now reset your password from the email link.`); }, 'primary'),
     button('2. Send password reset email', async () => { await (await auth()).resetPassword(email); note('If this email can receive a reset link, one has been requested. Set a new password, then come back after the waiting period.'); }, 'ghost'),
     button('3. Complete recovery', async () => {
       const r = await api('/auth/recovery/complete', { email });
       if (r.completed) { signInScreen(); note('Recovery complete. Sign in with your password, then verify your new mobile number.'); return; }
-      note(r.reason === 'WAITING' ? `Not yet: recovery can be completed from ${when(r.readyAt)}.` : r.reason === 'PROOF_REQUIRED' ? 'Reset your password from the email link first; that is how we know the inbox is yours.' : 'No recovery is in progress for this email. Start one first.');
+      note('Not completed yet. Recovery needs a request for this email, the password reset from the emailed link, and the waiting period to have passed. Try again later.');
     }, 'ghost'),
     button('Back to sign-in', () => signInScreen(), 'text-button'));
 }
@@ -259,6 +259,11 @@ function planChangeControls(box, billing, e, family) {
     const op = crypto.randomUUID();
     if (plan.seats > e.seatLimit) row.append(button(`Upgrade to ${plan.name} now (${plan.seats} slots)`, async () => {
       const r = await api('/billing/plan', { plan: plan.id, operationId: op });
+      if (r.pending) { // Stage 4: the provider holds the upgrade until its payment is complete (a card that needs authentication, or a failed charge)
+        note('The payment for this upgrade is not complete yet. Finish it with your card issuer; the plan changes the moment the payment provider confirms it.');
+        if (r.invoiceUrl && typeof window !== 'undefined' && window.open) window.open(r.invoiceUrl, '_blank', 'noopener');
+        await refresh(); return;
+      }
       note(r.proration?.simulated ? `Upgraded. Pilot mode: the prorated difference would be ${(r.proration.chargeCents / 100).toFixed(2)}; nothing is charged.` : 'Upgraded.'); await refresh();
     }, 'ghost'));
     else row.append(button(`Switch to ${plan.name} at renewal (${plan.seats} slots)`, () => downgradeScreen(plan, family, op), 'ghost'));

@@ -369,25 +369,38 @@ test('real Auth: lost phone — the factor is removed only after the emailed pas
   const fam = await service.createFamily(l, { label: 'Lost phone', adultAttestation: true, consentVersion: 'pilot-v1' });
   const before = (await db.doc(`parents/${p.uid}`).get()).data();
   const started = await recovery.start({ email }); assert.equal(started.accepted, true); assert.ok(started.readyAt > Date.now() && started.readyAt <= Date.now() + WAIT);
-  assert.deepEqual(await recovery.complete({ email }), { completed: false, reason: 'PROOF_REQUIRED', readyAt: started.readyAt });
+  assert.deepEqual(await recovery.complete({ email }), { completed: false }, 'no proof: the same answer as for any email');
   // the parent resets the password from the emailed link (the emulator exposes the code)
-  await post('v1/accounts:sendOobCode', { requestType: 'PASSWORD_RESET', email });
-  const codes = await fetch(`http://127.0.0.1:9099/emulator/v1/projects/${projectId}/oobCodes`).then((r) => r.json());
-  const oob = codes.oobCodes.filter((c) => c.email === email && c.requestType === 'PASSWORD_RESET').at(-1); assert.ok(oob, 'the emulator issued a reset code');
-  await post('v1/accounts:resetPassword', { oobCode: oob.oobCode, newPassword: 'Synthetic-password-9911' });
-  assert.equal((await recovery.complete({ email })).reason, 'WAITING');
+  const resetPassword = async (newPassword) => {
+    await post('v1/accounts:sendOobCode', { requestType: 'PASSWORD_RESET', email });
+    const codes = await fetch(`http://127.0.0.1:9099/emulator/v1/projects/${projectId}/oobCodes`).then((r) => r.json());
+    const oob = codes.oobCodes.filter((c) => c.email === email && c.requestType === 'PASSWORD_RESET').at(-1); assert.ok(oob, 'the emulator issued a reset code');
+    await post('v1/accounts:resetPassword', { oobCode: oob.oobCode, newPassword });
+  };
+  await resetPassword('Synthetic-password-9911');
+  assert.deepEqual(await recovery.complete({ email }), { completed: false }, 'proof, but the wait is not over');
   assert.equal((await auth.getUser(p.uid)).multiFactor.enrolledFactors.length, 1, 'nothing changes before the waiting period');
   await new Promise((r) => setTimeout(r, WAIT + 500)); // the waiting period passes
+  // the race: the owner signs in with the old phone after complete() has read the request as pending and before it claims it
+  const realLookup = identity.lookup.bind(identity);
+  identity.lookup = async (uid, fresh) => { identity.lookup = realLookup; const owner = await signInAgain(email, p.uid, 'Synthetic-password-9911'); await service.login(owner.idToken); return realLookup(uid, fresh); };
+  assert.deepEqual(await recovery.complete({ email }), { completed: false });
+  assert.equal((await auth.getUser(p.uid)).multiFactor.enrolledFactors.length, 1, 'the factor stayed: the sign-in won');
+  assert.equal((await db.doc(`recoveries/${p.uid}`).get()).data().status, 'cancelled_by_sign_in');
+  // the parent asks again, proves the inbox again, waits again — and this time nobody signs in
+  await new Promise((r) => setTimeout(r, 1100));
+  await recovery.start({ email }); await resetPassword('Synthetic-password-9922');
+  await new Promise((r) => setTimeout(r, WAIT + 500));
   assert.deepEqual(await recovery.complete({ email }), { completed: true });
   assert.equal((await auth.getUser(p.uid)).multiFactor?.enrolledFactors?.length ?? 0, 0, 'the factor is gone at the provider');
   await assert.rejects(service.authenticate(cookie), 'the old session is gone');
-  const rec = (await db.doc(`recoveries/${p.uid}`).get()).data(); assert.equal(rec.status, 'completed'); assert.ok(['tokens_revoked', 'password_changed'].includes(rec.proof));
+  const rec = (await db.doc(`recoveries/${p.uid}`).get()).data(); assert.equal(rec.status, 'completed'); assert.ok(['tokens_revoked', 'password_changed'].includes(rec.proof)); assert.ok(rec.claimId);
   // password alone yields a token this server refuses until a mobile is verified again
-  const plain = await post('v1/accounts:signInWithPassword', { email, password: 'Synthetic-password-9911', returnSecureToken: true }); assert.ok(plain.idToken);
+  const plain = await post('v1/accounts:signInWithPassword', { email, password: 'Synthetic-password-9922', returnSecureToken: true }); assert.ok(plain.idToken);
   await assert.rejects(service.login(plain.idToken), rejected('VERIFY_MOBILE_WITH_MFA'));
   await enrolPhone(plain.idToken, '+16505550171');
   await new Promise((r) => setTimeout(r, 1100)); // reauthAfter moved to the completion second
-  const again = await signInAgain(email, p.uid, 'Synthetic-password-9911'), ctx = await service.authenticate(await service.login(again.idToken));
+  const again = await signInAgain(email, p.uid, 'Synthetic-password-9922'), ctx = await service.authenticate(await service.login(again.idToken));
   const me = await service.me(ctx); assert.equal(me.family.id, fam.id, 'the same family'); assert.equal(me.recovery.status, 'completed');
   const after = (await db.doc(`parents/${p.uid}`).get()).data(); assert.notEqual(after.phoneKey, before.phoneKey, 'the phone key follows the new number'); assert.equal(after.familyId, before.familyId);
 });

@@ -47,6 +47,14 @@ export function verifyStripeSignature(secret, rawBody, header, nowMs) {
 // pricing.price_details. The adapter reads both, so the endpoint's API version cannot silently break a renewal.
 export const periodEndOf = (sub) => { const s = sub?.items?.data?.[0]?.current_period_end ?? sub?.current_period_end; return Number.isSafeInteger(s) ? s * 1000 : null; };
 export const linePrice = (line) => { const p = line?.pricing?.price_details?.price ?? line?.price; return typeof p === 'string' ? p : p?.id || null; };
+// A proration invoice carries the old price (negative, unused time) and the new one (positive, remaining time) on separate
+// lines: the line that describes what is being paid for is a positive one, the latest period first.
+export const bestLine = (lines) => {
+  const priced = (lines || []).filter((l) => linePrice(l)); if (!priced.length) return null;
+  const positive = priced.filter((l) => !Number.isSafeInteger(l.amount) || l.amount > 0);
+  return (positive.length ? positive : priced).sort((a, b) => (b.period?.end || 0) - (a.period?.end || 0))[0];
+};
+const NONE = Object.freeze({ price: null, periodEnd: null, familyId: null, checkoutId: null, amountCents: null, full: null, ref: null });
 export function signStripe(secret, rawBody, atMs) { const t = Math.floor(atMs / 1000); return `t=${t},v1=${createHmac('sha256', secret).update(`${t}.`).update(rawBody).digest('hex')}`; }
 
 export class StripeGateway {
@@ -114,12 +122,21 @@ export class StripeGateway {
     const price = sub.items?.data?.[0]?.price?.id || null;
     return { ref: sub.id, status: sub.status, live: LIVE.has(sub.status), price, plan: this.planFor(price), periodEnd: periodEndOf(sub), cancelAtPeriodEnd: sub.cancel_at_period_end === true, canceledAt: sub.canceled_at ? sub.canceled_at * 1000 : null };
   }
-  /** Move the customer's live subscription to the new price; the prorated difference is invoiced now. */
+  /**
+   * Move the customer's live subscription to the new price; the prorated difference is invoiced now.
+   * `payment_behavior=pending_if_incomplete`: Stripe applies the new price only once that invoice is paid — until then the
+   * subscription carries `pending_update` and the answer says `pending` (Stage 4 review: a failed or unfinished upgrade
+   * charge must never grant the bigger plan). A card charged on the spot answers `applied`.
+   */
   async changePlan({ idempotencyKey, customerRef, to }) {
     const price = this.priceFor(to); if (!price) fail(400, 'INVALID_PLAN');
     const sub = await this.liveSubscription(customerRef);
-    const updated = await this.api('POST', `/v1/subscriptions/${sub.id}`, { items: [{ id: sub.items.data[0].id, price }], proration_behavior: 'always_invoice', metadata: { lastChange: idempotencyKey } }, idempotencyKey);
-    return { chargeCents: null, basis: 'stripe proration, invoiced now', providerOperationRef: `${updated.id}:${updated.latest_invoice || ''}`, simulated: false };
+    const updated = await this.api('POST', `/v1/subscriptions/${sub.id}`, { items: [{ id: sub.items.data[0].id, price }], proration_behavior: 'always_invoice', payment_behavior: 'pending_if_incomplete', expand: ['latest_invoice'], metadata: { lastChange: idempotencyKey } }, idempotencyKey);
+    const invoice = updated.latest_invoice && typeof updated.latest_invoice === 'object' ? updated.latest_invoice : null;
+    const invoiceId = invoice ? invoice.id : typeof updated.latest_invoice === 'string' ? updated.latest_invoice : null;
+    const applied = !updated.pending_update && updated.items?.data?.[0]?.price?.id === price;
+    return { chargeCents: invoice && Number.isSafeInteger(invoice.amount_paid) ? invoice.amount_paid : null, basis: applied ? 'stripe proration, invoiced and paid' : 'stripe proration, invoice open: the update waits for its payment',
+      providerOperationRef: `${updated.id}:${invoiceId || ''}`, applied, pending: !applied, invoiceRef: invoiceId, invoiceUrl: invoice?.hosted_invoice_url || null, simulated: false };
   }
   /** A scheduled change: the new price without proration, so the next invoice carries it and the current period stays as paid. */
   async schedulePlan({ idempotencyKey, customerRef, to }) {
@@ -160,15 +177,30 @@ export class StripeGateway {
     if (ev.type === 'checkout.session.completed') {
       if (!customer || !o.subscription) fail(400, 'INVALID_REQUEST');
       const sub = await this.api('GET', `/v1/subscriptions/${typeof o.subscription === 'string' ? o.subscription : o.subscription.id}`); // provider state, not our own metadata
-      return { ...base, type: 'checkout.completed', customer, data: { price: sub.items?.data?.[0]?.price?.id || null, periodEnd: periodEndOf(sub), familyId: o.metadata?.familyId || null, checkoutId: o.client_reference_id || o.metadata?.checkoutId || null, amountCents: null, full: null } };
+      return { ...base, type: 'checkout.completed', customer, data: { ...NONE, price: sub.items?.data?.[0]?.price?.id || null, periodEnd: periodEndOf(sub), familyId: o.metadata?.familyId || null, checkoutId: o.client_reference_id || o.metadata?.checkoutId || null } };
     }
+    const passthrough = (type) => ({ ...base, type, customer: customer || 'none', data: { ...NONE } }); // recorded and ignored by the inbox
     if (ev.type === 'invoice.paid' || ev.type === 'invoice.payment_failed') {
-      const line = o.lines?.data?.find((l) => linePrice(l)) || null;
       const details = o.parent?.subscription_details || o.subscription_details || null; // basil moved it under parent
-      return { ...base, type: ev.type, customer, data: { price: line ? linePrice(line) : null, periodEnd: line?.period?.end ? line.period.end * 1000 : null, familyId: details?.metadata?.familyId || o.metadata?.familyId || null, checkoutId: null, amountCents: null, full: null } };
+      const subId = typeof details?.subscription === 'string' ? details.subscription : typeof o.subscription === 'string' ? o.subscription : null;
+      // the price the subscription is on now is the fact (a proration invoice lists the old and the new price on separate
+      // lines): a paid invoice is resolved against the subscription Stripe holds; otherwise the best line answers
+      let price = null, periodEnd = null;
+      if (ev.type === 'invoice.paid' && subId) { const sub = await this.api('GET', `/v1/subscriptions/${subId}`); price = sub.items?.data?.[0]?.price?.id || null; periodEnd = periodEndOf(sub); }
+      if (!price) { const line = bestLine(o.lines?.data); price = line ? linePrice(line) : null; periodEnd = line?.period?.end ? line.period.end * 1000 : null; }
+      return { ...base, type: ev.type, customer, data: { ...NONE, price, periodEnd, familyId: details?.metadata?.familyId || o.metadata?.familyId || null } };
     }
-    if (ev.type === 'customer.subscription.deleted') return { ...base, type: 'subscription.deleted', customer, data: { price: null, periodEnd: null, familyId: o.metadata?.familyId || null, checkoutId: null, amountCents: null, full: null } };
-    if (ev.type === 'charge.refunded') return { ...base, type: 'charge.refunded', customer, data: { price: null, periodEnd: null, familyId: null, checkoutId: null, amountCents: Number.isSafeInteger(o.amount_refunded) ? o.amount_refunded : null, full: o.refunded === true } };
-    return { ...base, type: ev.type, customer: customer || 'none', data: { price: null, periodEnd: null, familyId: null, checkoutId: null, amountCents: null, full: null } }; // anything else: recorded and ignored by the inbox
+    if (ev.type === 'customer.subscription.deleted') return { ...base, type: 'subscription.deleted', customer, data: { ...NONE, familyId: o.metadata?.familyId || null } };
+    if (ev.type === 'refund.created' || ev.type === 'refund.updated') {
+      // the per-refund object (Stage 4 review): its own id and amount, never the charge's running total; only a refund that succeeded counts
+      if (o.status !== 'succeeded') return passthrough(`stripe.${ev.type}:${o.status || 'unknown'}`);
+      const chargeId = typeof o.charge === 'string' ? o.charge : o.charge?.id; if (!chargeId || typeof o.id !== 'string') fail(400, 'INVALID_REQUEST');
+      const charge = await this.api('GET', `/v1/charges/${chargeId}`); // the customer, and whether the charge is now refunded in full
+      const cust = typeof charge.customer === 'string' ? charge.customer : charge.customer?.id || null; if (!cust) fail(400, 'INVALID_REQUEST');
+      const full = charge.refunded === true || (Number.isSafeInteger(charge.amount_refunded) && Number.isSafeInteger(charge.amount) && charge.amount_refunded >= charge.amount);
+      return { ...base, type: 'refund.created', customer: cust, data: { ...NONE, amountCents: Number.isSafeInteger(o.amount) ? o.amount : null, full, ref: o.id } };
+    }
+    if (ev.type === 'charge.refunded') return passthrough('stripe.charge.refunded'); // the charge's running total: recorded and ignored; refund.created carries each refund
+    return passthrough(ev.type);
   }
 }
