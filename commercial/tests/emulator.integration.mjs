@@ -361,14 +361,14 @@ async function enrolPhone(idToken, phoneNumber) {
   await post('v2/accounts/mfaEnrollment:finalize', { idToken, phoneVerificationInfo: { sessionInfo, code } });
 }
 test('real Auth: lost phone — the factor is removed only after the emailed password reset and the waiting period; the password-only token is refused; a new mobile is enrolled and the same family reopens (Stage 4.4)', async () => {
-  const { Recovery, RECOVERY_WAIT_MS } = await import('../server/recovery.mjs');
-  let clock = Date.now(); const identity = new FirebaseIdentity(auth);
-  const recovery = new Recovery({ foundation: service, store, identity, secret, now: () => clock });
+  const { Recovery } = await import('../server/recovery.mjs');
+  const WAIT = 3000, identity = new FirebaseIdentity(auth); // the real clock: a jumped clock would put the reauth floor in the future
+  const recovery = new Recovery({ foundation: service, store, identity, secret, waitMs: WAIT });
   const email = `lost-${randomUUID()}@example.test`, p = await parent(email, '+16505550170');
   const cookie = await service.login(p.idToken), l = await service.authenticate(cookie);
   const fam = await service.createFamily(l, { label: 'Lost phone', adultAttestation: true, consentVersion: 'pilot-v1' });
   const before = (await db.doc(`parents/${p.uid}`).get()).data();
-  const started = await recovery.start({ email }); assert.equal(started.accepted, true); assert.equal(started.readyAt, clock + RECOVERY_WAIT_MS);
+  const started = await recovery.start({ email }); assert.equal(started.accepted, true); assert.ok(started.readyAt > Date.now() && started.readyAt <= Date.now() + WAIT);
   assert.deepEqual(await recovery.complete({ email }), { completed: false, reason: 'PROOF_REQUIRED', readyAt: started.readyAt });
   // the parent resets the password from the emailed link (the emulator exposes the code)
   await post('v1/accounts:sendOobCode', { requestType: 'PASSWORD_RESET', email });
@@ -377,7 +377,7 @@ test('real Auth: lost phone — the factor is removed only after the emailed pas
   await post('v1/accounts:resetPassword', { oobCode: oob.oobCode, newPassword: 'Synthetic-password-9911' });
   assert.equal((await recovery.complete({ email })).reason, 'WAITING');
   assert.equal((await auth.getUser(p.uid)).multiFactor.enrolledFactors.length, 1, 'nothing changes before the waiting period');
-  clock += RECOVERY_WAIT_MS + 3_600_000;
+  await new Promise((r) => setTimeout(r, WAIT + 500)); // the waiting period passes
   assert.deepEqual(await recovery.complete({ email }), { completed: true });
   assert.equal((await auth.getUser(p.uid)).multiFactor?.enrolledFactors?.length ?? 0, 0, 'the factor is gone at the provider');
   await assert.rejects(service.authenticate(cookie), 'the old session is gone');
