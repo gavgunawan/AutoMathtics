@@ -42,6 +42,11 @@ export function verifyStripeSignature(secret, rawBody, header, nowMs) {
   if (Math.abs(nowMs - Number(t) * 1000) > STRIPE_TOLERANCE_MS) fail(401, 'WEBHOOK_SIGNATURE_EXPIRED');
   return Number(t) * 1000;
 }
+// Two shapes of the same fact: before API 2025-03-31.basil the period sat on the subscription and the price on
+// the invoice line; from basil on, the period sits on the subscription item and the line's price under
+// pricing.price_details. The adapter reads both, so the endpoint's API version cannot silently break a renewal.
+export const periodEndOf = (sub) => { const s = sub?.items?.data?.[0]?.current_period_end ?? sub?.current_period_end; return Number.isSafeInteger(s) ? s * 1000 : null; };
+export const linePrice = (line) => { const p = line?.pricing?.price_details?.price ?? line?.price; return typeof p === 'string' ? p : p?.id || null; };
 export function signStripe(secret, rawBody, atMs) { const t = Math.floor(atMs / 1000); return `t=${t},v1=${createHmac('sha256', secret).update(`${t}.`).update(rawBody).digest('hex')}`; }
 
 export class StripeGateway {
@@ -107,7 +112,7 @@ export class StripeGateway {
   /** Stripe's subscription in the shape the reconciliation compares (RECONCILIATION.md); nothing secret in it. */
   describe(sub) {
     const price = sub.items?.data?.[0]?.price?.id || null;
-    return { ref: sub.id, status: sub.status, live: LIVE.has(sub.status), price, plan: this.planFor(price), periodEnd: sub.current_period_end ? sub.current_period_end * 1000 : null, cancelAtPeriodEnd: sub.cancel_at_period_end === true, canceledAt: sub.canceled_at ? sub.canceled_at * 1000 : null };
+    return { ref: sub.id, status: sub.status, live: LIVE.has(sub.status), price, plan: this.planFor(price), periodEnd: periodEndOf(sub), cancelAtPeriodEnd: sub.cancel_at_period_end === true, canceledAt: sub.canceled_at ? sub.canceled_at * 1000 : null };
   }
   /** Move the customer's live subscription to the new price; the prorated difference is invoiced now. */
   async changePlan({ idempotencyKey, customerRef, to }) {
@@ -121,7 +126,7 @@ export class StripeGateway {
     const price = this.priceFor(to); if (!price) fail(400, 'INVALID_PLAN');
     const sub = await this.liveSubscription(customerRef);
     const updated = await this.api('POST', `/v1/subscriptions/${sub.id}`, { items: [{ id: sub.items.data[0].id, price }], proration_behavior: 'none', metadata: { lastChange: idempotencyKey } }, idempotencyKey);
-    return { providerOperationRef: updated.id, effectiveAt: updated.current_period_end ? updated.current_period_end * 1000 : null, simulated: false };
+    return { providerOperationRef: updated.id, effectiveAt: periodEndOf(updated), simulated: false };
   }
   /** The parent's cancel-at-period-end, or its undo, on the provider's subscription. */
   async setCancelAtPeriodEnd({ idempotencyKey, customerRef, cancel }) {
@@ -155,11 +160,12 @@ export class StripeGateway {
     if (ev.type === 'checkout.session.completed') {
       if (!customer || !o.subscription) fail(400, 'INVALID_REQUEST');
       const sub = await this.api('GET', `/v1/subscriptions/${typeof o.subscription === 'string' ? o.subscription : o.subscription.id}`); // provider state, not our own metadata
-      return { ...base, type: 'checkout.completed', customer, data: { price: sub.items?.data?.[0]?.price?.id || null, periodEnd: sub.current_period_end ? sub.current_period_end * 1000 : null, familyId: o.metadata?.familyId || null, checkoutId: o.client_reference_id || o.metadata?.checkoutId || null, amountCents: null, full: null } };
+      return { ...base, type: 'checkout.completed', customer, data: { price: sub.items?.data?.[0]?.price?.id || null, periodEnd: periodEndOf(sub), familyId: o.metadata?.familyId || null, checkoutId: o.client_reference_id || o.metadata?.checkoutId || null, amountCents: null, full: null } };
     }
     if (ev.type === 'invoice.paid' || ev.type === 'invoice.payment_failed') {
-      const line = o.lines?.data?.find((l) => l.price?.id) || null;
-      return { ...base, type: ev.type, customer, data: { price: line?.price?.id || null, periodEnd: line?.period?.end ? line.period.end * 1000 : null, familyId: o.subscription_details?.metadata?.familyId || o.metadata?.familyId || null, checkoutId: null, amountCents: null, full: null } };
+      const line = o.lines?.data?.find((l) => linePrice(l)) || null;
+      const details = o.parent?.subscription_details || o.subscription_details || null; // basil moved it under parent
+      return { ...base, type: ev.type, customer, data: { price: line ? linePrice(line) : null, periodEnd: line?.period?.end ? line.period.end * 1000 : null, familyId: details?.metadata?.familyId || o.metadata?.familyId || null, checkoutId: null, amountCents: null, full: null } };
     }
     if (ev.type === 'customer.subscription.deleted') return { ...base, type: 'subscription.deleted', customer, data: { price: null, periodEnd: null, familyId: o.metadata?.familyId || null, checkoutId: null, amountCents: null, full: null } };
     if (ev.type === 'charge.refunded') return { ...base, type: 'charge.refunded', customer, data: { price: null, periodEnd: null, familyId: null, checkoutId: null, amountCents: Number.isSafeInteger(o.amount_refunded) ? o.amount_refunded : null, full: o.refunded === true } };

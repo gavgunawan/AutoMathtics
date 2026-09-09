@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { fixture, rejected } from './support.mjs';
-import { StripeGateway, form, signStripe, verifyStripeSignature, STRIPE_TOLERANCE_MS } from '../server/gateways/stripe.mjs';
+import { StripeGateway, form, signStripe, verifyStripeSignature, STRIPE_TOLERANCE_MS, periodEndOf, linePrice } from '../server/gateways/stripe.mjs';
 import { Payments } from '../server/payments.mjs';
 
 import { KEY, WHSEC, PRICES, DAY, op, stripeServer, gateway, sub, event, signed } from './stripe-support.mjs';
@@ -133,4 +133,18 @@ test('the whole flow through the Stage 3 inbox: checkout, Stripe\'s own customer
   const stray = event(f, 'invoice.paid', { object: 'invoice', customer: 'cus_nobody', lines: { data: [{ price: { id: 'price_1Starter00' }, period: { end: Math.floor(end / 1000) } }] } });
   s = signed(f, stray); assert.deepEqual(await payments.receive('stripe', s.raw, s.headers), { status: 'rejected', reason: 'UNKNOWN_CUSTOMER' });
   assert.ok(calls.every((c) => !JSON.stringify(c.body || {}).includes('seats')), 'nothing we send Stripe names a seat count');
+});
+test('Stripe API basil shapes: the period on the subscription item, the line price under pricing, the subscription link under parent — same inbox events', async () => {
+  const f = fixture(); const end = Math.floor((f.now() + 30 * DAY) / 1000);
+  const basilSub = { id: 'sub_b', object: 'subscription', status: 'active', cancel_at_period_end: false, items: { data: [{ id: 'si_b', price: { id: 'price_1Family000' }, current_period_end: end }] }, latest_invoice: 'in_b' };
+  assert.equal(periodEndOf(basilSub), end * 1000); assert.equal(periodEndOf(sub('price_1Starter00', end * 1000)), end * 1000); assert.equal(periodEndOf({ items: { data: [] } }), null);
+  assert.equal(linePrice({ pricing: { price_details: { price: 'price_x' } } }), 'price_x'); assert.equal(linePrice({ price: { id: 'price_y' } }), 'price_y'); assert.equal(linePrice({}), null);
+  const { gw } = gateway({ 'GET /v1/subscriptions/sub_b': basilSub });
+  const done = event(f, 'checkout.session.completed', { object: 'checkout.session', customer: 'cus_b', subscription: 'sub_b', client_reference_id: 'chk_b', metadata: { familyId: 'fam_b' } });
+  const n = await gw.verify(...Object.values(signed(f, done)).slice(0, 2), f.now());
+  assert.equal(n.data.price, 'price_1Family000'); assert.equal(n.data.periodEnd, end * 1000);
+  const paid = event(f, 'invoice.paid', { object: 'invoice', customer: 'cus_b', parent: { type: 'subscription_details', subscription_details: { subscription: 'sub_b', metadata: { familyId: 'fam_b' } } }, lines: { data: [{ pricing: { price_details: { price: 'price_1Family000', product: 'prod_x' } }, period: { end } }] } });
+  const np = await gw.verify(...Object.values(signed(f, paid)).slice(0, 2), f.now());
+  assert.equal(np.type, 'invoice.paid'); assert.equal(np.data.price, 'price_1Family000'); assert.equal(np.data.periodEnd, end * 1000); assert.equal(np.data.familyId, 'fam_b');
+  assert.equal(gw.describe(basilSub).periodEnd, end * 1000);
 });
