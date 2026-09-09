@@ -23,6 +23,37 @@ what was done at the provider. Money moves only at the provider (the dashboard),
 | `node scripts/support.mjs family FAMILY_UUID` | on any ticket | the report; read **attention** first |
 | `node scripts/support.mjs reconcile-provider FAMILY_UUID` | on any billing ticket, after any dashboard edit, weekly for every paying family | the provider's customer and subscription against ours; `match` and `findings`; open intents with provider evidence |
 
+## Routine sweep
+
+`node scripts/support.mjs sweep` walks the whole database against the invariants the code enforces at every
+access and every event, so anything that slipped past them or was damaged shows up where a person looks
+daily. It is read-only, writes `sweeps/{id}` (counts, findings, TTL 90 days) and an audit row, and exits 2
+when there is a finding. On staging it runs every night as the Cloud Run job `automathtics-v3-sweep`
+(Cloud Scheduler, 03:15 Singapore time; `scripts/cloudshell/05-sweep-job.sh`); a failed job is the alert.
+
+| Sweep finding | Meaning | Action |
+|---|---|---|
+| `SEAT_OVERFLOW`, `DUPLICATE_SEAT`, `ACTIVE_NOT_A_CHILD` | more active children than seats, or the active list names something that is not a child | data damage: the family report shows it; `scripts/subscription.mjs` seats.assign with the parent's choice |
+| `CHILD_LIST_MISMATCH`, `CHILD_NOT_LISTED`, `SEATED_CHILD_INACTIVE`, `ACTIVE_CHILD_UNSEATED` | the family's child list and the child documents disagree | data damage: inspect with `family`; never fix by hand without the parent |
+| `LEDGER_DAMAGED`, `LEDGER_DRIFT` | a child's wallet does not derive from its ledger | `scripts/reconcile.mjs` (Stage 3.1) |
+| `NO_OWNER`, `MEMBER_WITHOUT_PARENT`, `PARENT_LINK_MISMATCH`, `DELETED_ACCOUNT_STILL_MEMBER` | a family without an active owner, a member whose parent record is missing or points elsewhere, or a deleted sign-in account still listed | NO_TRANSFER territory: investigate; an operator never rebinds |
+| `CUSTOMER_MAPPING_MISSING`, `CUSTOMER_MAPPING_MISMATCH`, `ORPHAN_CUSTOMER`, `CUSTOMER_NOT_ON_FAMILY` | provider customer references and families do not point at each other | `customer PROVIDER REF`, `reconcile-provider`; the mapping is idempotency evidence, never edited |
+| `PAID_WITHOUT_CUSTOMER`, `SUBSCRIPTION_PERIOD_ABSURD` | a paid subscription with no provider reference, or a period end more than 400 days out | `reconcile-provider` |
+| `STALE_INTENT`, `LAPSED_AWAITING_PAYMENT`, `STALE_CHECKOUT`, `STALE_INFLIGHT_MARKER`, `CHECKOUT_MISSING` | open work older than it should be | `reconcile-intent`, `reconcile-provider`; a lapsed upgrade is superseded by the parent's next change |
+| `DELETION_DUE`, `DELETION_STUCK` | a requested deletion past its date, or one that began and never finished | `delete FAMILY_UUID` (resumable) |
+| `RECOVERY_STUCK`, `RECOVERY_LAPSED` | a claimed recovery the provider never answered, or a request past its window | the parent retries (it resumes); nothing for the operator but to watch |
+| `TOMBSTONE_RESIDUE`, `DELETED_FAMILY_PROVIDER_LIVE` | a deleted family still has documents, sessions, or a live provider subscription | `delete FAMILY_UUID` again (resumable); cancel at the provider |
+
+## Refunds and disputes
+
+A refund counts from the moment it exists at the provider — pending or succeeded — because access ends as
+soon as a refund is approved (the owner's policy); one the provider later fails to complete is recorded as
+`refund.failed` and the family report counts it (`refundFailures`): access has already ended, the operator
+decides whether to restore it (`scripts/subscription.mjs`). A card dispute takes the money back the moment
+it is opened, so `charge.dispute.created` is a full refund for the family: access ends then. A dispute later
+**won** (`dispute.won`, counted as `disputesWon`) means the money came back; the operator may restore access by
+hand. A dispute lost changes nothing more.
+
 ## Findings → action
 
 | Finding | Meaning | Action |

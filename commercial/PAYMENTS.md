@@ -199,7 +199,10 @@ that is how 4.2 is exercised: `stripe listen --forward-to 127.0.0.1:8787/api/web
   for whether it is now refunded in full; a refund not yet `succeeded` is recorded and ignored, and the same
   refund delivered under a second event id is `DUPLICATE_REFUND`. `charge.refunded` — the charge's running
   total — is recorded and ignored, never a refund event (two partial refunds of 200 and 300 are two records of
-  200 and 300, not 200 and 500). Stripe has no sequence number and second-resolution timestamps, so `seq` is
+  200 and 300, not 200 and 500). A refund counts from the moment it exists (pending or succeeded: access ends as
+  soon as a refund is approved); one that later fails is `refund.failed`, recorded for the operator. A card dispute
+  (`charge.dispute.created`) is a full refund for the family — access ends the moment it is opened; `closed` won or
+  `funds_reinstated` is `dispute.won`, recorded for the operator to restore access by hand. Stripe has no sequence number and second-resolution timestamps, so `seq` is
   null and events dated in the future are refused.
 - **Provider effects (4.2)**: cancel-at-period-end and its undo update the live subscription's flag under the
   operation id; a scheduled downgrade moves it to the target price with `proration_behavior=none` (the next

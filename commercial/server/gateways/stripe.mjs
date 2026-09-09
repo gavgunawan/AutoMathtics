@@ -191,14 +191,34 @@ export class StripeGateway {
       return { ...base, type: ev.type, customer, data: { ...NONE, price, periodEnd, familyId: details?.metadata?.familyId || o.metadata?.familyId || null } };
     }
     if (ev.type === 'customer.subscription.deleted') return { ...base, type: 'subscription.deleted', customer, data: { ...NONE, familyId: o.metadata?.familyId || null } };
-    if (ev.type === 'refund.created' || ev.type === 'refund.updated') {
-      // the per-refund object (Stage 4 review): its own id and amount, never the charge's running total; only a refund that succeeded counts
-      if (o.status !== 'succeeded') return passthrough(`stripe.${ev.type}:${o.status || 'unknown'}`);
+    // refunds and disputes hang off a charge: the charge names the customer (a refund object carries none) and says whether it is now refunded in full
+    const chargeOf = async () => {
       const chargeId = typeof o.charge === 'string' ? o.charge : o.charge?.id; if (!chargeId || typeof o.id !== 'string') fail(400, 'INVALID_REQUEST');
-      const charge = await this.api('GET', `/v1/charges/${chargeId}`); // the customer, and whether the charge is now refunded in full
+      const charge = await this.api('GET', `/v1/charges/${chargeId}`);
       const cust = typeof charge.customer === 'string' ? charge.customer : charge.customer?.id || null; if (!cust) fail(400, 'INVALID_REQUEST');
-      const full = charge.refunded === true || (Number.isSafeInteger(charge.amount_refunded) && Number.isSafeInteger(charge.amount) && charge.amount_refunded >= charge.amount);
+      return { charge, cust, full: charge.refunded === true || (Number.isSafeInteger(charge.amount_refunded) && Number.isSafeInteger(charge.amount) && charge.amount_refunded >= charge.amount) };
+    };
+    if (ev.type === 'refund.created' || ev.type === 'refund.updated') {
+      // the per-refund object (Stage 4 review): its own id and amount, never the charge's running total. A refund counts from
+      // the moment it exists — pending or succeeded — because the owner's policy is that access ends as soon as a refund is
+      // approved; one that later fails is recorded as refund.failed for the operator (RECONCILIATION.md). The refund id is the
+      // ref, so created-then-updated is one refund, not two.
+      const { cust, full } = await chargeOf();
+      if (o.status === 'failed' || o.status === 'canceled') return { ...passthrough('refund.failed'), customer: cust, data: { ...NONE, amountCents: Number.isSafeInteger(o.amount) ? o.amount : null, ref: o.id } };
+      if (o.status !== 'pending' && o.status !== 'succeeded') return { ...passthrough(`stripe.${ev.type}:${o.status || 'unknown'}`), customer: cust };
       return { ...base, type: 'refund.created', customer: cust, data: { ...NONE, amountCents: Number.isSafeInteger(o.amount) ? o.amount : null, full, ref: o.id } };
+    }
+    if (ev.type === 'charge.dispute.created' || ev.type === 'charge.dispute.funds_withdrawn') {
+      // a card dispute takes the money back the moment it is opened: for the family it is a full refund (access ends now);
+      // the dispute id is the ref, so funds_withdrawn after created is the same dispute, not a second one
+      const { cust } = await chargeOf();
+      return { ...base, type: 'dispute.opened', customer: cust, data: { ...NONE, amountCents: Number.isSafeInteger(o.amount) ? o.amount : null, full: true, ref: o.id } };
+    }
+    if (ev.type === 'charge.dispute.closed' || ev.type === 'charge.dispute.funds_reinstated') {
+      // won: the money came back — recorded for the operator, who may restore access by hand; lost: nothing more to do
+      const { cust } = await chargeOf();
+      const type = ev.type === 'charge.dispute.funds_reinstated' || o.status === 'won' ? 'dispute.won' : o.status === 'lost' ? 'dispute.lost' : `stripe.${ev.type}:${o.status || 'unknown'}`;
+      return { ...passthrough(type), customer: cust, data: { ...NONE, amountCents: Number.isSafeInteger(o.amount) ? o.amount : null, ref: o.id } };
     }
     if (ev.type === 'charge.refunded') return passthrough('stripe.charge.refunded'); // the charge's running total: recorded and ignored; refund.created carries each refund
     return passthrough(ev.type);

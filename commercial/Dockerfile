@@ -6,6 +6,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts --no-fund --no-audit
 COPY server/ ./server/
 COPY public/ ./public/
+COPY scripts/ ./scripts/
 USER node
 ENV NODE_ENV=production
 EXPOSE 8080

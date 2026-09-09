@@ -140,7 +140,8 @@ done
 The endpoint address is known before anything is deployed: it is
 `https://PROJECT_ID.web.app/api/webhooks/stripe`. In the Stripe sandbox (Developers → Webhooks →
 Add endpoint) register it for the events `checkout.session.completed`, `invoice.paid`,
-`invoice.payment_failed`, `customer.subscription.deleted`, `refund.created`, `refund.updated`, and copy the endpoint's
+`invoice.payment_failed`, `customer.subscription.deleted`, `refund.created`, `refund.updated`,
+`charge.dispute.created`, `charge.dispute.closed`, and copy the endpoint's
 signing secret (`whsec_…`) into `am-v3-webhook-stripe` above. Deploy with
 `PAYMENT_PROVIDER=stripe STRIPE_PRICE_STARTER=price_… STRIPE_PRICE_FAMILY=price_…
 STRIPE_PRICE_BIG=price_…` in front of `scripts/deploy-staging.sh`; the helper then requires the two
@@ -160,7 +161,7 @@ The server stamps short-lived records with an `expireAt` timestamp; Firestore de
 if a TTL policy names that field for the collection group. Run once, after the database exists:
 
 ```bash
-for GROUP in sessions rateLimits pinAttempts operations audit; do
+for GROUP in sessions rateLimits pinAttempts operations audit recoveries sweeps; do
   gcloud firestore fields ttls update expireAt --collection-group="$GROUP" \
     --enable-ttl --project "$PROJECT_ID"
 done
@@ -222,6 +223,11 @@ it differs from 2, redeploy with that number.
 export TRUSTED_PROXY_HOPS=2
 npm run deploy:staging
 ```
+
+After the first deployment, schedule the nightly invariant sweep (`RECONCILIATION.md` → Routine sweep)
+with `scripts/cloudshell/05-sweep-job.sh`: a Cloud Run job from the same image running
+`node scripts/support.mjs sweep` under the runtime account, triggered by Cloud Scheduler at 03:15
+Singapore time. Both are inside the free tiers at pilot scale; a failed job is the alert.
 
 This helper verifies the new project and secret metadata, runs unit and emulator
 tests, deploys deny-all client Firestore rules, builds/deploys Cloud Run, then deploys
