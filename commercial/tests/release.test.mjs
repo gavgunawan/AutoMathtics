@@ -26,4 +26,9 @@ test('live health endpoint identifies v3.0 without exposing private configuratio
   const res = await fetch(`http://127.0.0.1:${server.address().port}/healthz`);
   assert.deepEqual(await res.json(), { status: 'ok', version: VERSION });
   assert.match(res.headers.get('cache-control'), /no-store/);
+  // the proxy-depth measurement (DEPLOY_V3.md §5): a count, and the leading entry only when it is a documentation address
+  const probe = await fetch(`http://127.0.0.1:${server.address().port}/healthz`, { headers: { 'X-Forwarded-For': '203.0.113.250, 198.51.100.7, 192.0.2.9' } });
+  assert.deepEqual(await probe.json(), { status: 'ok', version: VERSION, forwarded: 3, leading: '203.0.113.250' });
+  const real = await fetch(`http://127.0.0.1:${server.address().port}/healthz`, { headers: { 'X-Forwarded-For': '8.8.8.8, 192.0.2.9' } });
+  assert.deepEqual(await real.json(), { status: 'ok', version: VERSION, forwarded: 2 }, 'a real address is never echoed');
 });
