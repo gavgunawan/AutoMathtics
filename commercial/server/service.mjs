@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { Fault, fail, sha256, mac, randomToken, object, text, uuid, pin, childInput, publicChild } from './security.mjs';
 
-const MINUTE = 60_000;
+const MINUTE = 60_000, DAY = 24 * 60 * MINUTE;
 const FAMILY_LIMIT = 20; // Pilot safety cap, independent of paid seat count.
+const AUDIT_RETENTION_MS = 400 * DAY, OPERATION_RETENTION_MS = DAY;
+export const DEFAULT_TIME_ZONE = 'Asia/Singapore'; // the family's calendar day for streaks; parent-editable later
 const sessionKey = (token) => /^[A-Za-z0-9_-]{43}$/.test(token || '') ? sha256(token) : null;
 
 /**
@@ -18,8 +20,9 @@ export class Foundation {
     this.store = store; this.identity = identity; this.hasher = hasher;
     this.secret = secret; this.now = now;
   }
+  // Audit rows expire after AUDIT_RETENTION_MS through the Firestore TTL policy on `expireAt`.
   audit(tx, action, uid, familyId = null, childId = null) {
-    tx.set(`audit/${randomUUID()}`, { action, uid, familyId, childId, at: this.now() });
+    tx.set(`audit/${randomUUID()}`, { action, uid, familyId, childId, at: this.now(), expireAt: this.now() + AUDIT_RETENTION_MS });
   }
   // Throttle inside an existing transaction, after authorization has been read, so an
   // unauthorized caller cannot spend a family's budget. The read happens now; the returned
@@ -27,7 +30,7 @@ export class Foundation {
   async rateIn(tx, bucket, maximum, windowMs) {
     const path = `rateLimits/${mac(this.secret, bucket)}`;
     const old = await tx.get(path), now = this.now();
-    const next = old && old.until > now ? { ...old } : { count: 0, until: now + windowMs };
+    const next = old && old.until > now ? { ...old } : { count: 0, until: now + windowMs, expireAt: now + windowMs };
     if (next.count >= maximum) fail(429, 'TOO_MANY_ATTEMPTS');
     next.count++;
     return () => tx.set(path, next);
@@ -97,7 +100,7 @@ export class Foundation {
       // Also blocks a copied pre-handover ID token presented with a new cookie.
       if (parent && who.authTime <= (parent.reauthAfter || 0)) fail(403, 'REAUTHENTICATE');
       const s = { ...who, familyId: parent?.familyId || null, role: 'parent', childId: null,
-        csrf: randomToken(), createdAt: this.now(), expiresAt: this.now() + 30 * MINUTE };
+        csrf: randomToken(), createdAt: this.now(), expiresAt: this.now() + 30 * MINUTE, expireAt: this.now() + 30 * MINUTE };
       if (!parent) tx.set(path, { familyId: null, reauthAfter: 0, createdAt: this.now() });
       if (old) tx.delete(`sessions/${oldKey}`);
       tx.set(`sessions/${key}`, s);
@@ -129,7 +132,7 @@ export class Foundation {
       const { s, parent } = await this.authorize(tx, ctx, ['parent'], false);
       this.requireRecent(s);
       if (parent.familyId) return { id: parent.familyId, token: null }; // Existing family; no boundary change.
-      tx.set(`families/${familyId}`, { id: familyId, label, childIds: [], activeChildIds: [], createdAt: this.now(),
+      tx.set(`families/${familyId}`, { id: familyId, label, childIds: [], activeChildIds: [], createdAt: this.now(), timeZone: DEFAULT_TIME_ZONE,
         entitlement: { status: 'inactive', seatLimit: 0, accessUntil: 0, version: 0, source: 'manual' } });
       tx.set(`families/${familyId}/members/${s.uid}`, { role: 'owner', status: 'active' });
       tx.set(`parents/${s.uid}`, { ...parent, familyId, consentVersion: 'pilot-v1', attestedAt: this.now() });
@@ -148,7 +151,9 @@ export class Foundation {
     this.requireRecent(initial.s);
     this.entitlement(initial.family);
     const familyId = initial.s.familyId, childId = randomUUID();
-    const fingerprint = mac(this.secret, JSON.stringify(input)); // PIN never in the replay record.
+    // The replay record commits to the profile, never to the PIN in any form: the browser mints
+    // a new request id whenever any field changes, so a PIN-only edit is a new request anyway.
+    const fingerprint = mac(this.secret, JSON.stringify({ nickname: input.nickname, icon: input.icon }));
     const opPath = `families/${familyId}/operations/${requestId}`;
     const existing = await this.store.get(opPath);
     if (existing) {
@@ -173,7 +178,7 @@ export class Foundation {
       tx.set(`families/${familyId}`, { ...family, childIds: [...family.childIds, childId], activeChildIds: [...family.activeChildIds, childId] });
       tx.set(`families/${familyId}/children/${childId}`, child);
       tx.set(`families/${familyId}/credentials/${childId}`, { hash, version: 1 });
-      tx.set(opPath, { uid: ctx.uid, fingerprint, child: publicChild(child), at: this.now() });
+      tx.set(opPath, { uid: ctx.uid, fingerprint, child: publicChild(child), at: this.now(), expireAt: this.now() + OPERATION_RETENTION_MS });
       this.audit(tx, 'child.created', s.uid, familyId, childId);
       return { child: publicChild(child) };
     });
@@ -183,7 +188,9 @@ export class Foundation {
   rotateSession(tx, ctx, session, changes) {
     const token = randomToken();
     tx.delete(`sessions/${ctx.key}`);
-    tx.set(`sessions/${sha256(token)}`, { ...session, ...changes, csrf: randomToken() });
+    const next = { ...session, ...changes, csrf: randomToken() };
+    next.expireAt = next.expiresAt; // the TTL follows the session's own expiry
+    tx.set(`sessions/${sha256(token)}`, next);
     return token;
   }
   async lock(ctx) {
@@ -235,7 +242,7 @@ export class Foundation {
       // count = completed wrong checks + pending reservations. Pending checks cannot
       // overrun the five-check budget, but a busy/unavailable hasher is not a wrong PIN.
       const attempts = prior && prior.until > this.now() ? { ...prior, pending: { ...prior.pending } }
-        : { count: 0, until: this.now() + 15 * MINUTE, pending: {} };
+        : { count: 0, until: this.now() + 15 * MINUTE, expireAt: this.now() + 15 * MINUTE, pending: {} };
       if (attempts.count >= 5) {
         const failed = attempts.count - Object.keys(attempts.pending).length;
         fail(429, failed >= 5 ? 'PIN_LOCKED' : 'PIN_SERVICE_BUSY');
@@ -341,7 +348,7 @@ export async function grantEntitlement(store, { familyId, seatLimit, accessUntil
       version: family.entitlement.version + 1, source: 'manual' };
     tx.set(path, { ...family, activeChildIds: active, entitlement });
     for (const child of children) if (child) tx.set(`${path}/children/${child.id}`, { ...child, status: active.includes(child.id) ? 'active' : 'inactive' });
-    tx.set(`audit/${randomUUID()}`, { action: 'entitlement.granted', familyId, actor, reason, entitlement, at: now });
+    tx.set(`audit/${randomUUID()}`, { action: 'entitlement.granted', familyId, actor, reason, entitlement, at: now, expireAt: now + AUDIT_RETENTION_MS });
     return entitlement;
   });
 }

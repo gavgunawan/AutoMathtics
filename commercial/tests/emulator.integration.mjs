@@ -6,14 +6,16 @@ assert.equal(process.env.FIREBASE_AUTH_EMULATOR_HOST, '127.0.0.1:9099');
 assert.equal(process.env.FIRESTORE_EMULATOR_HOST, '127.0.0.1:8088');
 const { initializeApp, deleteApp } = await import('firebase-admin/app');
 const { getAuth } = await import('firebase-admin/auth');
-const { getFirestore } = await import('firebase-admin/firestore');
+const { getFirestore, Timestamp } = await import('firebase-admin/firestore');
 const { Foundation, grantEntitlement } = await import('../server/service.mjs');
 const { FirebaseIdentity, FirestoreStore } = await import('../server/firebase.mjs');
-const { fakeHasher, secret, rejected } = await import('./support.mjs');
+const { Learning } = await import('../server/learning.mjs');
+const { fakeHasher, secret, rejected, canonical } = await import('./support.mjs');
 const projectId = 'demo-am-foundation';
 const app = initializeApp({ projectId });
-const auth = getAuth(app), db = getFirestore(app), store = new FirestoreStore(db);
+const auth = getAuth(app), db = getFirestore(app), store = new FirestoreStore(db, { timestamp: (ms) => Timestamp.fromMillis(ms) });
 const service = new Foundation({ store, identity: new FirebaseIdentity(auth), hasher: fakeHasher, secret });
+const learning = new Learning({ foundation: service, store });
 after(async () => { await db.terminate(); await deleteApp(app); });
 async function post(path, value) {
   const r = await fetch(`http://127.0.0.1:9099/identitytoolkit.googleapis.com/${path}?key=demo-key`,
@@ -145,6 +147,25 @@ test('real SMS MFA token, Firestore seat contention, private rules and expiry', 
   await assert.rejects(service.authenticate(selectorToken), rejected('SIGN_IN_REQUIRED'));
   const childCtx = await service.authenticate(childToken);
   assert.equal((await service.me(childCtx)).role, 'child');
+  // Stage 2: a whole Navigator session against real Firestore transactions, answers read straight
+  // from the server-side session document, and the expireAt field stored as a real Timestamp.
+  const started = await learning.start(childCtx, { track: 'nav' });
+  assert.equal(started.session.count, 15); assert.ok(!JSON.stringify(started).includes('"answer"'));
+  const sessionPath = `families/${family.id}/learning/${child.id}/sessions/${started.session.id}`;
+  const rawSession = (await db.doc(sessionPath).get()).data();
+  assert.ok(rawSession.expireAt instanceof Timestamp, 'expireAt is stored as a Firestore Timestamp');
+  assert.ok(rawSession.questions.every((q) => q.answer));
+  let q = started.question, last;
+  while (q) {
+    last = await learning.answer(childCtx, { sessionId: started.session.id, index: q.index, attemptId: randomUUID(), answer: canonical(rawSession.questions[q.index]) });
+    q = last.question || null;
+  }
+  assert.equal(last.summary.passed, true); assert.equal(last.summary.gcEarned, 50);
+  const state = await learning.state(childCtx);
+  assert.equal(state.nav.paper, 6); assert.equal(state.wallet.rp, 100); assert.equal(state.active, null);
+  const rawSessionDoc = (await db.doc('sessions/' + (await import('../server/security.mjs')).sha256(childToken)).get()).data();
+  assert.ok(rawSessionDoc.expireAt instanceof Timestamp, 'login sessions carry a Timestamp expireAt too');
   await grantEntitlement(store, { familyId: family.id, seatLimit: 1, accessUntil: Date.now() - 1, reason: 'emulator expiry', actor: 'integration-test' });
   await assert.rejects(service.me(childCtx), rejected('SUBSCRIPTION_INACTIVE'));
+  await assert.rejects(learning.start(childCtx, { track: 'engine' }), rejected('SUBSCRIPTION_INACTIVE'));
 });

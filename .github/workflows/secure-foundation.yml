@@ -3,7 +3,7 @@ on:
   pull_request:
     paths: ['commercial/**', '.github/workflows/secure-foundation.yml']
   push:
-    branches: ['main', 'release/v3.0', 'hardening/*', 'feature/secure-foundation-step-1']
+    branches: ['main', 'release/v3.0', 'hardening/*', 'feature/*']
     paths: ['commercial/**', '.github/workflows/secure-foundation.yml']
 permissions:
   contents: read

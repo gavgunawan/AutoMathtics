@@ -2,13 +2,18 @@ import { fail } from './security.mjs';
 
 // Inject the official Admin SDK objects, keeping tests independent of network access.
 export class FirestoreStore {
-  constructor(db) { this.db = db; }
-  async get(path) { const snap = await this.db.doc(path).get(); return snap.exists ? snap.data() : null; }
+  // `timestamp` turns a millisecond number into a Firestore Timestamp (Timestamp.fromMillis).
+  // The service keeps every time as a number; only the `expireAt` field is stored as a real
+  // Timestamp so Firestore TTL policies can delete the record (DEPLOY_V3.md §4b).
+  constructor(db, { timestamp = null } = {}) { this.db = db; this.timestamp = timestamp; }
+  encode(value) { return this.timestamp && value && typeof value.expireAt === 'number' ? { ...value, expireAt: this.timestamp(value.expireAt) } : value; }
+  decode(data) { return data && data.expireAt && typeof data.expireAt.toMillis === 'function' ? { ...data, expireAt: data.expireAt.toMillis() } : data; }
+  async get(path) { const snap = await this.db.doc(path).get(); return snap.exists ? this.decode(snap.data()) : null; }
   // readOnly transactions take no document locks, so read-only routes never contend with writers.
   transaction(fn, { readOnly = false } = {}) {
     return this.db.runTransaction((t) => fn({
-      get: async (path) => { const s = await t.get(this.db.doc(path)); return s.exists ? s.data() : null; },
-      set: (path, value) => t.set(this.db.doc(path), value),
+      get: async (path) => { const s = await t.get(this.db.doc(path)); return s.exists ? this.decode(s.data()) : null; },
+      set: (path, value) => t.set(this.db.doc(path), this.encode(value)),
       delete: (path) => t.delete(this.db.doc(path)),
     }), readOnly ? { readOnly: true } : undefined);
   }

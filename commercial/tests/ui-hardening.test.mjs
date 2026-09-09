@@ -105,7 +105,21 @@ test('UI S1-001: handover, child PIN and switch-child refresh CSRF and broadcast
   await h.nodes('BUTTON').find(n => n.className === 'player-card').onclick();
   h.nodes('INPUT')[0].value = '000000'; await h.click('Enter my grid'); assert.ok(h.message.textContent.includes('did not match'));
   h.nodes('INPUT')[0].value = '763829'; await h.click('Enter my grid'); assert.ok(h.root.textContent.includes('Welcome,'));
-  await h.click('Check my secure access'); assert.ok(h.message.textContent.includes('active'));
+  assert.ok(h.root.textContent.includes('ENGINE · SECTOR A') && h.root.textContent.includes('⚡ 0'));
   await h.click('Switch child'); assert.ok(h.root.textContent.includes('Who is on a mission'));
   assert.ok(h.broadcasts.length >= 3);
+});
+test('UI Stage 2: a child starts a session, answers what the server asks, and can leave it', async (t) => {
+  const h = await uiFixture(t); const kid = (await h.f.child(h.a.ctx)).child; await h.api.refresh();
+  await h.click('Hand over to kids'); await h.nodes('BUTTON').find(n => n.className === 'player-card').onclick();
+  h.nodes('INPUT')[0].value = '763829'; await h.click('Enter my grid');
+  await h.click('Start ENGINE'); assert.ok(h.root.textContent.includes('Question 1 of 25'), h.root.textContent);
+  const prog = await h.f.store.get(`families/${h.a.familyId}/learning/${kid.id}`);
+  const stored = await h.f.store.get(`families/${h.a.familyId}/learning/${kid.id}/sessions/${prog.activeSession}`);
+  assert.ok(!h.root.textContent.includes(String(stored.questions[0].answer.v)) || stored.questions[0].display.layout !== 'stack');
+  const form = h.nodes('FORM')[0]; h.nodes('INPUT')[0].value = String(stored.questions[0].answer.v); // the answer box is the only input on the play screen
+  form.onsubmit({ preventDefault() {} }); await h.idle();
+  assert.ok(h.message.textContent.includes('Correct')); assert.ok(h.root.textContent.includes('Question 2 of 25'));
+  await h.click('Leave this session'); assert.ok(h.root.textContent.includes('Welcome,') && h.root.textContent.includes('left at Q2'));
+  assert.equal((await h.f.learning.state(await h.f.service.authenticate(h.cookie().slice('__session='.length)))).active, null);
 });

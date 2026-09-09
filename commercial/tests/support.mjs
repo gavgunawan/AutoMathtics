@@ -1,8 +1,20 @@
 import { randomUUID } from 'node:crypto';
 import { Foundation, grantEntitlement } from '../server/service.mjs';
 import { FirebaseIdentity } from '../server/firebase.mjs';
+import { Learning } from '../server/learning.mjs';
 import { mac } from '../server/security.mjs';
 
+// Firestore rejects `undefined` values and arrays nested directly inside arrays; fail the same way
+// here so a document shape that the emulator would refuse cannot pass the in-memory suite.
+export function assertFirestoreShape(value, path = '$', inArray = false) {
+  if (value === undefined) throw Error(`Firestore shape: undefined at ${path}`);
+  if (Array.isArray(value)) {
+    if (inArray) throw Error(`Firestore shape: array nested in array at ${path}`);
+    value.forEach((v, i) => assertFirestoreShape(v, `${path}[${i}]`, true));
+  } else if (value && typeof value === 'object') {
+    for (const [k, v] of Object.entries(value)) assertFirestoreShape(v, `${path}.${k}`, false);
+  }
+}
 // Tests only: serializable copy-on-write transactions; rollback on throw;
 // disallow reads after writes to match the real Firestore adapter contract.
 export class MemoryStore {
@@ -14,7 +26,7 @@ export class MemoryStore {
       const write = () => { if (readOnly) throw Error('Write in readOnly transaction'); written = true; };
       const result = await fn({
         get: async (p) => { if (written) throw Error('Read after write'); return structuredClone(working.get(p) || null); },
-        set: (p, v) => { write(); working.set(p, structuredClone(v)); },
+        set: (p, v) => { write(); assertFirestoreShape(v, p); working.set(p, structuredClone(v)); },
         delete: (p) => { write(); working.delete(p); },
       });
       this.data = working; return result;
@@ -37,6 +49,7 @@ export function fixture() {
   };
   const identity = new FirebaseIdentity(auth, { now: () => clock });
   const service = new Foundation({ store, identity, hasher: fakeHasher, secret, now: () => clock });
+  const learning = new Learning({ foundation: service, store, now: () => clock });
   function token(uid, patch = {}) {
     if (!users.has(uid)) users.set(uid, { uid, email: `${uid}@example.test`, emailVerified: true, disabled: false,
       tokensValidAfterTime: new Date(0).toUTCString(), multiFactor: { enrolledFactors: [{ uid: `mfa-${uid}`, factorId: 'phone' }] } });
@@ -58,6 +71,17 @@ export function fixture() {
     return { ...session, familyId: id };
   }
   const child = (ctx, nickname = 'Fox', requestId = randomUUID()) => service.createChild(ctx, { nickname, icon: 'fox', pin: '763829' }, requestId);
-  return { service, store, identity, users, tokens, auth, token, login, family, child, now: () => clock, advance: (ms) => { clock += ms; } };
+  // a child signed in and ready to learn: parent → family with seats → child → handover → PIN
+  async function childSession(uid = 'parentA', seats = 1) {
+    const p = await family(uid, seats);
+    const { child: kid } = await child(p.ctx);
+    const selCtx = await service.authenticate(await service.lock(p.ctx));
+    const childCtx = await service.authenticate(await service.selectChild(selCtx, kid.id, '763829'));
+    return { p, child: kid, selCtx, childCtx };
+  }
+  return { service, learning, store, identity, users, tokens, auth, token, login, family, child, childSession, now: () => clock, advance: (ms) => { clock += ms; } };
 }
 export const rejected = (code) => (err) => err.code === code;
+// the answer the server holds, in the shape the browser would send — and a nearby wrong one
+export const canonical = (q) => { const a = q.answer; if (a.type === 'frac') return { n: String(a.n), d: String(a.d) }; if (a.type === 'dec') return String(Math.round(a.v * 100) / 100); return String(a.v); };
+export const wrong = (q) => { const a = q.answer; if (a.type === 'frac') return { n: String(a.n + 1), d: String(a.d) }; if (a.type === 'choice') return String((a.v + 1) % q.display.choices.length); if (a.type === 'dec') return ((Math.round(a.v * 100) + 100) / 100).toFixed(2); return String(a.v + 1); };
