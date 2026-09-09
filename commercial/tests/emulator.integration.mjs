@@ -288,7 +288,7 @@ test('real Firestore: a requested deletion removes the people and the game and l
   await assert.rejects(support.executeDeletion(fam.id, { operator: 'emulator-operator', force: true }), /crash/);
   const mid = (await db.doc(`families/${fam.id}`).get()).data(); assert.equal(mid.deletion.status, 'executing'); assert.equal(mid.deleted, undefined);
   await assert.rejects(learning.start(childCtx, { track: 'engine' }), rejected('FAMILY_DELETED'), 'Blocker 1: no Stage 2 write lands while the deletion runs');
-  await assert.rejects(service.me(ctx), rejected('FAMILY_DELETED'));
+  await assert.rejects(service.me(childCtx), rejected('FAMILY_DELETED'), 'the live child session is refused too (the parent session was retired by the handover)');
   assert.equal((await db.doc(`families/${fam.id}/learning/${child.id}`).get()).exists, true, 'nothing destroyed before the freeze');
   const record = await support.executeDeletion(fam.id, { operator: 'emulator-operator' }); // resumed
   assert.equal(record.counts.children, 1); assert.equal(record.counts.sessions, 1); assert.equal(record.counts.ledgerRows, 520); assert.equal(record.forced, true); assert.equal(record.executionId, mid.deletion.executionId);
