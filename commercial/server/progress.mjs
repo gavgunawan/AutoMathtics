@@ -13,7 +13,7 @@ export const tierOf = (paper) => Math.min(5, Math.ceil(paper / 20));
 // Onboarding (v3.1): Sector A is Year 1 primary, B Year 2 … F Year 6. A child starts either with the
 // placement test (recommended), directly at the year's sector, or from A1.
 export const yearToLevel = (yearLevel) => Math.max(0, Math.min(LEVELS.length - 1, yearLevel - 1));
-export const PLACEMENT = Object.freeze({ tier: 3, engineQuestions: 10, navQuestions: 6 }); // the middle of the sector, both tracks, about 10–20 minutes with the normal allowances
+export const PLACEMENT = Object.freeze({ tier: 3, engineQuestions: 15, navQuestions: 10 }); // the middle of the sector, both tracks; 25 questions is about 15–25 minutes at the normal allowances
 export function initialProgress({ start, yearLevel }, now) {
   const p = freshProgress();
   if (start === 'year') { const level = yearToLevel(yearLevel); p.engine = { level, paper: 1, bossCleared: 0 }; p.nav = { level, paper: 1, bossCleared: 0 }; }
