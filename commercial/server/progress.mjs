@@ -10,6 +10,16 @@ export const OTHER = Object.freeze({ engine: 'nav', nav: 'engine' });
 export const GC_PASS = 50, RP_PASS = 100;
 export const DEFAULT_PACE_PERCENT = 100;
 export const tierOf = (paper) => Math.min(5, Math.ceil(paper / 20));
+// Onboarding (v3.1): Sector A is Year 1 primary, B Year 2 … F Year 6. A child starts either with the
+// placement test (recommended), directly at the year's sector, or from A1.
+export const yearToLevel = (yearLevel) => Math.max(0, Math.min(LEVELS.length - 1, yearLevel - 1));
+export const PLACEMENT = Object.freeze({ tier: 3, engineQuestions: 10, navQuestions: 6 }); // the middle of the sector, both tracks, about 10–20 minutes with the normal allowances
+export function initialProgress({ start, yearLevel }, now) {
+  const p = freshProgress();
+  if (start === 'year') { const level = yearToLevel(yearLevel); p.engine = { level, paper: 1, bossCleared: 0 }; p.nav = { level, paper: 1, bossCleared: 0 }; }
+  if (start === 'test') p.placement = { status: 'pending', yearLevel, level: yearToLevel(yearLevel), tier: PLACEMENT.tier, requestedAt: now };
+  return p;
+}
 export { LEVELS };
 
 export const EQUIP_SLOTS = Object.freeze({
@@ -29,7 +39,7 @@ export const freshWallet = () => ({
 export const freshProgress = () => ({
   engine: { level: 0, paper: 1, bossCleared: 0 }, nav: { level: 0, paper: 1, bossCleared: 0 },
   wallet: freshWallet(), passDays: [], pacePercent: DEFAULT_PACE_PERCENT,
-  stats: { sessions: 0, passes: 0 }, history: [], activeSession: null,
+  stats: { sessions: 0, passes: 0 }, history: [], activeSession: null, placement: null,
 });
 
 const uniqStrings = (xs, max = 500) => [...new Set((Array.isArray(xs) ? xs : []).filter((x) => typeof x === 'string'))].slice(-max);
@@ -66,7 +76,8 @@ export function normalizeProgress(value) {
     passDays: uniqStrings(p.passDays, 400).sort(), pacePercent,
     stats: { sessions: Number.isSafeInteger(stats.sessions) && stats.sessions >= 0 ? stats.sessions : 0,
       passes: Number.isSafeInteger(stats.passes) && stats.passes >= 0 ? stats.passes : 0 },
-    history: Array.isArray(p.history) ? p.history.slice(0, 60) : [], activeSession: typeof p.activeSession === 'string' ? p.activeSession : null };
+    history: Array.isArray(p.history) ? p.history.slice(0, 60) : [], activeSession: typeof p.activeSession === 'string' ? p.activeSession : null,
+    placement: p.placement && typeof p.placement === 'object' && !Array.isArray(p.placement) && ['pending', 'done'].includes(p.placement.status) ? p.placement : null };
 }
 
 export const trk = (p, t) => p[t] || { level: 0, paper: 1, bossCleared: 0 };
@@ -107,6 +118,46 @@ export function buildQuestions(t, run, pace = 1) {
     for (let p = run.startPaper; p < run.startPaper + PAPERS_PER_SESSION; p++) for (let i = 0; i < Q_PER_PAPER[t]; i++) push(p);
   }
   return qs;
+}
+// The placement test: both tracks at the middle tier (papers 41–60) of the year's sector, Engine first
+// then Navigator, with the normal per-question allowances. Time counts as well as accuracy.
+export function buildPlacementQuestions(level, pace = 1) {
+  const qs = [], paper = () => 41 + Math.floor(Math.random() * 20);
+  for (let i = 0; i < PLACEMENT.engineQuestions; i++) qs.push(question('engine', level, paper(), pace));
+  for (let i = 0; i < PLACEMENT.navQuestions; i++) qs.push(question('nav', level, paper(), pace));
+  return qs;
+}
+/**
+ * Where one track starts after the test, from accuracy and the share of the allowance used
+ * (Kumon-style: right AND quick means ahead). Tested at sector L, tier 3:
+ *   ≥ 90 % correct, ≤ 60 % of the time  → next sector, paper 1 (F: paper 61)
+ *   ≥ 90 % correct                        → L paper 41 (as tested)
+ *   ≥ 70 %                                → L paper 21
+ *   ≥ 50 %                                → L paper 1
+ *   ≥ 30 %                                → previous sector paper 41 (A: paper 1)
+ *   below                                 → previous sector paper 1 (A: paper 1)
+ * bossCleared is set so no check point is due for the papers skipped.
+ */
+export function placeTrack({ correct, total, timeRatio }, level) {
+  const acc = total ? correct / total : 0;
+  let band, l = level, paper;
+  if (acc >= 0.9 && timeRatio <= 0.6) { band = 'ahead'; if (level < LEVELS.length - 1) { l = level + 1; paper = 1; } else paper = 61; }
+  else if (acc >= 0.9) { band = 'on-level'; paper = 41; }
+  else if (acc >= 0.7) { band = 'building'; paper = 21; }
+  else if (acc >= 0.5) { band = 'foundations'; paper = 1; }
+  else if (acc >= 0.3) { band = 'previous'; if (level > 0) { l = level - 1; paper = 41; } else paper = 1; }
+  else { band = 'previous-start'; if (level > 0) { l = level - 1; paper = 1; } else paper = 1; }
+  return { band, level: l, paper, bossCleared: Math.floor((paper - 1) / 20), accuracy: Math.round(acc * 100), timeRatio: Math.round(timeRatio * 100) / 100 };
+}
+export function placementFromResults(results, level) {
+  const out = {};
+  for (const t of TRACKS) {
+    const rs = results.filter((r) => r.track === t), correct = rs.filter((r) => r.r === 'correct').length;
+    const used = rs.reduce((a, r) => a + (r.secs || 0), 0), allowed = rs.reduce((a, r) => a + (r.allowed || 0), 0);
+    out[t] = placeTrack({ correct, total: rs.length, timeRatio: allowed ? used / allowed : 1 }, level);
+    out[t].correct = correct; out[t].total = rs.length; out[t].secs = used;
+  }
+  return out;
 }
 // v2 weekly System Scan: 25 Engine questions, ten from the current sector and fifteen from
 // previously learned sectors, shuffled. It unlocks from sector B after papers 1-20 are clear.

@@ -15,7 +15,7 @@ const messages = {
   CHILD_SESSION_REVOKED: 'The child PIN changed. Select the child and enter the new PIN.',
   TRIAL_ALREADY_USED: 'A free trial has already been used with this mobile number.', TRIAL_REQUIRES_VERIFIED_PHONE: 'A verified mobile number is needed for the free trial.',
   SUBSCRIPTION_EXISTS: 'This family already has a subscription.', NO_SUBSCRIPTION: 'There is no subscription to change.', INVALID_TRANSITION: 'That change is not possible in the current state.',
-  FAMILY_DELETED: 'This family has been deleted.', NO_DELETION_PENDING: 'No deletion is scheduled.',
+  FAMILY_DELETED: 'This family has been deleted.', NO_DELETION_PENDING: 'No deletion is scheduled.', PLACEMENT_PENDING: 'The placement test comes first.', PLACEMENT_NOT_PENDING: 'There is no placement test to take.', ALREADY_STARTED: 'This child has already started playing; the starting point can no longer be changed.', INVALID_START: 'Choose a year level for that starting option.',
   MANUAL_GRANT_ACTIVE: 'This family already has pilot access, so the free trial is not needed.', CHECKOUT_REQUIRED: 'Choose a plan to subscribe first; a trial cannot be changed.', PLAN_CHANGE_NOT_AUTHORIZED: 'That payment does not match the plan on record.', RENEWAL_REQUIRED: 'The renewal payment comes first; upgrade after it goes through.', CHANGE_IN_PROGRESS: 'A plan change is already in progress. Try again in a moment.', USE_PLAN_CHANGE: 'Your family is subscribed: change the plan from the subscription controls.', SUBSCRIPTION_CHANGED: 'The subscription changed while this was in progress. Refresh and try again.', LEDGER_REPLAYED: 'That was already done. Refresh to see the result.',
   SEATS_CANNOT_REMOVE: 'Seats can be added here, not taken away.', INVALID_PLAN: 'That plan is not available.', SELECT_CHILDREN_FOR_DOWNGRADE: 'Not enough seats for that many children.', IDEMPOTENCY_CONFLICT: 'That request was already made differently. Refresh and try again.',
   INSUFFICIENT_GRID_COINS: 'Not enough Grid Coins yet.', INSUFFICIENT_REWARD_POINTS: 'Not enough Reward Points yet.',
@@ -199,6 +199,7 @@ function cards(children, action) {
     if (action) { card.type = 'button'; card.onclick = () => run(() => action(child)); }
     const frame = el('span', null, 'avatar-frame'); frame.append(el('span', icons[child.icon] || icons.robot, 'avatar'));
     card.append(frame, el('strong', child.nickname), el('span', child.status === 'active' ? 'READY FOR THE GRID' : 'PROFILE INACTIVE', 'card-meta'));
+    if (child.yearLevel) card.append(el('span', `Year ${child.yearLevel}${child.start === 'test' ? ' · placement test' : ''}`, 'card-meta'));
     grid.append(card);
   }
   return grid;
@@ -308,7 +309,7 @@ async function parentScreen() {
   }, 'primary'));
   if (family.children.length) row.append(button('Game & progress', parentGameScreen, 'ghost'));
   row.append(button('Sign out', signOut, 'ghost')); box.append(row);
-  for (const child of family.children) box.append(button(`Reset ${child.nickname}\u2019s PIN`, () => resetPinScreen(child), 'text-button'));
+  for (const child of family.children) { box.append(button(`Reset ${child.nickname}\u2019s PIN`, () => resetPinScreen(child), 'text-button')); box.append(button(`Change ${child.nickname}\u2019s starting point`, () => startScreen(child), 'text-button')); }
   // Stage 3.5: the family's own data to keep, and the way to leave — 14 days to change your mind
   const keep = el('div', null, 'actions');
   keep.append(button('Download my family\u2019s data', async () => {
@@ -330,28 +331,55 @@ function pinFields() {
   const repeat = field('Repeat child PIN', 'password', { inputMode: 'numeric', pattern: '[0-9]{6}', maxLength: 6, autocomplete: 'new-password' });
   return { first, repeat, valid: () => first.input.checkValidity() && first.input.value === repeat.input.value };
 }
+// Where a child starts. Sector A is Year 1 primary, B Year 2 … F Year 6 — but children arrive at different
+// skill and speed levels and schools differ, so the recommended way in is a short timed test at the
+// year's sector; the parent may also start the child straight at the year's sector, or from A1.
+function startChooser(defaults = {}) {
+  const wrap = el('div', null, 'field'); wrap.append(el('span', 'Year level (primary)'));
+  const year = el('select'); year.setAttribute('aria-label', 'Year level');
+  for (let y = 1; y <= 6; y++) { const o = el('option', `Year ${y} · Sector ${'ABCDEF'[y - 1]}`); o.value = String(y); year.append(o); }
+  year.value = String(defaults.yearLevel || 1); wrap.append(year);
+  const options = el('div', null, 'options'), picks = new Map();
+  const add = (value, label, detail, checked) => { const l = el('label', null, 'check'); const i = document.createElement('input'); i.type = 'radio'; i.name = 'start'; i.value = value; i.checked = checked; l.append(i, el('span', ` ${label}`), el('small', detail, 'muted')); picks.set(value, i); options.append(l); };
+  add('test', 'Option 1 · Placement test (recommended)', 'About 10–20 minutes, timed. Engine and Navigator questions from the middle of the year\u2019s sector; graded on results and time. Each track starts where the child is ready.', (defaults.start || 'test') === 'test');
+  add('year', 'Option 2 · Start at the year\u2019s sector', 'Both tracks begin at paper 1 of the sector for this year level.', defaults.start === 'year');
+  add('a1', 'Option 3 · Start from the beginning (A1)', 'Both tracks begin at Sector A, paper 1.', defaults.start === 'a1');
+  return { wrap, options, year, value: () => [...picks].find(([, i]) => i.checked)?.[0] || 'test', inputs: [year, ...picks.values()] };
+}
 function addChildScreen(draft = {}) {
   transientView = true;
-  const box = panel('NEW CHILD PROFILE', 'Meet your next explorer.', 'A nickname and an icon are enough. No child email, phone number, photo or full birth date.');
+  const box = panel('NEW CHILD PROFILE', 'Meet your next explorer.', 'A nickname and an icon are enough for the profile. Age and year level help us place the child and understand who we serve. No child email, phone number, photo or full birth date.');
   const name = field('Nickname', 'text', { maxLength: 24, autocomplete: 'off', value: draft.nickname || '' });
   const select = el('select'); select.setAttribute('aria-label', 'Profile icon');
   for (const [key, icon] of Object.entries(icons)) { const option = el('option', `${icon} ${key}`); option.value = key; select.append(option); }
   select.value = draft.icon || 'fox';
+  const age = field('Age', 'number', { min: 3, max: 17, inputMode: 'numeric', value: draft.age || '' });
+  const start = startChooser(draft);
   const { first, repeat, valid } = pinFields();
   let requestId = crypto.randomUUID();
-  for (const input of [name.input, select, first.input, repeat.input]) input.addEventListener('input', () => { requestId = crypto.randomUUID(); });
-  box.append(name.wrap, select, first.wrap, repeat.wrap, button('Create child profile', async () => {
+  for (const input of [name.input, select, age.input, ...start.inputs, first.input, repeat.input]) input.addEventListener('input', () => { requestId = crypto.randomUUID(); });
+  box.append(name.wrap, select, first.wrap, repeat.wrap, age.wrap, start.wrap, start.options, button('Create child profile', async () => {
     if (!valid()) { note('Enter the same six-digit PIN twice.'); return; }
+    const ageValue = Number(age.input.value); if (!Number.isInteger(ageValue) || ageValue < 3 || ageValue > 17) { note('Enter the child\u2019s age (3–17).'); return; }
     try {
-      await api('/children', { nickname: name.input.value, icon: select.value, pin: first.input.value }, requestId);
+      await api('/children', { nickname: name.input.value, icon: select.value, pin: first.input.value, age: ageValue, yearLevel: Number(start.year.value), start: start.value() }, requestId);
       first.input.value = repeat.input.value = ''; await refresh();
     } catch (error) {
       if (error.code !== 'REAUTHENTICATE') throw error;
-      const saved = { nickname: name.input.value, icon: select.value };
+      const saved = { nickname: name.input.value, icon: select.value, age: age.input.value, yearLevel: Number(start.year.value), start: start.value() };
       first.input.value = repeat.input.value = '';
       reauthenticate(() => { addChildScreen(saved); note('Parent verified. Re-enter the child PIN to finish creating this profile.'); });
     }
   }, 'primary'), button('Back to family', refresh, 'ghost'));
+}
+function startScreen(child) {
+  transientView = true;
+  const box = panel('STARTING POINT', child.nickname, 'Only possible before the child has played anything. A recent parent sign-in is required.');
+  const start = startChooser({ yearLevel: child.yearLevel, start: child.start });
+  box.append(start.wrap, start.options, button('Save starting point', async () => {
+    try { await api(`/children/${child.id}/start`, { start: start.value(), yearLevel: Number(start.year.value) }); note('Starting point saved.'); await refresh(); }
+    catch (error) { if (error.code === 'ALREADY_STARTED') { note(messages.ALREADY_STARTED); return; } throw error; }
+  }, 'primary'), button('Back', refresh, 'ghost'));
 }
 function resetPinScreen(child) {
   transientView = true;
@@ -396,7 +424,7 @@ function gameSound(kind) {
     gain.gain.setValueAtTime(.04, now); gain.gain.exponentialRampToValueAtTime(.0001, now + .15); osc.start(now); osc.stop(now + .16);
   } catch {}
 }
-const runLabel = (s) => s.mode === 'boss' ? `👑 Check point T${s.tierEnd / 20}` : s.mode === 'scan' ? '🧠 SYSTEM SCAN · ×2 LOOT' : s.mode === 'practice' ? 'Practice run' : `Papers ${s.startPaper}–${s.startPaper + 4}`;
+const runLabel = (s) => s.mode === 'boss' ? `👑 Check point T${s.tierEnd / 20}` : s.mode === 'scan' ? '🧠 SYSTEM SCAN · ×2 LOOT' : s.mode === 'placement' ? '🎯 Placement test' : s.mode === 'practice' ? 'Practice run' : `Papers ${s.startPaper}–${s.startPaper + 4}`;
 const gameItem = (id) => gameModel?.catalog?.find((x) => x.id === id) || null;
 function gameHero(box, child, g) {
   const w = g.wallet, pet = gameItem(w.activePet), outfit = gameItem(w.activeOutfit), title = gameItem(w.activeTitle), vehicle = gameItem(w.activeVehicle);
@@ -416,8 +444,14 @@ async function childScreen() {
   gameHero(box, child, g);
   const wallet = el('div', null, 'allowance'); wallet.append(el('strong', `⚡ ${g.wallet.gc}`, 'count'), el('span', 'grid coins'), el('strong', `🏆 ${g.wallet.rp}`, 'count'), el('span', 'reward points'), el('span', `🛡️ ${g.wallet.shields}`, 'badge')); box.append(wallet);
   if (g.wallet.egg && !g.wallet.egg.hatched) box.append(el('p', `🥚 Mystery Egg warming · ${Math.max(0, st.stats.passes - g.wallet.egg.passesAt)} / 5 passes`, 'notice'));
-  if (st.active) box.append(el('p', `A ${TRACK[st.active.session.track].name} session is open at question ${st.active.session.index + 1} of ${st.active.session.count}.`, 'notice'), button('Continue', () => playView(st.active.session, st.active.question), 'primary'));
-  for (const t of ['engine', 'nav']) {
+  if (st.active) box.append(el('p', `A ${st.active.session.mode === 'placement' ? 'placement test' : `${TRACK[st.active.session.track].name} session`} is open at question ${st.active.session.index + 1} of ${st.active.session.count}.`, 'notice'), button('Continue', () => playView(st.active.session, st.active.question), 'primary'));
+  if (st.placement?.status === 'pending') { // the test comes first; the track cards wait
+    const card = el('div', null, 'track');
+    card.append(el('strong', `🎯 PLACEMENT TEST · SECTOR ${'ABCDEF'[st.placement.level]}`), el('span', 'Engine and Navigator questions from the middle of the sector. Timed — answer as quickly as you can. Each track will start where you are ready.', 'card-meta'));
+    if (!st.active) card.append(button('Start the placement test', async () => { playStreak = 0; const r = await api('/learn/session', { track: 'engine', mode: 'placement' }); playView(r.session, r.question); }, 'primary'));
+    box.append(card);
+  }
+  for (const t of st.placement?.status === 'pending' ? [] : ['engine', 'nav']) {
     const p = st[t], card = el('div', null, 'track');
     const next = p.next.mode === 'boss' ? `👑 Check point T${p.next.tierEnd / 20} is due` : p.next.mode === 'practice' ? 'Sector done — practice until the other track catches up' : `Next: papers ${p.next.startPaper}–${p.next.startPaper + 4}`;
     card.append(el('strong', `${TRACK[t].emoji} ${TRACK[t].name} · SECTOR ${p.levelId}`), el('span', `${Math.min(p.paper - 1, 100)} / 100 papers · ${p.bossCleared} / 5 crowns`, 'card-meta'), el('span', next, 'card-meta'));
@@ -461,7 +495,7 @@ async function mapScreen() {
 }
 function displayText(d) { if (d.layout === 'stack') return `${d.top} ${d.sym} ${d.bottom} =`; if (d.layout === 'frac') return `${d.pre ? `${d.pre} ` : ''}${d.parts.map((p) => (p.sym ? p.sym : `${p.n}/${p.d}`)).join(' ')} =`; return d.text; }
 function playView(session, q) {
-  stopTimer(); transientView = true; const t = TRACK[session.track], box = panel(`${t.emoji} ${t.name} · SECTOR ${q.levelId || session.levelId}`, runLabel(session), `Question ${q.index + 1} of ${session.count} · paper ${q.paper}`);
+  stopTimer(); transientView = true; const t = TRACK[q.track || session.track], box = panel(`${t.emoji} ${t.name} · SECTOR ${q.levelId || session.levelId}`, runLabel(session), `Question ${q.index + 1} of ${session.count}${session.mode === 'placement' ? '' : ` · paper ${q.paper}`}`);
   const shout = gameModel?.wallet?.activeShout, tier = playStreak >= 18 ? 3 : playStreak >= 14 ? 2 : playStreak >= 9 ? 1 : playStreak >= 4 ? 0 : -1;
   if (tier >= 0) box.append(el('p', (SHOUTS[shout] || ['COMBO!', 'SUPER COMBO!', 'HYPER COMBO!', 'ULTRA COMBO!!'])[tier], 'combo'));
   box.append(el('p', displayText(q.display), 'question'));
@@ -479,6 +513,12 @@ function playView(session, q) {
 }
 function summaryView(session, s) {
   transientView = true;
+  if (s.placement) { // the test is done: where each track begins
+    const box = panel('🎯 PLACEMENT COMPLETE', 'Your grid is set.', `${s.correct} out of ${s.total} in the test. Coins start with your first real papers.`);
+    const words = { ahead: 'ready for the next sector', 'on-level': 'right in the middle of the sector', building: 'building up through the sector', foundations: 'from the start of the sector', previous: 'a sector back, from the middle', 'previous-start': 'a sector back, from the start' };
+    for (const tr of ['engine', 'nav']) { const p = s.placement[tr]; box.append(el('p', `${TRACK[tr].emoji} ${TRACK[tr].name}: starts at Sector ${p.levelId}, paper ${p.paper} — ${words[p.band] || p.band} (${p.correct}/${p.total} right).`, 'notice')); }
+    box.append(button('Go to my grid', refresh, 'primary')); return;
+  }
   const t = TRACK[session.track];
   const box = panel(`${t.emoji} ${t.name} · ${s.papers}`, s.passed ? 'PASS!' : 'Not this time.',
     s.passed ? (s.rewarded ? `${s.correct} out of ${s.total}. ⚡ +${s.gcEarned} 🏆 +${s.rpEarned}` : `${s.correct} out of ${s.total}. Practice runs keep you sharp but pay nothing — coins come back when the other track finishes the sector.`)

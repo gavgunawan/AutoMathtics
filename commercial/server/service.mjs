@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { Fault, fail, sha256, mac, randomToken, object, text, uuid, pin, childInput, publicChild } from './security.mjs';
+import { Fault, fail, sha256, mac, randomToken, object, text, uuid, pin, childInput, startInput, publicChild } from './security.mjs';
+import { initialProgress, normalizeProgress } from './progress.mjs';
 import { effectiveEntitlement } from './subscription.mjs';
 
 const MINUTE = 60_000, DAY = 24 * 60 * MINUTE;
@@ -168,7 +169,7 @@ export class Foundation {
     const familyId = initial.s.familyId, childId = randomUUID();
     // The replay record commits to the profile, never to the PIN in any form: the browser mints
     // a new request id whenever any field changes, so a PIN-only edit is a new request anyway.
-    const fingerprint = mac(this.secret, JSON.stringify({ nickname: input.nickname, icon: input.icon }));
+    const fingerprint = mac(this.secret, JSON.stringify({ nickname: input.nickname, icon: input.icon, age: input.age, yearLevel: input.yearLevel, start: input.start }));
     const opPath = `families/${familyId}/operations/${requestId}`;
     const existing = await this.store.get(opPath);
     if (existing) {
@@ -189,9 +190,12 @@ export class Foundation {
       }
       if (family.activeChildIds.length >= e.seatLimit) fail(409, 'CHILD_LIMIT_REACHED');
       if (family.childIds.length >= FAMILY_LIMIT) fail(409, 'PILOT_PROFILE_LIMIT');
-      const child = { id: childId, nickname: input.nickname, icon: input.icon, status: 'active', createdAt: this.now() };
+      // Demographics (age, primary year) are kept on the profile for the business backend; the start option decides the first papers.
+      const child = { id: childId, nickname: input.nickname, icon: input.icon, status: 'active', createdAt: this.now(),
+        demographics: { age: input.age, yearLevel: input.yearLevel, recordedAt: this.now() }, start: { option: input.start, yearLevel: input.yearLevel, chosenAt: this.now() } };
       tx.set(`families/${familyId}`, { ...family, childIds: [...family.childIds, childId], activeChildIds: [...family.activeChildIds, childId] });
       tx.set(`families/${familyId}/children/${childId}`, child);
+      if (input.start !== 'a1') tx.set(`families/${familyId}/learning/${childId}`, initialProgress(input, this.now()));
       tx.set(`families/${familyId}/credentials/${childId}`, { hash, version: 1 });
       tx.set(opPath, { uid: ctx.uid, fingerprint, child: publicChild(child), at: this.now(), expireAt: this.now() + OPERATION_RETENTION_MS });
       this.audit(tx, 'child.created', s.uid, familyId, childId);
@@ -308,6 +312,23 @@ export class Foundation {
       await this.releasePinReservation(state.attemptPath, ticket);
       throw error;
     }
+  }
+  /** The parent changes where a child starts — only before the child has played anything (a pending placement test included). */
+  async setChildStart(ctx, childId, body) {
+    uuid(childId); object(body, ['start', 'yearLevel']);
+    return this.store.transaction(async (tx) => {
+      const { s, family } = await this.authorize(tx, ctx, ['parent']); this.requireRecent(s);
+      if (!family.childIds.includes(childId)) fail(404, 'CHILD_NOT_FOUND');
+      const child = await tx.get(`families/${s.familyId}/children/${childId}`), prog = normalizeProgress(await tx.get(`families/${s.familyId}/learning/${childId}`));
+      if (!child) fail(404, 'CHILD_NOT_FOUND');
+      if (prog.stats.sessions > 0 || prog.activeSession) fail(409, 'ALREADY_STARTED');
+      const chosen = startInput({ yearLevel: body.yearLevel ?? child.demographics?.yearLevel ?? null, start: body.start });
+      const next = initialProgress(chosen, this.now());
+      tx.set(`families/${s.familyId}/learning/${childId}`, { ...next, wallet: prog.wallet }); // whatever the wallet already holds stays
+      tx.set(`families/${s.familyId}/children/${childId}`, { ...child, demographics: { ...(child.demographics || {}), yearLevel: chosen.yearLevel }, start: { option: chosen.start, yearLevel: chosen.yearLevel, chosenAt: this.now() } });
+      this.audit(tx, 'child.start_changed', s.uid, s.familyId, childId);
+      return { child: publicChild({ ...child, start: { option: chosen.start }, demographics: { yearLevel: chosen.yearLevel } }), placement: next.placement };
+    });
   }
   async resetPin(ctx, childId, code) {
     uuid(childId); pin(code);

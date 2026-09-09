@@ -31,14 +31,25 @@ export function pin(value) {
   return value;
 }
 export const ICONS = Object.freeze(['fox', 'panda', 'tiger', 'wolf', 'robot', 'rocket']);
+export const START_OPTIONS = Object.freeze(['test', 'year', 'a1']); // placement test (recommended), start at the year's sector, start from A1
+export const YEAR_LEVELS = Object.freeze([1, 2, 3, 4, 5, 6]); // primary years; Sector A = Year 1 … Sector F = Year 6
+export function startInput(body) {
+  const age = body.age === undefined || body.age === null ? null : body.age;
+  if (age !== null && (!Number.isInteger(age) || age < 3 || age > 17)) fail(400, 'INVALID_PROFILE');
+  const yearLevel = body.yearLevel === undefined || body.yearLevel === null ? null : body.yearLevel;
+  if (yearLevel !== null && !YEAR_LEVELS.includes(yearLevel)) fail(400, 'INVALID_PROFILE');
+  const start = body.start === undefined || body.start === null ? (yearLevel ? 'test' : 'a1') : body.start;
+  if (!START_OPTIONS.includes(start) || (start !== 'a1' && yearLevel === null)) fail(400, 'INVALID_START'); // a test or a year start needs the year
+  return { age, yearLevel, start };
+}
 export function childInput(body) {
-  object(body, ['nickname', 'icon', 'pin']);
+  object(body, ['nickname', 'icon', 'pin', 'age', 'yearLevel', 'start']);
   const nickname = text(body.nickname, 1, 24).normalize('NFC').trim();
   if (!/^[\p{L}\p{N}][\p{L}\p{N} .'-]{0,23}$/u.test(nickname) || !ICONS.includes(body.icon)) fail(400, 'INVALID_PROFILE');
-  return { nickname, icon: body.icon, pin: pin(body.pin) };
+  return { nickname, icon: body.icon, pin: pin(body.pin), ...startInput(body) };
 }
 export function publicChild(c) {
-  return { id: c.id, nickname: c.nickname, icon: c.icon, status: c.status };
+  return { id: c.id, nickname: c.nickname, icon: c.icon, status: c.status, yearLevel: c.demographics?.yearLevel ?? null, start: c.start?.option || null };
 }
 
 // A pepper is kept in Secret Manager, never in Firestore or a client bundle.

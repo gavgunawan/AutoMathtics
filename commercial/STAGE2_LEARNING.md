@@ -49,6 +49,27 @@ Rules migrated from v2:
 - A sector is done at paper 100 with five crowns; the track then runs practice sessions until the other track finishes the sector, then both jump.
 - The per-question clock is the v2 one (sector base + 5 s per tier for Engine; 50 s + 5 s per sector and tier for Navigator), scaled by the child's pace. An answer that arrives after it, plus five seconds of grace, is a timeout.
 
+## Onboarding and the placement test (v3.1)
+
+A new child profile records **age** and **primary year level** (`children/{c}.demographics`, for the
+business backend) and a **start option** (`children/{c}.start`). Sector A is Year 1 primary, B Year 2 …
+F Year 6 — but children arrive at different skill and speed levels and school curricula differ, so:
+
+1. **Placement test (recommended, the default when a year is given).** `learning.start({ mode: 'placement' })`
+   is the only session a child with a pending test can open (`PLACEMENT_PENDING` otherwise; the test can be
+   taken once, `PLACEMENT_NOT_PENDING` after). It is 16 timed questions from the **middle tier (papers 41–60)
+   of the year's sector**: 10 Engine then 6 Navigator, with the normal per-question allowances, so about
+   10–20 minutes. It pays nothing, counts for no streak day and no pass. Each track is placed separately
+   from accuracy and the share of the allowance used (`placeTrack`, Kumon-style: right *and* quick means
+   ahead); `bossCleared` is set so no check point is owed for skipped papers. The result is kept on the
+   progress document (`placement.result`) and in the history row.
+2. **Start at the year's sector** (`start: 'year'`): both tracks at paper 1 of the sector.
+3. **Start from A1** (`start: 'a1'`, the default for a profile without a year).
+
+The parent may change the starting point (`POST /api/children/{id}/start { start, yearLevel }`, recent
+sign-in) until the child has played anything (`ALREADY_STARTED`). The placement matrix itself is internal
+(`server/progress.mjs` → `placeTrack`) and is not shown to parents.
+
 ## Strict answers and replay protection
 
 `server/progress.mjs` validates each answer type explicitly. Integer/decimal strings use canonical

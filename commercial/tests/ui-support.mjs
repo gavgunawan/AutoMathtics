@@ -64,7 +64,7 @@ export async function uiFixture(t, { family = true, signedIn = true } = {}) {
   };
   const draft = async (nickname = 'Private draft') => {
     api.addChildScreen(); const inputs = nodes(root, 'INPUT');
-    inputs[0].value = nickname; inputs[1].value = inputs[2].value = '763829';
+    inputs[0].value = nickname; inputs[1].value = inputs[2].value = '763829'; inputs[3].value = '7'; // nickname, PIN, PIN again, age (v3.1)
     nodes(root, 'SELECT')[0].value = 'wolf'; f.advance(301000);
     await control(root, 'Create child profile').onclick(); assert.ok(root.textContent.includes('PARENT VERIFICATION'));
   };
