@@ -143,6 +143,22 @@ Authenticate Firebase CLI if it requests it:
 ./node_modules/.bin/firebase login --no-localhost
 ```
 
+## 4c. Optional v2 JSON migration - never connect the old project
+
+Stage 2 includes a dry-run-first migration tool for a reviewed JSON export of the old family game.
+It never opens the legacy Realtime Database or legacy Firebase project. Prepare a bundle described in
+`STAGE2_LEARNING.md`, then inspect the mapping locally:
+
+```bash
+npm run import:v2 -- --file v2-export.json --family FAMILY_UUID
+```
+
+The default is **dry run**: Firebase Admin is not even loaded. The report shows mapped tracks, balances,
+inventory counts, history rows, pace and warnings. Only after reviewing that output, target the new v3
+project and add `--apply`. Existing progress/game config is refused unless `--overwrite` is explicitly added.
+For a cloud import, `CONFIRM_PROJECT` must exactly equal the new v3 project and `OPERATOR_ID` must be set.
+Never use `automathtics` (the legacy project) as `FIREBASE_PROJECT_ID`.
+
 ## 5. Deploy v3.0
 
 The server refuses to start in staging/production without `TRUSTED_PROXY_HOPS`: the number of

@@ -90,8 +90,8 @@ export class Foundation {
   }
   async login(idToken, previousToken) {
     text(idToken, 20, 8192);
-    const who = await this.identity.verifyLogin(idToken, this.now());
-    await this.rate(`login:${who.uid}`, 10, 10 * MINUTE); // per account, once the token is proven
+    const who = await this.identity.verifyLogin(idToken, this.now(),
+      (uid) => this.rate(`login:${uid}`, 10, 10 * MINUTE)); // trusted UID, before the fresh Auth lookup
     const token = randomToken(), key = sha256(token), oldKey = sessionKey(previousToken);
     await this.store.transaction(async (tx) => {
       const path = `parents/${who.uid}`;

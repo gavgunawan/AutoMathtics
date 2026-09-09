@@ -13,6 +13,10 @@ const messages = {
   INCORRECT_PIN: 'That PIN did not match.', REAUTHENTICATE: 'Please sign in again for this parent action.',
   SIGN_IN_REQUIRED: 'Please sign in.', PARENT_REQUIRED: 'Return to parent sign-in to manage your family.',
   CHILD_SESSION_REVOKED: 'The child PIN changed. Select the child and enter the new PIN.',
+  INSUFFICIENT_GRID_COINS: 'Not enough Grid Coins yet.', INSUFFICIENT_REWARD_POINTS: 'Not enough Reward Points yet.',
+  ITEM_ALREADY_OWNED: 'You already own that item.', SHIELD_LIMIT: 'You can hold at most two streak shields.',
+  EGG_ALREADY_WARMING: 'Your Mystery Egg is already warming.', REWARD_DAILY_LIMIT: 'That reward has reached its daily limit.',
+  SCAN_ALREADY_DONE: 'System Scan is already complete this week.', SCAN_LOCKED: 'System Scan unlocks in Sector B after the first tier.',
 };
 // Text-only DOM construction: user nicknames and family labels are never HTML.
 function el(tag, text, className) {
@@ -208,6 +212,7 @@ function parentScreen() {
   if (family.children.length) row.append(button('Hand over to kids', async () => {
     if (authModule) await authModule.clear(); await api('/session/lock', {}); channel?.postMessage('changed'); await refresh();
   }, 'primary'));
+  if (family.children.length) row.append(button('Game & progress', parentGameScreen, 'ghost'));
   row.append(button('Sign out', signOut, 'ghost')); box.append(row);
   for (const child of family.children) box.append(button(`Reset ${child.nickname}\u2019s PIN`, () => resetPinScreen(child), 'text-button'));
   box.append(el('p', `Family reference: ${family.id}`, 'reference'));
@@ -267,86 +272,133 @@ function selectorScreen() {
     p.input.focus();
   }), button('Return to parent sign-in', () => signInScreen(), 'ghost'), button('Sign out', signOut, 'text-button'));
 }
-// ---- the learning engine: every question, mark, paper and coin comes from the server ----
+// ---- secure learning + migrated v2 game layer ----
 const TRACK = { engine: { name: 'ENGINE', emoji: '⚙️' }, nav: { name: 'NAVIGATOR', emoji: '🧭' } };
-let timer = null;
+const EQUIP_SLOT = { pet: 'activePet', fx: 'activeFx', snd: 'activeSnd', bg: 'activeBg', ring: 'ring', outfit: 'activeOutfit', shout: 'activeShout', timer: 'activeTimer', title: 'activeTitle', namefx: 'activeNameFx', map: 'activeMap', vehicle: 'activeVehicle', base: 'activeBase' };
+const SHOUTS = { shout_kapow: ['POW!', 'KAPOW!', 'BOOM!!', 'KA-BLAMMO!!!'], shout_turbo: ['TURBO!', 'OVERDRIVE!', 'HYPERDRIVE!', 'WARP SPEED!!'], shout_robot: ['NICE.HUMAN', 'IMPRESSIVE', 'MAXIMUM.POWER', 'LEGENDARY.EXE'], shout_dino: ['RAWR!', 'MEGA RAWR!', 'ULTRA RAWR!', 'T-REX MODE!!'] };
+const FX = { fx_confetti: '🎊', fx_lightning: '🌩️', fx_goldrain: '💰' };
+let timer = null, gameModel = null, playStreak = 0, audioCtx = null;
 function stopTimer() { if (timer) { clearInterval(timer); timer = null; } }
-const runLabel = (s) => (s.mode === 'boss' ? `👑 Check point T${s.tierEnd / 20}` : s.mode === 'practice' ? 'Practice run' : `Papers ${s.startPaper}–${s.startPaper + 4}`);
+function gameSound(kind) {
+  const pack = gameModel?.wallet?.activeSnd; if (!pack) return;
+  try { const Ctx = window.AudioContext || window.webkitAudioContext; if (!Ctx) return; audioCtx ||= new Ctx();
+    const osc = audioCtx.createOscillator(), gain = audioCtx.createGain(), now = audioCtx.currentTime; osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.type = pack === 'snd_retro' ? 'square' : 'sine'; const good = kind === 'correct' || kind === 'buy';
+    osc.frequency.setValueAtTime(good ? (pack === 'snd_retro' ? 660 : 880) : 190, now); if (pack === 'snd_space') osc.frequency.exponentialRampToValueAtTime(good ? 1320 : 120, now + .12);
+    gain.gain.setValueAtTime(.04, now); gain.gain.exponentialRampToValueAtTime(.0001, now + .15); osc.start(now); osc.stop(now + .16);
+  } catch {}
+}
+const runLabel = (s) => s.mode === 'boss' ? `👑 Check point T${s.tierEnd / 20}` : s.mode === 'scan' ? '🧠 SYSTEM SCAN · ×2 LOOT' : s.mode === 'practice' ? 'Practice run' : `Papers ${s.startPaper}–${s.startPaper + 4}`;
+const gameItem = (id) => gameModel?.catalog?.find((x) => x.id === id) || null;
+function gameHero(box, child, g) {
+  const w = g.wallet, pet = gameItem(w.activePet), outfit = gameItem(w.activeOutfit), title = gameItem(w.activeTitle), vehicle = gameItem(w.activeVehicle);
+  const hero = el('div', null, 'game-hero');
+  const petWrap = el('span', null, `game-pet-wrap ${w.ring || ''}`); petWrap.append(el('span', pet?.emoji || icons[child.icon] || '🤖', 'game-pet'));
+  if (outfit) petWrap.append(el('span', outfit.emoji, 'game-outfit')); hero.append(petWrap);
+  const info = el('div'); info.append(el('strong', child.nickname, `game-name ${w.activeNameFx || ''}`));
+  if (title) info.append(el('span', `${title.emoji} ${title.name}`, 'game-title'));
+  if (vehicle) info.append(el('span', `${vehicle.emoji} ${vehicle.name}`, 'card-meta'));
+  hero.append(info); box.append(hero);
+  if (w.activeBg) box.className += ` game-${w.activeBg}`; if (w.activeBase) box.className += ` ${w.activeBase}`;
+}
 async function childScreen() {
-  stopTimer();
-  const child = model.child;
-  const st = await api('/learn/state');
-  const box = panel('CHILD SESSION / FAMILY PROTECTED', `Welcome, ${child.nickname}.`, 'Pick a track. Every question comes from the server, and so does every mark.');
-  const wallet = el('div', null, 'allowance');
-  wallet.append(el('strong', `⚡ ${st.wallet.gc}`, 'count'), el('span', 'grid coins'), el('strong', `🏆 ${st.wallet.rp}`, 'count'), el('span', 'reward points'));
-  box.append(wallet);
-  if (st.active) {
-    box.append(el('p', `A ${TRACK[st.active.session.track].name} session is open at question ${st.active.session.index + 1} of ${st.active.session.count}.`, 'notice'),
-      button('Continue', () => playView(st.active.session, st.active.question), 'primary'));
-  }
+  stopTimer(); playStreak = 0; const child = model.child;
+  const [st, g] = await Promise.all([api('/learn/state'), api('/game/state')]); gameModel = g;
+  const box = panel('CHILD SESSION / FAMILY PROTECTED', `Welcome, ${child.nickname}.`, 'Your questions, marks, progress and game wallet are all server-owned.');
+  gameHero(box, child, g);
+  const wallet = el('div', null, 'allowance'); wallet.append(el('strong', `⚡ ${g.wallet.gc}`, 'count'), el('span', 'grid coins'), el('strong', `🏆 ${g.wallet.rp}`, 'count'), el('span', 'reward points'), el('span', `🛡️ ${g.wallet.shields}`, 'badge')); box.append(wallet);
+  if (g.wallet.egg && !g.wallet.egg.hatched) box.append(el('p', `🥚 Mystery Egg warming · ${Math.max(0, st.stats.passes - g.wallet.egg.passesAt)} / 5 passes`, 'notice'));
+  if (st.active) box.append(el('p', `A ${TRACK[st.active.session.track].name} session is open at question ${st.active.session.index + 1} of ${st.active.session.count}.`, 'notice'), button('Continue', () => playView(st.active.session, st.active.question), 'primary'));
   for (const t of ['engine', 'nav']) {
-    const p = st[t];
-    const card = el('div', null, 'track');
-    const next = p.next.mode === 'boss' ? `👑 Check point T${p.next.tierEnd / 20} is due` : p.next.mode === 'practice' ? 'Sector done — practice runs until the other track catches up' : `Next: papers ${p.next.startPaper}–${p.next.startPaper + 4}`;
+    const p = st[t], card = el('div', null, 'track');
+    const next = p.next.mode === 'boss' ? `👑 Check point T${p.next.tierEnd / 20} is due` : p.next.mode === 'practice' ? 'Sector done — practice until the other track catches up' : `Next: papers ${p.next.startPaper}–${p.next.startPaper + 4}`;
     card.append(el('strong', `${TRACK[t].emoji} ${TRACK[t].name} · SECTOR ${p.levelId}`), el('span', `${Math.min(p.paper - 1, 100)} / 100 papers · ${p.bossCleared} / 5 crowns`, 'card-meta'), el('span', next, 'card-meta'));
-    if (!st.active) card.append(button(`Start ${TRACK[t].name}`, async () => { const r = await api('/learn/session', { track: t }); playView(r.session, r.question); }, 'primary'));
-    box.append(card);
+    if (!st.active) card.append(button(`Start ${TRACK[t].name}`, async () => { playStreak = 0; const r = await api('/learn/session', { track: t }); playView(r.session, r.question); }, 'primary')); box.append(card);
   }
-  if (st.history.length) {
-    const log = el('div', null, 'log');
-    for (const h of st.history.slice(0, 6)) log.append(el('span', `${h.date} · ${TRACK[h.track].emoji} ${h.levelId} ${h.papers} · ${h.quit ? `left at Q${h.atQ + 1}` : h.passed ? 'PASS' : `${h.correct}/${h.total}`}`, 'card-meta'));
-    box.append(log);
+  if (st.scan?.available && !st.active) box.append(button('🧠 SYSTEM SCAN · WEEKLY ×2 LOOT', async () => { playStreak = 0; const r = await api('/learn/session', { track: 'engine', mode: 'scan' }); playView(r.session, r.question); }, 'scan-button'));
+  else if (st.scan?.unlocked) box.append(el('p', '🧠 System Scan done this week · resets Monday', 'small muted'));
+  if (g.rocket) {
+    const r = g.rocket, mine = r.myFuel || 0, rocket = el('div', null, 'rocket-card');
+    rocket.append(el('strong', `🚀 FAMILY ROCKET · ${r.prize.emoji} ${r.prize.name}`), el('span', `${r.totalFuel} / ${r.goal} ${r.currency === 'rp' ? '🏆' : '⚡'} · you: ${mine}${r.minEach ? ` / ${r.minEach} min` : ''}`, 'card-meta'));
+    if (r.status === 'fueling' && r.isCrew) for (const amt of (r.currency === 'rp' ? [100, 200, 500] : [50, 100, 250])) rocket.append(button(`Fuel ${r.currency === 'rp' ? '🏆' : '⚡'}${amt}`, async () => { await api('/game/rocket/fuel', { rocketId: r.id, amount: amt, operationId: crypto.randomUUID() }); await childScreen(); }, 'ghost'));
+    if (r.status === 'launched') rocket.append(el('span', '🎉 LIFT-OFF! Ask your parent for the prize.', 'notice')); box.append(rocket);
   }
-  box.append(button('Switch child', async () => { await api('/session/select', {}); channel?.postMessage('changed'); await refresh(); }, 'ghost'),
-    button('Parent sign-in', () => signInScreen(), 'text-button'));
+  if (st.history.length) { const log = el('div', null, 'log'); for (const h of st.history.slice(0, 6)) log.append(el('span', `${h.date} · ${h.mode === 'scan' ? '🧠' : TRACK[h.track].emoji} ${h.levelId} ${h.papers} · ${h.quit ? `left at Q${h.atQ + 1}` : h.passed ? 'PASS' : `${h.correct}/${h.total}`}`, 'card-meta')); box.append(log); }
+  const actions = el('div', null, 'actions'); actions.append(button('🛒 Shop & rewards', shopScreen, 'ghost'), button('🗺 Map & fluency', mapScreen, 'ghost'), button('Switch child', async () => { await api('/session/select', {}); channel?.postMessage('changed'); await refresh(); }, 'ghost'), button('Parent sign-in', () => signInScreen(), 'text-button')); box.append(actions);
 }
-function displayText(d) {
-  if (d.layout === 'stack') return `${d.top} ${d.sym} ${d.bottom} =`;
-  if (d.layout === 'frac') return `${d.pre ? `${d.pre} ` : ''}${d.parts.map((p) => (p.sym ? p.sym : `${p.n}/${p.d}`)).join(' ')} =`;
-  return d.text;
+async function shopScreen() {
+  transientView = true; const g = await api('/game/state'); gameModel = g; const box = panel('GRID SHOP', 'Spend what you earned.', 'Cosmetics and utilities use ⚡ Grid Coins. Family rewards use 🏆 Reward Points. Prices and outcomes come from the server.');
+  box.append(el('p', `Wallet · ⚡ ${g.wallet.gc} · 🏆 ${g.wallet.rp} · 🛡️ ${g.wallet.shields}`, 'notice'));
+  const inv = new Set(g.wallet.inventory || []);
+  for (const it of g.catalog.filter((x) => !x.hatch && !x.unlock)) {
+    const row = el('div', null, 'shop-row'); row.append(el('span', `${it.emoji} ${it.name}`, 'shop-name'), el('span', `⚡${it.cost}`, 'shop-cost'));
+    if (it.kind === 'shield' || it.kind === 'crate' || it.kind === 'egg') row.append(button('BUY', async () => { const r = await api('/game/shop/buy', { itemId: it.id, operationId: crypto.randomUUID() }); gameSound('buy'); if (r.awarded) note(`🎁 You got ${r.awarded.emoji} ${r.awarded.name}!`); await shopScreen(); }, 'ghost'));
+    else if (!inv.has(it.id)) row.append(button('BUY', async () => { await api('/game/shop/buy', { itemId: it.id, operationId: crypto.randomUUID() }); gameSound('buy'); await shopScreen(); }, 'ghost'));
+    else if (EQUIP_SLOT[it.kind]) { const active = g.wallet[EQUIP_SLOT[it.kind]] === it.id; row.append(button(active ? 'EQUIPPED' : 'EQUIP', async () => { if (!active) await api('/game/shop/equip', { kind: it.kind, itemId: it.id }); await shopScreen(); }, active ? 'badge' : 'ghost')); }
+    box.append(row);
+  }
+  const earned = g.catalog.filter((x) => x.unlock || x.hatch); if (earned.length) { box.append(el('h2', 'Earned & hatch pets')); for (const it of earned) { const u = it.unlockProgress; box.append(el('p', `${it.emoji} ${it.name} · ${inv.has(it.id) ? 'OWNED' : it.hatch ? 'Mystery Egg hatch' : `${u?.have || 0}/${u?.need || it.unlock?.n}`}`, 'small muted')); } }
+  box.append(el('h2', '🎁 Reward Store'));
+  if (!g.rewards.length) box.append(el('p', 'Your parent has not published any rewards yet.', 'muted'));
+  for (const r of g.rewards) { const row = el('div', null, 'shop-row'); row.append(el('span', `${r.emoji} ${r.name}`, 'shop-name'), el('span', `🏆${r.cost}${r.cap ? ` · max ${r.cap}/day` : ''}`, 'shop-cost'), button('REDEEM', async () => { await api('/game/rewards/redeem', { rewardId: r.id, operationId: crypto.randomUUID() }); note('Sent to parent for approval. Points are held while pending.'); await shopScreen(); }, 'ghost')); box.append(row); }
+  const pending = (g.wallet.redemptions || []).filter((r) => r.status === 'pending'); if (pending.length) box.append(el('p', `Pending: ${pending.map((r) => `${r.emoji} ${r.name}`).join(' · ')}`, 'notice'));
+  box.append(button('Back to my grid', childScreen, 'primary'));
 }
+async function mapScreen() {
+  transientView = true; const [st, g] = await Promise.all([api('/learn/state'), api('/game/state')]); gameModel = g; const box = panel('MISSION MAP', 'Progress & fluency', 'Your map is calculated from server-recorded sessions. Accuracy and time cannot be edited by the browser.'); if (g.wallet.activeMap) box.className += ` ${g.wallet.activeMap}`;
+  for (const t of ['engine', 'nav']) { const p = st[t], card = el('div', null, 'track'); card.append(el('strong', `${TRACK[t].emoji} ${TRACK[t].name} · Sector ${p.levelId}`), el('span', `${Math.min(100, p.paper - 1)} papers · ${p.bossCleared} crowns`, 'card-meta')); box.append(card); }
+  if (!g.heatmap.length) box.append(el('p', 'Complete some sessions to light up the fluency grid.', 'muted'));
+  for (const c of g.heatmap.sort((a,b) => a.track.localeCompare(b.track) || a.level-b.level || a.tier-b.tier)) { const row = el('div', null, 'heat-row'); row.append(el('strong', `${TRACK[c.track].emoji} ${c.levelId} · Tier ${c.tier}`), el('span', `${c.accuracy}% · ${c.avgSeconds ?? '—'} s avg · ${c.attempts} questions`, 'card-meta')); box.append(row); }
+  box.append(button('Back to my grid', childScreen, 'primary'));
+}
+function displayText(d) { if (d.layout === 'stack') return `${d.top} ${d.sym} ${d.bottom} =`; if (d.layout === 'frac') return `${d.pre ? `${d.pre} ` : ''}${d.parts.map((p) => (p.sym ? p.sym : `${p.n}/${p.d}`)).join(' ')} =`; return d.text; }
 function playView(session, q) {
-  stopTimer(); transientView = true;
-  const t = TRACK[session.track];
-  const box = panel(`${t.emoji} ${t.name} · SECTOR ${session.levelId}`, runLabel(session), `Question ${q.index + 1} of ${session.count} · paper ${q.paper}`);
+  stopTimer(); transientView = true; const t = TRACK[session.track], box = panel(`${t.emoji} ${t.name} · SECTOR ${q.levelId || session.levelId}`, runLabel(session), `Question ${q.index + 1} of ${session.count} · paper ${q.paper}`);
+  const shout = gameModel?.wallet?.activeShout, tier = playStreak >= 18 ? 3 : playStreak >= 14 ? 2 : playStreak >= 9 ? 1 : playStreak >= 4 ? 0 : -1;
+  if (tier >= 0) box.append(el('p', (SHOUTS[shout] || ['COMBO!', 'SUPER COMBO!', 'HYPER COMBO!', 'ULTRA COMBO!!'])[tier], 'combo'));
   box.append(el('p', displayText(q.display), 'question'));
-  const clock = el('p', `${q.seconds} s`, 'clock'); box.append(clock);
-  let left = q.seconds;
+  if (q.read && window.speechSynthesis && window.SpeechSynthesisUtterance) box.append(button('🔊 Read aloud', () => { window.speechSynthesis.cancel(); window.speechSynthesis.speak(new window.SpeechSynthesisUtterance(q.read)); }, 'text-button'));
+  const timerSkin = gameModel?.wallet?.activeTimer || ''; const clock = el('p', `${q.seconds} s`, `clock ${timerSkin}`); box.append(clock); let left = q.seconds;
   timer = setInterval(() => { left--; clock.textContent = `${Math.max(0, left)} s`; if (left <= 0) stopTimer(); }, 1000);
-  const attemptId = crypto.randomUUID(); // one id per question shown: a retried submit cannot count twice
-  const submit = async (answer) => {
-    stopTimer();
-    const r = await api('/learn/answer', { sessionId: session.id, index: q.index, attemptId, answer });
-    if (r.done) summaryView(session, r.summary); else playView({ ...session, index: r.question.index }, r.question);
-    note(r.correct ? '✓ Correct' : r.result === 'timeout' ? `⏱ Too slow — it was ${r.expected}` : `✗ It was ${r.expected}`);
-  };
-  const submitForm = (fields, read) => {
-    const form = el('form', null, 'answer-form'); for (const f of fields) form.append(f.wrap);
-    const go = el('button', 'Answer', 'primary'); go.type = 'submit'; form.append(go);
-    form.onsubmit = (event) => { event.preventDefault(); run(() => submit(read())); };
-    box.append(form); fields[0].input.focus();
-  };
-  if (q.answerType === 'choice') {
-    q.display.choices.forEach((c, i) => box.append(button(c, () => submit(String(i)), 'primary')));
-  } else if (q.answerType === 'frac') {
-    const n = field('Numerator', 'text', { inputMode: 'numeric', pattern: '[0-9]{1,4}', maxLength: 4, autocomplete: 'off' });
-    const d = field('Denominator', 'text', { inputMode: 'numeric', pattern: '[0-9]{1,4}', maxLength: 4, autocomplete: 'off' });
-    submitForm([n, d], () => ({ n: n.input.value.trim(), d: d.input.value.trim() }));
-  } else {
-    const a = field('Your answer', 'text', { inputMode: q.answerType === 'dec' ? 'decimal' : 'numeric', maxLength: 10, autocomplete: 'off' });
-    submitForm([a], () => a.input.value.trim());
-  }
+  const attemptId = crypto.randomUUID();
+  const submit = async (answer) => { stopTimer(); const r = await api('/learn/answer', { sessionId: session.id, index: q.index, attemptId, answer }); playStreak = r.correct ? playStreak + 1 : 0; const fx = FX[gameModel?.wallet?.activeFx]; if (fx && r.correct) note(`${fx} ${fx} ${fx}`);
+    gameSound(r.correct ? 'correct' : 'wrong'); if (r.done) summaryView(session, r.summary); else playView({ ...session, index: r.question.index }, r.question); note(r.correct ? '✓ Correct' : r.result === 'timeout' ? `⏱ Too slow — it was ${r.expected}` : `✗ It was ${r.expected}`); };
+  const submitForm = (fields, read) => { const form = el('form', null, 'answer-form'); for (const f of fields) form.append(f.wrap); const go = el('button', 'Answer', 'primary'); go.type = 'submit'; form.append(go); form.onsubmit = (event) => { event.preventDefault(); run(() => submit(read())); }; box.append(form); fields[0].input.focus(); };
+  if (q.answerType === 'choice') q.display.choices.forEach((c, i) => box.append(button(c, () => submit(String(i)), 'primary')));
+  else if (q.answerType === 'frac') { const n = field('Numerator', 'text', { inputMode: 'numeric', pattern: '(0|[1-9][0-9]{0,3})', maxLength: 4, autocomplete: 'off' }); const d = field('Denominator', 'text', { inputMode: 'numeric', pattern: '[1-9][0-9]{0,3}', maxLength: 4, autocomplete: 'off' }); submitForm([n, d], () => ({ n: n.input.value.trim(), d: d.input.value.trim() })); }
+  else { const a = field('Your answer', 'text', { inputMode: q.answerType === 'dec' ? 'decimal' : 'numeric', maxLength: 10, autocomplete: 'off' }); submitForm([a], () => a.input.value.trim()); }
   box.append(button('Leave this session', async () => { stopTimer(); await api('/learn/quit', { sessionId: session.id }); await refresh(); }, 'text-button'));
 }
 function summaryView(session, s) {
-  transientView = true;
-  const t = TRACK[session.track];
-  const box = panel(`${t.emoji} ${t.name} · ${s.papers}`, s.passed ? 'PASS!' : 'Not this time.',
-    s.passed ? `${s.correct} out of ${s.total}. ⚡ +${s.gcEarned} 🏆 +${s.rpEarned}` : `${s.correct} out of ${s.total}${s.timeout ? `, ${s.timeout} timed out` : ''}. A pass needs every question right.`);
-  if (s.leveledUp) box.append(el('p', `Sector ${s.newLevelId} unlocked!`, 'notice'));
-  else if (s.bossNext) box.append(el('p', '👑 A check point is next: questions from the whole tier, double loot.', 'notice'));
+  transientView = true; const t = TRACK[session.track], box = panel(`${t.emoji} ${t.name} · ${s.papers}`, s.passed ? 'PASS!' : 'Not this time.', s.passed ? `${s.correct} out of ${s.total}. ⚡ +${s.gcEarned} 🏆 +${s.rpEarned}` : `${s.correct} out of ${s.total}${s.timeout ? `, ${s.timeout} timed out` : ''}. A pass needs every question right.`);
+  if (s.leveledUp) box.append(el('p', `Sector ${s.newLevelId} unlocked!`, 'notice')); else if (s.bossNext) box.append(el('p', '👑 A check point is next: questions from the whole tier, double loot.', 'notice'));
+  for (const e of s.gameEvents || []) if (e.item) box.append(el('p', `${e.type === 'hatched' ? '🥚 HATCH!' : '🏆 UNLOCK!'} ${e.item.emoji} ${e.item.name}`, 'notice'));
   box.append(el('p', `Wallet: ⚡ ${s.wallet.gc} · 🏆 ${s.wallet.rp}`, 'muted'), button('Back to my grid', refresh, 'primary'));
 }
+async function parentGameMutation(path, payload) {
+  try { await api(path, payload); await parentGameScreen(); }
+  catch (error) {
+    if (error.code !== 'REAUTHENTICATE') throw error;
+    reauthenticate(() => { parentGameScreen(); note('Parent verified. Repeat the action to confirm it.'); });
+  }
+}
+async function parentGameScreen() {
+  transientView = true; const g = await api('/game/parent'); const box = panel('PARENT · GAME & PROGRESS', 'Learning controls and family rewards', 'Only the parent session can change pace, rewards, credits or the Family Rocket.');
+  const tz = field('Family time zone', 'text', { value: g.timeZone, maxLength: 64 }); box.append(tz.wrap, button('Save time zone', async () => { await parentGameMutation('/game/parent/settings', { timeZone: tz.input.value }); }, 'ghost'));
+  for (const row of g.children) {
+    const card = el('div', null, 'track'); card.append(el('strong', `${icons[row.child.icon] || '🤖'} ${row.child.nickname}`), el('span', `⚙️ ${row.engine.levelId} ${Math.min(100,row.engine.paper-1)}/100 · 🧭 ${row.nav.levelId} ${Math.min(100,row.nav.paper-1)}/100 · ⚡${row.wallet.gc} · 🏆${row.wallet.rp}`, 'card-meta'));
+    const pace = field('Question-time pace % (10–200)', 'number', { value: row.pacePercent, min: 10, max: 200 }); card.append(pace.wrap, button('Set pace', async () => { await parentGameMutation('/game/parent/settings', { childId: row.child.id, pacePercent: Number(pace.input.value) }); }, 'ghost'), button('+⚡50 credit', async () => { await parentGameMutation('/game/parent/adjust', { childId: row.child.id, currency: 'gc', amount: 50, reason: 'Parent bonus credit', operationId: crypto.randomUUID() }); }, 'text-button'));
+    const pending = row.wallet.redemptions.filter((r) => r.status === 'pending'); for (const r of pending) { const p = el('div', null, 'approval'); p.append(el('span', `${r.emoji} ${r.name} · 🏆${r.cost}`), button('Approve', async () => { await parentGameMutation('/game/parent/redemption', { childId: row.child.id, redemptionId: r.id, decision: 'approve' }); }, 'ghost'), button('Reject + refund', async () => { await parentGameMutation('/game/parent/redemption', { childId: row.child.id, redemptionId: r.id, decision: 'reject' }); }, 'text-button')); card.append(p); }
+    box.append(card);
+  }
+  box.append(el('h2', 'Reward Store')); for (const r of g.rewards) box.append(el('p', `${r.emoji} ${r.name} · 🏆${r.cost}${r.cap ? ` · max ${r.cap}/day` : ''}`, 'small muted'));
+  const re = field('New reward name', 'text', { maxLength: 40 }), rc = field('Cost in 🏆', 'number', { value: 100, min: 1, max: 100000 }); box.append(re.wrap, rc.wrap, button('Add reward for all children', async () => { const reward = { id: `rw-${crypto.randomUUID()}`, emoji: '🎁', name: re.input.value, cost: Number(rc.input.value), hidden: false, cap: 0, childIds: g.children.map((x) => x.child.id) }; await parentGameMutation('/game/parent/rewards', { rewards: [...g.rewards, reward] }); }, 'ghost'));
+  box.append(el('h2', '🚀 Family Rocket'));
+  if (!g.rocket) { const prize = field('Prize', 'text', { placeholder: 'Ice cream', maxLength: 50 }), goal = field('Goal in ⚡', 'number', { value: 2000, min: 50 }), min = field('Minimum each', 'number', { value: 300, min: 0 }); box.append(prize.wrap, goal.wrap, min.wrap, button('Build rocket', async () => { await parentGameMutation('/game/parent/rocket', { action: 'build', prize: { emoji: '🎁', name: prize.input.value }, currency: 'gc', goal: Number(goal.input.value), minEach: Number(min.input.value), crewChildIds: g.children.map((x) => x.child.id) }); }, 'primary')); }
+  else { box.append(el('p', `${g.rocket.prize.emoji} ${g.rocket.prize.name} · ${g.rocket.totalFuel}/${g.rocket.goal} · ${g.rocket.status}`, 'notice')); if (g.rocket.status === 'fueling') box.append(button('Launch now', async () => { await parentGameMutation('/game/parent/rocket', { action: 'launch', rocketId: g.rocket.id }); }, 'ghost'), button('Scrap (no refund)', async () => { await parentGameMutation('/game/parent/rocket', { action: 'scrap', rocketId: g.rocket.id }); }, 'text-button')); else box.append(button('Prize delivered · clear', async () => { await parentGameMutation('/game/parent/rocket', { action: 'claim', rocketId: g.rocket.id }); }, 'primary')); }
+  box.append(button('Back to family', refresh, 'ghost'));
+}
+
 channel?.addEventListener('message', () => {
   reauthEpoch++; // Cancel old drafts even if a request is currently in flight.
   if (working) { sessionRefreshPending = true; return; }

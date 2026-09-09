@@ -123,3 +123,35 @@ test('UI Stage 2: a child starts a session, answers what the server asks, and ca
   await h.click('Leave this session'); assert.ok(h.root.textContent.includes('Welcome,') && h.root.textContent.includes('left at Q2'));
   assert.equal((await h.f.learning.state(await h.f.service.authenticate(h.cookie().slice('__session='.length)))).active, null);
 });
+
+test('UI Stage 2 game: child shop, migrated catalog and Navigator read-aloud are reachable only after child entry', async (t) => {
+  const h = await uiFixture(t); await h.f.child(h.a.ctx); await h.api.refresh();
+  assert.ok(!h.root.textContent.includes('GRID SHOP'));
+  await h.click('Hand over to kids'); await h.nodes('BUTTON').find(n => n.className === 'player-card').onclick();
+  h.nodes('INPUT')[0].value = '763829'; await h.click('Enter my grid');
+  assert.ok(h.root.textContent.includes('🛒 Shop & rewards'));
+  await h.click('🛒 Shop & rewards');
+  assert.ok(h.root.textContent.includes('GRID SHOP') && h.root.textContent.includes('Volt dragon') && h.root.textContent.includes('⚡1200'));
+  await h.click('Back to my grid'); await h.click('Start NAVIGATOR');
+  assert.ok(h.root.textContent.includes('NAVIGATOR') && h.root.textContent.includes('🔊 Read aloud'));
+});
+
+test('UI Stage 2 game: parent workspace exposes server-backed game/progress controls', async (t) => {
+  const h = await uiFixture(t); const kid = (await h.f.child(h.a.ctx)).child; await h.api.refresh();
+  await h.click('Game & progress');
+  assert.ok(h.root.textContent.includes('PARENT · GAME & PROGRESS'));
+  assert.ok(h.root.textContent.includes(kid.nickname));
+  assert.ok(h.root.textContent.includes('Question-time pace %'));
+  assert.ok(h.root.textContent.includes('Reward Store'));
+  assert.ok(h.root.textContent.includes('Family Rocket'));
+});
+
+test('UI Stage 2 game: sensitive parent game writes require fresh reauthentication and are not auto-submitted afterward', async (t) => {
+  const h = await uiFixture(t); const kid = (await h.f.child(h.a.ctx)).child; await h.api.refresh();
+  await h.click('Game & progress'); h.f.advance(301000);
+  const before = await h.f.store.get(`families/${h.a.familyId}/learning/${kid.id}`);
+  await h.click('+⚡50 credit');
+  assert.ok(h.root.textContent.includes('PARENT VERIFICATION'));
+  const after = await h.f.store.get(`families/${h.a.familyId}/learning/${kid.id}`);
+  assert.equal(after?.wallet?.gc || 0, before?.wallet?.gc || 0);
+});

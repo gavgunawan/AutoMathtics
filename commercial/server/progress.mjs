@@ -1,6 +1,5 @@
-// Progress rules for the two tracks, ported from the v2 game so a child keeps the same journey:
-// six sectors (A–F), 100 papers each, five-paper sessions, a 👑 check point every 20 papers,
-// both tracks through a sector before the jump to the next. Pure functions: no store, no clock.
+// Progress and game rules for the two learning tracks. This is deliberately pure: the browser
+// never supplies authoritative progress, scores, currency, time allowances or unlock state.
 import { genEngine, engineSecondsFor, LEVELS } from './questions/engine.mjs';
 import { genNavigator, navSecondsFor } from './questions/navigator.mjs';
 
@@ -9,24 +8,74 @@ export const Q_PER_PAPER = Object.freeze({ engine: 5, nav: 3 });
 export const TRACKS = Object.freeze(['engine', 'nav']);
 export const OTHER = Object.freeze({ engine: 'nav', nav: 'engine' });
 export const GC_PASS = 50, RP_PASS = 100;
+export const DEFAULT_PACE_PERCENT = 100;
 export const tierOf = (paper) => Math.min(5, Math.ceil(paper / 20));
 export { LEVELS };
 
+export const EQUIP_SLOTS = Object.freeze({
+  pet: 'activePet', fx: 'activeFx', snd: 'activeSnd', bg: 'activeBg', ring: 'ring',
+  outfit: 'activeOutfit', shout: 'activeShout', timer: 'activeTimer', title: 'activeTitle',
+  namefx: 'activeNameFx', map: 'activeMap', vehicle: 'activeVehicle', base: 'activeBase',
+});
+
+export const freshWallet = () => ({
+  gc: 0, rp: 0, bonuses: 0, gcSpent: 0, rpSpent: 0,
+  inventory: [], activePet: null, activeFx: null, activeSnd: null, activeBg: null, ring: null,
+  activeOutfit: null, activeShout: null, activeTimer: null, activeTitle: null,
+  activeNameFx: null, activeMap: null, activeVehicle: null, activeBase: null,
+  shields: 0, shieldDays: [], egg: null, purchases: [], redemptions: [], lastScanWeek: null,
+});
+
 export const freshProgress = () => ({
   engine: { level: 0, paper: 1, bossCleared: 0 }, nav: { level: 0, paper: 1, bossCleared: 0 },
-  wallet: { gc: 0, rp: 0, bonuses: 0 }, passDays: [], stats: { sessions: 0, passes: 0 }, history: [], activeSession: null,
+  wallet: freshWallet(), passDays: [], pacePercent: DEFAULT_PACE_PERCENT,
+  stats: { sessions: 0, passes: 0 }, history: [], activeSession: null,
 });
+
+const uniqStrings = (xs, max = 500) => [...new Set((Array.isArray(xs) ? xs : []).filter((x) => typeof x === 'string'))].slice(-max);
+export function normalizeWallet(value) {
+  const base = freshWallet(), w = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const out = { ...base, ...w };
+  for (const key of ['gc', 'rp', 'bonuses', 'gcSpent', 'rpSpent', 'shields']) {
+    if (!Number.isSafeInteger(out[key]) || out[key] < 0) out[key] = 0;
+  }
+  out.shields = Math.min(2, out.shields);
+  out.inventory = uniqStrings(out.inventory, 200);
+  out.shieldDays = uniqStrings(out.shieldDays, 400).sort();
+  out.purchases = Array.isArray(out.purchases) ? out.purchases.slice(0, 120) : [];
+  out.redemptions = Array.isArray(out.redemptions) ? out.redemptions.slice(0, 50) : [];
+  if (!out.egg || typeof out.egg !== 'object' || Array.isArray(out.egg)) out.egg = null;
+  for (const slot of Object.values(EQUIP_SLOTS)) if (typeof out[slot] !== 'string') out[slot] = null;
+  if (typeof out.lastScanWeek !== 'string') out.lastScanWeek = null;
+  return out;
+}
+export function normalizeProgress(value) {
+  const base = freshProgress(), p = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const track = (name) => {
+    const x = p[name] && typeof p[name] === 'object' ? p[name] : {};
+    const level = Number.isInteger(x.level) ? Math.max(0, Math.min(LEVELS.length - 1, x.level)) : 0;
+    const paper = Number.isInteger(x.paper) ? Math.max(1, Math.min(PAPERS_PER_LEVEL + 1, x.paper)) : 1;
+    const bossCleared = Number.isInteger(x.bossCleared) ? Math.max(0, Math.min(5, x.bossCleared)) : 0;
+    return { level, paper, bossCleared };
+  };
+  const pacePercent = Number.isInteger(p.pacePercent) ? Math.max(10, Math.min(200, p.pacePercent)) : DEFAULT_PACE_PERCENT;
+  const stats = p.stats && typeof p.stats === 'object' ? p.stats : {};
+  return { ...base, ...p, engine: track('engine'), nav: track('nav'), wallet: normalizeWallet(p.wallet),
+    passDays: uniqStrings(p.passDays, 400).sort(), pacePercent,
+    stats: { sessions: Number.isSafeInteger(stats.sessions) && stats.sessions >= 0 ? stats.sessions : 0,
+      passes: Number.isSafeInteger(stats.passes) && stats.passes >= 0 ? stats.passes : 0 },
+    history: Array.isArray(p.history) ? p.history.slice(0, 60) : [], activeSession: typeof p.activeSession === 'string' ? p.activeSession : null };
+}
+
 export const trk = (p, t) => p[t] || { level: 0, paper: 1, bossCleared: 0 };
 export const withTrk = (p, t, patch) => ({ ...p, [t]: { ...trk(p, t), ...patch } });
 export const trackDone = (p, t) => { const x = trk(p, t); return x.paper > PAPERS_PER_LEVEL && x.bossCleared >= 5; };
 export const bossDue = (p, t) => { const x = trk(p, t); return x.bossCleared < Math.min(5, Math.floor((x.paper - 1) / 20)); };
 const jumpTrack = (p, t, level) => withTrk(p, t, { level, paper: 1, bossCleared: 0 });
-// a finished track jumps on once the other track has finished that sector too (or is already past it)
 export const canJump = (p, t) => {
   const me = trk(p, t), o = trk(p, OTHER[t]);
   return trackDone(p, t) && me.level < LEVELS.length - 1 && (o.level > me.level || (o.level === me.level && trackDone(p, OTHER[t])));
 };
-// settle every jump that is due — one track jumping can unblock the other, so go round twice
 export const settleJumps = (p) => {
   let out = p; const jumped = [];
   for (let i = 0; i < 2; i++) for (const t of TRACKS) if (canJump(out, t) && !jumped.includes(t)) { out = jumpTrack(out, t, trk(out, t).level + 1); jumped.push(t); }
@@ -34,7 +83,6 @@ export const settleJumps = (p) => {
 };
 export const sectorsCleared = (p) => Math.min(trk(p, 'engine').level, trk(p, 'nav').level);
 
-// What the next session on a track is: the due check point, the next five papers, or practice.
 export function nextRun(p, t) {
   const x = trk(p, t);
   if (trackDone(p, t)) return { mode: 'practice', level: x.level, startPaper: 1 + 5 * Math.floor(Math.random() * (PAPERS_PER_LEVEL / PAPERS_PER_SESSION)), tierEnd: null };
@@ -42,11 +90,15 @@ export function nextRun(p, t) {
   return { mode: 'paper', level: x.level, startPaper: x.paper, tierEnd: null };
 }
 const gen = (t, level, paper) => (t === 'nav' ? genNavigator(level, tierOf(paper)) : genEngine(level, tierOf(paper)));
-const secondsFor = (t, level, paper) => (t === 'nav' ? navSecondsFor(level, tierOf(paper), 1) : engineSecondsFor(level, tierOf(paper), 1));
-// Server-side question list. `answer` never leaves the server; `seconds` is the per-question allowance.
-export function buildQuestions(t, run) {
+const secondsFor = (t, level, paper, pace = 1) => (t === 'nav' ? navSecondsFor(level, tierOf(paper), pace) : engineSecondsFor(level, tierOf(paper), pace));
+const question = (t, level, paper, pace) => {
+  const q = gen(t, level, paper);
+  return { paper, tier: tierOf(paper), level, track: t, seconds: Math.max(5, secondsFor(t, level, paper, pace)), display: q.display, answer: q.answer, read: q.read || null };
+};
+// Server-side question list. `answer` never leaves the server; `seconds` is the allowance.
+export function buildQuestions(t, run, pace = 1) {
   const qs = [];
-  const push = (paper) => { const q = gen(t, run.level, paper); qs.push({ paper, tier: tierOf(paper), seconds: secondsFor(t, run.level, paper), display: q.display, answer: q.answer, read: q.read || null }); };
+  const push = (paper) => qs.push(question(t, run.level, paper, pace));
   if (run.mode === 'boss') {
     for (let i = 0; i < PAPERS_PER_SESSION * Q_PER_PAPER[t]; i++) push(run.tierEnd - 19 + Math.floor(Math.random() * 20));
   } else {
@@ -54,20 +106,35 @@ export function buildQuestions(t, run) {
   }
   return qs;
 }
+// v2 weekly System Scan: 25 Engine questions, ten from the current sector and fifteen from
+// previously learned sectors, shuffled. It unlocks from sector B after papers 1-20 are clear.
+export function buildScanQuestions(level, pace = 1) {
+  const qs = [];
+  const push = (li) => qs.push(question('engine', li, 1 + Math.floor(Math.random() * PAPERS_PER_LEVEL), pace));
+  for (let i = 0; i < 10; i++) push(level);
+  for (let i = 0; i < 15; i++) push(level > 0 ? Math.floor(Math.random() * level) : 0);
+  for (let i = qs.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [qs[i], qs[j]] = [qs[j], qs[i]]; }
+  return qs;
+}
 
-// Strict grading. Anything that is not a well-formed answer of the question's type is `null`
-// (rejected, not counted); the browser never gets to say what a number "roughly" is.
-const INT = /^-?\d{1,7}$/, DEC = /^-?\d{1,6}(\.\d{1,2})?$/, SMALL = /^\d{1,4}$/;
+// Strict grading. Reject non-canonical numeric spellings rather than coercing browser strings.
+const INT = /^(?:0|-?[1-9]\d{0,6})$/;
+const DEC = /^-?(?:0|[1-9]\d{0,5})(?:\.\d{1,2})?$/;
+const NUM = /^(?:0|[1-9]\d{0,3})$/, DEN = /^[1-9]\d{0,3}$/;
+const negativeZero = (v) => /^-0(?:\.0{1,2})?$/.test(v);
 export function grade(q, answer) {
   const a = q.answer;
   if (a.type === 'int') return typeof answer === 'string' && INT.test(answer) ? (Number(answer) === a.v ? 'correct' : 'incorrect') : null;
-  if (a.type === 'dec') return typeof answer === 'string' && DEC.test(answer) ? (Math.round(Number(answer) * 100) === Math.round(a.v * 100) ? 'correct' : 'incorrect') : null;
+  if (a.type === 'dec') return typeof answer === 'string' && DEC.test(answer) && !negativeZero(answer)
+    ? (Math.round(Number(answer) * 100) === Math.round(a.v * 100) ? 'correct' : 'incorrect') : null;
   if (a.type === 'frac') {
-    if (!answer || typeof answer !== 'object' || Array.isArray(answer) || typeof answer.n !== 'string' || typeof answer.d !== 'string' || !SMALL.test(answer.n) || !SMALL.test(answer.d)) return null;
-    return Number(answer.n) === a.n && Number(answer.d) === a.d ? 'correct' : 'incorrect'; // reduced form, as the paper asks
+    if (!answer || typeof answer !== 'object' || Array.isArray(answer) || Object.keys(answer).length !== 2 ||
+        !Object.hasOwn(answer, 'n') || !Object.hasOwn(answer, 'd') || typeof answer.n !== 'string' || typeof answer.d !== 'string' ||
+        !NUM.test(answer.n) || !DEN.test(answer.d)) return null;
+    return Number(answer.n) === a.n && Number(answer.d) === a.d ? 'correct' : 'incorrect';
   }
   if (a.type === 'choice') {
-    const i = typeof answer === 'string' && /^\d{1,2}$/.test(answer) ? Number(answer) : null;
+    const i = typeof answer === 'string' && /^(?:0|[1-9]\d?)$/.test(answer) ? Number(answer) : null;
     if (i === null || !q.display.choices || i >= q.display.choices.length) return null;
     return i === a.v ? 'correct' : 'incorrect';
   }
@@ -81,18 +148,32 @@ export function answerText(q) {
   return String(a.v);
 }
 
-// Streak bonuses: every completed block of three consecutive pass-days earns one bonus.
 export function bonusesFor(passDays) {
   let bonuses = 0, run = 0, prev = null;
-  for (const d of [...passDays].sort()) {
+  for (const d of [...new Set(passDays)].sort()) {
     run = prev && Date.parse(d) - Date.parse(prev) === 86_400_000 ? run + 1 : 1;
     if (run % 3 === 0) bonuses++;
     prev = d;
   }
   return bonuses;
 }
-// The family's local calendar day, so a late-evening pass counts for the day the child sees.
+export function liveDayRun(passDays, now = Date.now()) {
+  const days = [...new Set(passDays)].sort(); if (!days.length) return 0;
+  let run = 1; for (let i = days.length - 1; i > 0; i--) { if (Date.parse(days[i]) - Date.parse(days[i - 1]) !== 86_400_000) break; run++; }
+  const gap = Math.round((Date.parse(new Date(now).toISOString().slice(0, 10)) - Date.parse(days.at(-1))) / 86_400_000);
+  return gap <= 1 ? run : 0;
+}
 export function dayISO(ms, timeZone) {
   try { return new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ms)); }
   catch { return new Date(ms).toISOString().slice(0, 10); }
+}
+export function weekISO(ms, timeZone) {
+  const d = dayISO(ms, timeZone).split('-').map(Number); const t = new Date(Date.UTC(d[0], d[1] - 1, d[2]));
+  const day = t.getUTCDay() || 7; t.setUTCDate(t.getUTCDate() + 4 - day);
+  const y0 = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+  return `${t.getUTCFullYear()}-W${String(Math.ceil(((t - y0) / 86_400_000 + 1) / 7)).padStart(2, '0')}`;
+}
+export function scanState(prog, now, timeZone) {
+  const e = trk(prog, 'engine'); const unlocked = e.level >= 1 && e.paper > 20; const week = weekISO(now, timeZone);
+  return { unlocked, available: unlocked && prog.wallet.lastScanWeek !== week, week, doneThisWeek: prog.wallet.lastScanWeek === week };
 }

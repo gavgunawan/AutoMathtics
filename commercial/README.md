@@ -1,14 +1,14 @@
-# AutoMathtics v3.0 - account and security foundation
+# AutoMathtics v3.0 - secure account, learning and game foundation
 
 **Status: v3.0 private pilot, not a public-launch security certification.**
 
 Start with [DEPLOY_V3.md](DEPLOY_V3.md) for GitHub upload and Firebase/Cloud Run deployment.
-The version number does not mean the old learning game has been integrated.
+The secure v3 learning engine and the functional v2 game/economy features are now migrated behind the v3 server boundary.
+The old root v2 application remains separate and is not replaced or deployed by this directory.
 
-This directory is independent of the existing v2 family prototype. It does not import,
-rebuild or replace the root `index.html`, connect to its Realtime Database, or migrate
-its children. The commercial server explicitly refuses the legacy Firebase project.
-The spinning-ring design is retained with synthetic/illustrated profile icons.
+This directory never connects to the legacy Firebase project at runtime. Optional v2 history/wallet migration is
+performed only from a reviewed JSON export with the guarded `scripts/import-v2.mjs` operator tool; it never reads
+from the old project directly. The commercial server explicitly refuses the legacy Firebase project.
 
 ## Implemented
 
@@ -39,15 +39,22 @@ The spinning-ring design is retained with synthetic/illustrated profile icons.
   profile selection; excess child sessions stop working on their next API request.
 - No browser endpoint for granting entitlements, deleting data, changing roles or
   editing a wallet. Manual pilot grants use an IAM-protected operator script.
+- Secure server-owned Engine + Navigator learning sessions, strict grading, per-question clocks,
+  idempotent answer writes, dual-track paper/check-point progression, streak bonuses and weekly System Scan.
+- Server-authoritative game/economy migration: Grid Shop/inventory/cosmetics, pets, shields, Mystery Eggs,
+  Reward Store approvals, Family Rocket, parent credits, per-child pace, map/fluency view and Navigator read-aloud.
+- A guarded dry-run-first v2 JSON migration tool maps reviewed historical progress/wallet/config into v3 without
+  ever connecting to the old Firebase project.
 
-## Not implemented in this step
+## Not implemented yet (Stage 3+)
 
-The learning engine, progress ledger, reward shop, real-money payments, final privacy
-consent, second guardian invitations, account deletion/export, full recovery flows,
-operator UI and migration of existing children are NOT connected yet. Child mode
-intentionally ends at a protected profile screen; it does not fall through to the
-insecure legacy application. Losing the only MFA factor currently requires a vetted
-operator recovery procedure; do not promise self-service recovery to paying customers.
+Real-money payments/subscription webhooks, automated commercial entitlement lifecycle, reviewed launch privacy
+terms, second-guardian invitations, account deletion/export, full self-service recovery and broader commercial
+operator tooling are not complete. Losing the only MFA factor currently requires a vetted operator recovery
+procedure; do not promise self-service recovery to paying customers.
+
+The v3 game code is a Stage 2 completion candidate, but real iPhone Safari / Android Chrome acceptance and
+production deployment controls remain required before any public paid launch.
 
 Email/mobile verification and an adult checkbox are NOT legal proof of adulthood or
 parental responsibility. `pilot-v1` is a test acknowledgement, not approved launch terms.
@@ -104,8 +111,7 @@ npm run test:emulator
 ```
 
 The integration test is guarded to use only `demo-am-foundation` at the specified
-loopback emulator ports. It tests a real emulator-issued SMS MFA token, Firestore
-concurrent seat creation, deny-all client rules and entitlement expiry.
+loopback emulator ports. It tests a real emulator-issued SMS MFA token, Firestore concurrent seat creation, deny-all client rules, entitlement expiry, the learning/game path, and a real Firestore concurrent-answer race.
 
 ## Data layout
 
@@ -118,6 +124,10 @@ concurrent seat creation, deny-all client rules and entitlement expiry.
 - `families/{uuid}/operations/{uuid}`: idempotency records; no plaintext PINs.
 - `sessions/{sha256(randomToken)}`: role, owner, optional child, CSRF secret and expiry.
 - `audit/{uuid}`, `rateLimits/{opaqueKey}`: security events and distributed throttles.
+- `families/{uuid}/learning/{childId}`: authoritative Engine/Navigator progress, wallet, history, pace and active session reference.
+- `families/{uuid}/learning/{childId}/sessions/{uuid}`: server questions/answers, ordered results, clocks and session state.
+- `families/{uuid}/learning/{childId}/ledger/{uuid}`: retained game/economy audit rows.
+- `families/{uuid}/game/config`: parent-configured Reward Store and Family Rocket state.
 
 A parent session lasts at most 30 minutes. Selector/child mode lasts at most 12 hours,
 but revocation, membership, PIN version and entitlement are rechecked at use. A parent
@@ -155,7 +165,7 @@ The clock barrier uses the later of server time and the original authentication 
   `npm ci`; CI bootstraps a lock only when one is missing), pin action
   commit SHAs, scan dependencies, and vendor the pinned browser SDK. Direct dependencies
   are pinned, but transitive resolution is not frozen in this first draft.
-- Finish learning/reward server-side authorization before connecting the old game.
+- Keep learning/game server-authority regression tests and the real-emulator race test green as Stage 3 adds payments and entitlements.
 - Replace the pilot acknowledgement with reviewed legal/privacy/retention controls.
 - Implement export/deletion and vetted MFA recovery, backups AND restoration drills,
   revocation/expiry data cleanup and operational alerts. Expired sessions are already

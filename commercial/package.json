@@ -14,7 +14,8 @@
     "emulators": "firebase emulators:start --project demo-am-foundation --only auth,firestore",
     "grant": "node --env-file=.env scripts/grant.mjs",
     "deploy:staging": "bash scripts/deploy-staging.sh",
-    "grant:cloud": "node scripts/grant.mjs"
+    "grant:cloud": "node scripts/grant.mjs",
+    "import:v2": "node --env-file=.env scripts/import-v2.mjs"
   },
   "dependencies": {
     "firebase-admin": "14.3.0"

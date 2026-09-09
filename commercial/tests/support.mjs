@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Foundation, grantEntitlement } from '../server/service.mjs';
 import { FirebaseIdentity } from '../server/firebase.mjs';
 import { Learning } from '../server/learning.mjs';
+import { Game } from '../server/game.mjs';
 import { mac } from '../server/security.mjs';
 
 // Firestore rejects `undefined` values and arrays nested directly inside arrays; fail the same way
@@ -43,13 +44,14 @@ export const fakeHasher = {
 export function fixture() {
   let clock = Date.parse('2026-09-06T10:00:00Z');
   const store = new MemoryStore(), users = new Map(), tokens = new Map();
-  const auth = {
-    verifyIdToken: async (t, revoked) => { if (!revoked || !tokens.has(t)) throw Error('invalid'); return structuredClone(tokens.get(t)); },
-    getUser: async (uid) => { if (!users.has(uid)) throw Error('missing'); return structuredClone(users.get(uid)); },
+  const auth = { verifyCalls: [], getUserCalls: 0,
+    verifyIdToken: async (t, revoked) => { auth.verifyCalls.push(revoked); if (!tokens.has(t)) throw Error('invalid'); return structuredClone(tokens.get(t)); },
+    getUser: async (uid) => { auth.getUserCalls++; if (!users.has(uid)) throw Error('missing'); return structuredClone(users.get(uid)); },
   };
   const identity = new FirebaseIdentity(auth, { now: () => clock });
   const service = new Foundation({ store, identity, hasher: fakeHasher, secret, now: () => clock });
   const learning = new Learning({ foundation: service, store, now: () => clock });
+  const game = new Game({ foundation: service, store, now: () => clock, pickIndex: () => 0 });
   function token(uid, patch = {}) {
     if (!users.has(uid)) users.set(uid, { uid, email: `${uid}@example.test`, emailVerified: true, disabled: false,
       tokensValidAfterTime: new Date(0).toUTCString(), multiFactor: { enrolledFactors: [{ uid: `mfa-${uid}`, factorId: 'phone' }] } });
@@ -79,7 +81,7 @@ export function fixture() {
     const childCtx = await service.authenticate(await service.selectChild(selCtx, kid.id, '763829'));
     return { p, child: kid, selCtx, childCtx };
   }
-  return { service, learning, store, identity, users, tokens, auth, token, login, family, child, childSession, now: () => clock, advance: (ms) => { clock += ms; } };
+  return { service, learning, game, store, identity, users, tokens, auth, token, login, family, child, childSession, now: () => clock, advance: (ms) => { clock += ms; } };
 }
 export const rejected = (code) => (err) => err.code === code;
 // the answer the server holds, in the shape the browser would send — and a nearby wrong one

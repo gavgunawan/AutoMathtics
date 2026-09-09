@@ -35,11 +35,22 @@ export class FirebaseIdentity {
     this.cache.set(uid, { user, until: this.now() + this.cacheMs });
     return user;
   }
-  async verifyLogin(idToken, now) {
-    let decoded, user;
-    try { decoded = await this.auth.verifyIdToken(idToken, true); user = await this.lookup(decoded.uid, true); }
+  async verifyLogin(idToken, now, beforeLookup = null) {
+    // Signature/expiry verification is local once Google's public keys are cached. Do not ask
+    // Auth to perform a revocation lookup here and then immediately perform accounts:lookup too.
+    // The fresh user record below is the single authoritative backend read; check() enforces
+    // tokensValidAfterTime, disabled state, email verification and current MFA enrollment.
+    let decoded;
+    try { decoded = await this.auth.verifyIdToken(idToken, false); }
     catch { fail(401, 'INVALID_LOGIN'); }
-    if (typeof decoded.uid !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(decoded.uid) || user.uid !== decoded.uid) fail(401, 'INVALID_LOGIN');
+    if (typeof decoded.uid !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(decoded.uid)) fail(401, 'INVALID_LOGIN');
+    // The UID is now cryptographically authenticated, so an account-scoped throttle can run
+    // before the network lookup. A caller cannot spend another account's bucket with a forged UID.
+    if (beforeLookup) await beforeLookup(decoded.uid);
+    let user;
+    try { user = await this.lookup(decoded.uid, true); }
+    catch { fail(401, 'INVALID_LOGIN'); }
+    if (user.uid !== decoded.uid) fail(401, 'INVALID_LOGIN');
     if (!decoded.email_verified || !user.emailVerified || !user.email || decoded.email !== user.email) fail(403, 'VERIFY_EMAIL');
     if (decoded.firebase?.sign_in_provider !== 'password') fail(403, 'PASSWORD_SIGN_IN_REQUIRED');
     const mfaUid = decoded.firebase?.second_factor_identifier;

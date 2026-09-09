@@ -1,72 +1,174 @@
-# Stage 2 — the learning engine behind the child session
+# Stage 2 - secure learning engine and migrated game
 
-Branch: `feature/v3-learning-engine`, from `release/v3.0` @ `51696db` (Stage 1 + 1b).
+Base entering this completion pass: `release/v3.0` at `dbc189f20e74231b978c1ca447cc4c5e58af0777`.
+Working branch: `hardening/stage2-completion`.
 
-## The vertical slice
+**Status:** Stage 2 code-complete candidate. It is suitable for emulator/private-development
+verification, not public-production certification. Stage 3 begins the commercial account/payment
+lifecycle; staging, real mobile QA, production IAM/monitoring and final privacy controls remain later gates.
+
+## Security boundary
+
+The v2 browser-authoritative game was not copied as a trust model. v3 keeps this boundary:
 
 ```
-child session → POST /api/learn/session → server-generated questions (answers stay server-side)
-             → POST /api/learn/answer  → strict grading, per-question clock, idempotent by attempt id
-             → progress, coins and history written in the same transaction as the final answer
+authenticated child session
+  -> server authorizes family / active child / entitlement / current PIN
+  -> server owns learning session + hidden answers + clocks
+  -> browser submits only route intent and answer values
+  -> server grades and transactionally writes progress / rewards
+  -> browser receives a safe projection
 ```
 
-Every call runs inside one transaction that re-reads authorization through `Foundation.authorize`
-for the child role (active child, entitled family, current PIN version — Stage 1b F2). A parent
-or selector cookie, a revoked child, or a lapsed family gets nothing.
+Firestore client rules remain deny-all. Browser requests never supply authoritative family identity,
+child identity, expected answers, marks, paper completion, currency awards, shop prices or random loot.
 
-### Routes (child role only)
+## Learning routes
 
-| Route | Body | Returns |
+| Route | Role | Purpose |
 |---|---|---|
-| `GET /api/learn/state` | — | both tracks (sector, paper, crowns, what's next), wallet, stats, last 20 history rows, the open session if any |
-| `POST /api/learn/session` | `{ track: 'engine' \| 'nav' }` | the session and its first question; resumes an open session (any track) for two hours |
-| `POST /api/learn/answer` | `{ sessionId, index, attemptId, answer }` | `result`, `correct`, `expected`, then the next question or `done` + `summary` |
-| `POST /api/learn/quit` | `{ sessionId }` | closes the session and records a quit row |
+| `GET /api/learn/state` | child | Tracks, wallet/progress summary, history, scan state and current session |
+| `POST /api/learn/session` | child | Start/resume Engine, Navigator or a permitted System Scan |
+| `POST /api/learn/answer` | child | Strict server grading + ordered/idempotent progress write |
+| `POST /api/learn/quit` | child | Close the server session and retain a quit history row |
 
-### Rules, as in v2
+Rules migrated from v2:
+- Six sectors A-F, 100 papers per sector, five-paper runs.
+- Engine = 25 questions/run; Navigator = 15 questions/run.
+- 100% is required to advance.
+- Check points at 20-paper tiers; double loot and a crown.
+- Both tracks must complete a sector before the sector jump.
+- Practice remains available on a finished track while the other catches up.
+- Every successful normal/practice run pays 50 Grid Coins and 100 Reward Points.
+- Check points and weekly System Scan pay double.
+- Every block of three consecutive family-local pass days adds one 50/100 streak bonus.
+- Per-child pace is server-owned and clamped to 10-200%.
 
-- Six sectors A–F, 100 papers each, five-paper sessions: 25 Engine questions or 15 Navigator.
-- A session passes only with every question right. Pass → next five papers, ⚡50 🏆100.
-- A 👑 check point is due at paper 21, 41, 61, 81 and 101 (25 / 15 questions from that tier); pass → a crown, ×2 loot.
-- A sector is done at paper 100 with five crowns; the track then runs practice sessions (which still pay) until the other track finishes the sector, then both jump.
-- Streak bonus: every block of three consecutive pass-days (family time zone, default `Asia/Singapore`, stored on the family) pays ⚡50 🏆100 once.
-- The per-question clock is the v2 one (sector base + 5 s per tier for Engine; 50 s + 5 s per sector and tier for Navigator). An answer that arrives after it, plus five seconds of grace, is a timeout.
+## Strict answers and replay protection
 
-### Grading is strict
+`server/progress.mjs` validates each answer type explicitly. Integer/decimal strings use canonical
+spellings (no leading zeroes, negative zero, exponent form, whitespace or trailing junk); fractions
+must be exactly `{ n, d }` with canonical digit strings; choice indexes must be canonical and in range.
+Malformed input is `400 INVALID_ANSWER` and does not consume the question.
 
-`server/progress.mjs` → `grade()`. Integers must match `^-?\d{1,7}$`, decimals `^-?\d{1,6}(\.\d{1,2})?$`
-and compare at two places, fractions are `{ n, d }` digit strings compared in reduced form, choices are
-an index string within range. Anything else is `400 INVALID_ANSWER` and does not consume the question.
-The v2 `parseInt`/`parseFloat` path is not reproduced.
+Each displayed question gets one browser-generated UUID `attemptId`. A network retry of that ID returns
+the stored response. A different attempt against an already-advanced question is `409 STALE_QUESTION`.
+The final answer, history row, paper/crown, wallet award, streak bonus and sector jump are one transaction.
 
-### Idempotency and ordering
+New learning-session creation is durably limited to 20/hour per child. Resuming the already-open session
+does not spend that budget. Learning sessions expire logically after two hours and carry a Firestore TTL
+field for later physical cleanup.
 
-- `attemptId` (UUID from the browser, one per question shown) — a retried request returns the stored
-  response and counts once; a different `attemptId` for a question already answered is `409 STALE_QUESTION`.
-- Only one open session per child (`learning/{child}.activeSession`); a session older than two hours is
-  retired on the next start; answering it is `409 SESSION_EXPIRED`.
-- The final answer, the history row, the paper/crown, the coins, the streak bonus and any sector jump
-  are one write set in one transaction.
+## Migrated v2 game features
 
-### Data
+The following are now server-authoritative and available through the v3 child/parent UI:
 
+- Full v2 Grid Shop catalog and inventory.
+- Pets, outfits, rings, backgrounds, effects, sound packs, shout packs, timer skins, titles,
+  name effects, map themes, vehicles and Command Deck cosmetic.
+- Server-priced purchases and server-selected Surprise Box outcomes.
+- Streak Shields (max two), including the v2 one-day continuity bridge.
+- Mystery Egg purchase and server-selected hatch after five successful sessions.
+- Earned Storm Dragon (five consecutive session passes) and Thunder Hawk (10-day streak).
+- Reward Store configured by the parent, with per-child eligibility, optional daily caps,
+  pending child requests, parent approval and rejection/refund.
+- Family Rocket with parent-defined prize/currency/goal/minimum/crew, child fuel contributions,
+  automatic launch when ready, and parent force-launch/scrap/claim controls.
+- Weekly System Scan: 25 Engine questions, ten current-sector + fifteen earlier-sector questions,
+  server shuffled, once per family week, double loot, no paper advancement.
+- Parent manual Grid Coin / Reward Point adjustments with an idempotent audit ledger.
+- Parent-visible Engine/Navigator progress, recent history and server-derived fluency heatmap.
+- Navigator browser read-aloud using `speechSynthesis` when supported.
+- Per-child pace control and family time zone.
+
+All child game spending is based on balances held by the server. Prices, unlock conditions, reward costs,
+rocket state and loot selection are not accepted from the browser.
+
+## Game routes
+
+Child role:
+- `GET /api/game/state`
+- `POST /api/game/shop/buy`
+- `POST /api/game/shop/equip`
+- `POST /api/game/rewards/redeem`
+- `POST /api/game/rocket/fuel`
+
+Parent role:
+- `GET /api/game/parent`
+- `POST /api/game/parent/rewards`
+- `POST /api/game/parent/redemption`
+- `POST /api/game/parent/rocket`
+- `POST /api/game/parent/adjust`
+- `POST /api/game/parent/settings`
+
+Sensitive parent game writes require the same five-minute recent-authentication rule as other sensitive
+parent operations. The browser reauth flow does not auto-submit the original mutation after reauthentication;
+the parent explicitly repeats the action.
+
+## v2 data migration
+
+`server/v2-migration.mjs` maps a reviewed v2 JSON export into the v3 learning/game document model.
+`scripts/import-v2.mjs` is an operator-only importer. It **never connects to the v2 Firebase project**.
+
+Default execution is dry-run and does not load the Firebase SDK:
+
+```sh
+npm run import:v2 -- --file v2-export.json --family FAMILY_UUID
 ```
-families/{familyId}/learning/{childId}                 — engine, nav, wallet {gc, rp, bonuses}, passDays, stats, history[≤60], activeSession
-families/{familyId}/learning/{childId}/sessions/{id}   — questions[] with answers, results[], index, askedAt, status, lastAttempt, expireAt (24 h)
+
+Only an explicit `--apply` writes to the configured v3 project. Existing target progress/config is refused
+unless `--overwrite` is also explicit. Cloud use requires the same exact-project confirmation and operator
+identity controls as other privileged scripts.
+
+Bundle shape:
+
+```json
+{
+  "children": {
+    "OldChildName": {
+      "childId": "V3_CHILD_UUID",
+      "multiplier": 1.0,
+      "progress": { "level": 0, "paper": 1, "nav": {}, "history": [], "wallet": {} }
+    }
+  },
+  "settings": {},
+  "rocket": null
+}
 ```
 
-The browser receives `display`, `answerType`, `seconds`, `paper`, `tier` and `read` per question — never `answer`.
+The mapper converts v2 nested-array question logs into Firestore-safe objects, reconstructs earned currency
+from trusted historical pass rows before applying historical spend, carries recognized inventory/equipment,
+shields/egg/redemptions/System Scan state, maps reward/Rocket child names to v3 child UUIDs, and clears any
+legacy in-flight session. Unknown inventory IDs and inconsistent accounting are reported rather than treated
+as free currency.
 
-## F4 / F11 from the Stage 1 review, done here
+## Stage 1b follow-up closed in this pass
 
-- `expireAt` (a real Firestore `Timestamp`, converted at the store boundary) on `sessions`,
-  `rateLimits`, `pinAttempts`, `operations` (24 h), `audit` (400 days) and learning `sessions` (24 h).
-  TTL policies are created once per collection group with `gcloud` — see `DEPLOY_V3.md` §4b.
-- The child-creation replay fingerprint no longer commits to the PIN; it covers nickname and icon
-  only (the browser mints a new request id whenever any field changes).
+- Login token signature/expiry is verified first without a duplicate revocation backend lookup.
+- Once the signed UID is known, the per-account login limiter runs before the one fresh Auth user lookup.
+- The fresh user record still enforces disabled status, verified/current email, current phone MFA and
+  `tokensValidAfterTime` revocation.
+- The failed-address budget no longer pre-blocks a subsequently valid signed login from the same office/NAT IP.
+  Bad credentials from a saturated address remain rate-limited.
 
-## Not in this slice
+## Verification gates
 
-Shop, pets, outfits, reward store and redemptions, family rocket, weekly System Scan, admin
-adjustments, the map and heatmap views, read-aloud for Navigator, and migration of v2 histories.
-Each is a later slice on the same session/transaction pattern.
+Local deterministic suite must stay green. The GitHub workflow must then independently pass:
+- `unit`
+- real Firebase Auth + Firestore emulator integration
+- `container-build`
+
+The emulator suite includes a real Firestore two-answer race: two distinct attempt IDs target one current
+question and exactly one may commit; the other must receive `STALE_QUESTION`.
+
+## Still required before a real pilot/public launch
+
+These are not unfinished Stage 2 game code:
+- Human Safari/iPhone and Android/Chrome acceptance of the complete child game UI.
+- Enable the documented Firestore TTL policies on the actual v3 project at staging time.
+- Measure/confirm trusted proxy hops on the deployed origin.
+- Production IAM/secrets/monitoring/abuse controls, backup/restore and privacy lifecycle work.
+- Stage 3: payment gateway, subscription lifecycle, entitlement automation, account recovery,
+  export/deletion and commercial admin operations.
+
+The existing v2 application/project remains separate and must not be modified by this migration tooling.
