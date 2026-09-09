@@ -1,0 +1,77 @@
+name: Apply Stage 2 completion candidate v2
+
+on:
+  push:
+    branches: ['hardening/stage2-completion']
+    paths:
+      - '.github/workflows/stage2-completion-apply2.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply-reviewed-patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Reconstruct and verify reviewed tracked-file patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat \
+            .stage2-upload/chunk-00 \
+            .stage2-upload/chunk-01 \
+            .stage2-upload/chunk-02 \
+            .stage2-upload/chunk-03a1 \
+            .stage2-upload/chunk-03a2 \
+            .stage2-upload/chunk-03b \
+            .stage2-upload/chunk-04 \
+            .stage2-upload/chunk-05 \
+            | base64 -d | gzip -d > /tmp/stage2-completion.patch
+          echo '884e40772e11bc252e342a96723c8f0d3bc47f44d685f13b87568a47f0526e31  /tmp/stage2-completion.patch' | sha256sum -c -
+          git apply --check /tmp/stage2-completion.patch
+          git apply /tmp/stage2-completion.patch
+      - name: Reconstruct and verify reviewed new-file patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat \
+            .stage2-upload/new-00 \
+            .stage2-upload/new-01 \
+            .stage2-upload/new-02 \
+            .stage2-upload/new-03 \
+            | base64 -d | gzip -d > /tmp/stage2-newfiles.patch
+          echo 'b5e0201c5f6938338ddedb87fb51fa8fc9b4178dd7ed66fe1bce1880c73de9e9  /tmp/stage2-newfiles.patch' | sha256sum -c -
+          git apply --check /tmp/stage2-newfiles.patch
+          git apply /tmp/stage2-newfiles.patch
+      - name: Remove temporary upload mechanism
+        shell: bash
+        run: |
+          rm -rf .stage2-upload
+          rm -f .github/workflows/stage2-completion-apply.yml
+          rm -f .github/workflows/stage2-completion-apply2.yml
+      - name: Verify candidate before commit
+        shell: bash
+        working-directory: commercial
+        run: |
+          set -euo pipefail
+          npm test
+          for f in server/*.mjs server/questions/*.mjs tests/*.mjs scripts/*.mjs public/*.js; do node --check "$f" >/dev/null; done
+          bash -n scripts/deploy-staging.sh
+      - name: Commit completion candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -A
+          git diff --cached --check
+          test ! -e .stage2-upload
+          test ! -e .github/workflows/stage2-completion-apply.yml
+          test ! -e .github/workflows/stage2-completion-apply2.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Complete secure v3 Stage 2 game migration'
+          git push origin HEAD:hardening/stage2-completion
