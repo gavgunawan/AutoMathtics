@@ -157,7 +157,9 @@ export class Payments {
         if (existing.familyId !== s.familyId || existing.fingerprint !== fingerprint) fail(409, 'IDEMPOTENCY_CONFLICT'); // same id, another plan or family: never the first checkout
         if (existing.status === 'superseded') return { done: { ...existing.result, url: null, superseded: true } }; // never redisplay a superseded hosted session
         if (existing.status !== 'creating') return { done: existing.result };
-        return { familyId: s.familyId, uid: s.uid, customerRef: existing.customerRef }; // an earlier attempt stopped between the intent and the provider: resume with the same key
+        // an earlier attempt stopped between the intent and the provider: resume with the same key, and with whatever it still owed
+        // the provider — the intent records those debts, so a crash or a fault before they were settled cannot skip them (fourth round)
+        return { familyId: s.familyId, uid: s.uid, customerRef: existing.customerRef, endPrevious: existing.endPrevious?.status === 'pending' ? 'pending' : 'done', supersededRef: existing.supersededRef || null };
       }
       const now = this.now(), state = family.subscription ? deriveState(family.subscription, now) : 'none';
       if (!CHECKOUT_STATES.has(state)) fail(409, 'USE_PLAN_CHANGE'); // a paid family changes plan through the 3.4 lifecycle, not a fresh checkout (S3.3/3.4-E)
@@ -170,20 +172,26 @@ export class Payments {
       tx.set(`families/${s.familyId}`, { ...family, billing: { ...(family.billing || {}), [gw.name]: customerRef }, checkoutIntent: { ...(family.checkoutIntent || {}), [gw.name]: checkoutId } });
       if (older && ['creating', 'pending'].includes(older.status)) tx.set(`checkouts/${gw.name}:${live}`, { ...older, status: 'superseded', supersededBy: checkoutId, supersededAt: now });
       // no expireAt: a checkout intent is idempotency and recovery evidence, kept under the financial retention policy (S3.4-G)
-      tx.set(path, { provider: gw.name, checkoutId, familyId: s.familyId, customerRef, plan: plan.id, priceId: gw.priceFor(plan.id), fingerprint, status: 'creating', providerCheckoutRef: null, createdAt: now, completedAt: null, result: null });
-      this.audit(tx, 'billing.checkout', s.uid, s.familyId);
       // a family coming back from past_due / cancelled / expired may still have a subscription winding down at the provider: it is
-      // ended before a new one is opened, so one customer never carries two (Stage 4 review, third round)
-      const endFirst = !!family.subscription && family.subscription.provider === gw.name && family.subscription.plan !== 'trial' && !!family.billing?.[gw.name];
-      return { familyId: s.familyId, uid: s.uid, customerRef, endFirst, superseded: older && ['creating', 'pending'].includes(older.status) ? older.providerCheckoutRef : null };
+      // ended before a new one is opened, so one customer never carries two (third round). What the intent owes the provider — that
+      // ending, the expiry of a superseded session — is written on the intent itself, so a resume after a crash or a provider fault
+      // finds the debt and settles it first (fourth round: the resume used to skip straight to the session).
+      const endPrevious = !!family.subscription && family.subscription.provider === gw.name && family.subscription.plan !== 'trial' && !!family.billing?.[gw.name];
+      const supersededRef = older && ['creating', 'pending'].includes(older.status) ? older.providerCheckoutRef || null : null;
+      tx.set(path, { provider: gw.name, checkoutId, familyId: s.familyId, customerRef, plan: plan.id, priceId: gw.priceFor(plan.id), fingerprint, status: 'creating', providerCheckoutRef: null,
+        endPrevious: { required: endPrevious, status: endPrevious ? 'pending' : 'not_applicable', result: null, at: null }, supersededRef, createdAt: now, completedAt: null, result: null });
+      this.audit(tx, 'billing.checkout', s.uid, s.familyId);
+      return { familyId: s.familyId, uid: s.uid, customerRef, endPrevious: endPrevious ? 'pending' : 'done', supersededRef };
     });
     if (prepared.done) return prepared.done;
-    if (prepared.endFirst && typeof gw.cancelSubscription === 'function') { // a provider fault here is the parent's to retry: no session is opened over a subscription still live
+    if (prepared.endPrevious === 'pending' && typeof gw.cancelSubscription === 'function') {
+      // a provider fault here propagates: the intent stays `creating` with the debt still `pending`, and no session is opened over a
+      // subscription still live; the parent's retry (the same operation id) lands here again
       const ended = await gw.cancelSubscription({ idempotencyKey: `end:${checkoutId}`, customerRef: prepared.customerRef });
-      await this.store.transaction(async (tx) => { const intent = await tx.get(path); if (intent && intent.status === 'creating') tx.set(path, { ...intent, endedPrevious: ended }); });
+      await this.store.transaction(async (tx) => { const intent = await tx.get(path); if (intent && intent.status === 'creating') tx.set(path, { ...intent, endPrevious: { ...(intent.endPrevious || { required: true }), status: 'done', result: ended, at: this.now() }, endedPrevious: ended }); });
     }
-    // a superseded hosted session is expired at the provider (best effort: its completion is refused regardless)
-    if (prepared.superseded && typeof gw.cancelCheckout === 'function') { try { await gw.cancelCheckout(prepared.superseded); } catch { /* recorded by the provider; the inbox refuses a late completion anyway */ } }
+    // a superseded hosted session is expired at the provider (best effort, retried on every resume: its completion is refused regardless)
+    if (prepared.supersededRef && typeof gw.cancelCheckout === 'function') { try { await gw.cancelCheckout(prepared.supersededRef); } catch { /* recorded by the provider; the inbox refuses a late completion anyway */ } }
     const result = await gw.createCheckout({ checkoutId, idempotencyKey: checkoutId, customerRef: prepared.customerRef, plan, familyId: prepared.familyId });
     return this.store.transaction(async (tx) => {
       const intent = await tx.get(path);

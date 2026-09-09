@@ -404,3 +404,11 @@ test('real Auth: lost phone — the factor is removed only after the emailed pas
   const me = await service.me(ctx); assert.equal(me.family.id, fam.id, 'the same family'); assert.equal(me.recovery.status, 'completed');
   const after = (await db.doc(`parents/${p.uid}`).get()).data(); assert.notEqual(after.phoneKey, before.phoneKey, 'the phone key follows the new number'); assert.equal(after.familyId, before.familyId);
 });
+test('a filtered page after a document id (queryAfter) on real Firestore: id order, only the filtered rows, inside and outside a transaction', async () => {
+  const col = `qa-${randomUUID()}`;
+  await store.transaction(async (tx) => { for (let i = 0; i < 7; i++) tx.set(`${col}/d${i}`, { familyId: i % 2 ? 'odd' : 'even', n: i }); });
+  const p1 = await store.queryAfter(col, 'familyId', 'even', null, 2), p2 = await store.queryAfter(col, 'familyId', 'even', p1.at(-1)[0], 2), p3 = await store.queryAfter(col, 'familyId', 'even', p2.at(-1)[0], 2);
+  assert.deepEqual([...p1, ...p2, ...p3].map(([id]) => id), ['d0', 'd2', 'd4', 'd6']); assert.deepEqual(p3, [['d6', { familyId: 'even', n: 6 }]]);
+  assert.deepEqual((await store.transaction((tx) => tx.queryAfter(col, 'familyId', 'odd', 'd1', 5), { readOnly: true })).map(([id]) => id), ['d3', 'd5']);
+  assert.deepEqual(await store.queryAfter(col, 'familyId', 'none', null, 5), []);
+});

@@ -34,7 +34,7 @@ export function stripeAccount(f, { customerId = 'cus_live1' } = {}) {
     'POST /v1/customers': (body) => { state.customer = { id: customerId, metadata: { customerRef: body['metadata[customerRef]'] } }; return state.customer; },
     'POST /v1/checkout/sessions': (body) => ({ id: `cs_${body.client_reference_id.slice(0, 8)}`, url: 'https://checkout.stripe.com/c/pay/x' }),
     'POST /v1/checkout/sessions/': (body, calls) => { state.expired.push(calls.at(-1).path); return { status: 'expired' }; },
-    'GET /v1/subscriptions?customer=': () => ({ data: state.sub ? [state.sub] : [] }),
+    'GET /v1/subscriptions?customer=': () => ({ data: [state.sub, ...(state.extraSubs || [])].filter(Boolean) }), // extraSubs: what the dashboard added behind the server's back
     'GET /v1/subscriptions/': () => state.sub || missing,
     'POST /v1/subscriptions/': (body) => {
       if (!state.sub) return missing;

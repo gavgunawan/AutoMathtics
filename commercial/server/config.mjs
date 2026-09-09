@@ -59,8 +59,10 @@ export function config(env = process.env) {
     for (const [k, v] of Object.entries(prices)) if (!/^price_[A-Za-z0-9]{8,}$/.test(v || '')) throw Error(`Set STRIPE_PRICE_${k.toUpperCase()} to the Stripe price id of the ${k} plan.`);
     stripe = { secretKey: key, webhookSecret: whsec, prices };
   }
+  // the commit this build was deployed from (deploy-staging.sh sets it; /api/health reports it): staging evidence, never a secret
+  const releaseSha = /^[0-9a-f]{40}$/.test(env.RELEASE_SHA || '') ? env.RELEASE_SHA : null;
   const port = Number(env.PORT || 8787);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw Error('Invalid PORT.');
-  return { mode, emulator, projectId, origin, secret, pepper, previousPeppers, proxyHops, port, payments: { provider, webhookSecrets: { fake: webhookSecret }, stripe },
+  return { mode, emulator, projectId, origin, secret, pepper, previousPeppers, proxyHops, port, releaseSha, payments: { provider, webhookSecrets: { fake: webhookSecret }, stripe },
     web: { apiKey: env.FIREBASE_WEB_API_KEY, appId: env.FIREBASE_WEB_APP_ID, projectId, authDomain: `${projectId}.firebaseapp.com` } };
 }

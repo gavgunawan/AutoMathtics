@@ -251,6 +251,14 @@ the peer is Hosting's egress, shared by every visitor, so that budget is twenty 
 recovery forms have the same second wall and a cap per instance. Keep advertising only the
 `web.app` address.
 
+**Which commit is running.** The deploy helper records the commit it deploys from as `RELEASE_SHA` in
+the service's environment and as a `release-sha` label on the revision, refuses to deploy from a dirty or
+commitless checkout, and after the deploy checks that `/api/health` reports that very commit
+(`release`). So `curl https://PROJECT_ID.web.app/api/health` answers "which code is on staging" with a
+commit hash anyone can compare with the release branch — that is the evidence a device test is against
+a given release, not a line in a terminal. The nightly sweep job does not carry it (it runs from the same
+image; `gcloud run jobs describe` shows the image digest).
+
 ```bash
 export TRUSTED_PROXY_HOPS=2
 npm run deploy:staging
