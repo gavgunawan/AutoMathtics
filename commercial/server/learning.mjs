@@ -53,7 +53,7 @@ export class Learning {
       const tz = family.timeZone || DEFAULT_TIME_ZONE; const derived = applyGameDerived(original, this.now(), tz); let prog = derived.progress;
       // A streak shield bridging yesterday may have paid a bonus block; that money enters through the ledger, not by mutation.
       const shieldGc = prog.wallet.gc - original.wallet.gc, shieldRp = prog.wallet.rp - original.wallet.rp;
-      if (shieldGc || shieldRp) prog = post(tx, p.doc, { ...prog, wallet: { ...prog.wallet, gc: original.wallet.gc, rp: original.wallet.rp } }, entry({ id: shieldRowId, type: 'streak.shield', gc: shieldGc, rp: shieldRp, at: this.now() }));
+      if (shieldGc || shieldRp) prog = await post(tx, p.doc, { ...prog, wallet: { ...prog.wallet, gc: original.wallet.gc, rp: original.wallet.rp } }, entry({ id: shieldRowId, type: 'streak.shield', gc: shieldGc, rp: shieldRp, at: this.now() }));
       let run, questions;
       if (requestedMode === 'scan') {
         const state = scanState(prog, this.now(), tz); if (!state.available) fail(409, state.unlocked ? 'SCAN_ALREADY_DONE' : 'SCAN_LOCKED');
@@ -81,7 +81,7 @@ export class Learning {
         // finish() is pure; whatever it awarded (pass, bonus, shield) becomes one ledger row keyed by the session id.
         let final = { ...progress, wallet: { ...progress.wallet, gc: prog.wallet.gc, rp: prog.wallet.rp } };
         if (summary.gcEarned || summary.rpEarned) {
-          final = post(tx, p.doc, final, entry({ id: sess.id, type: sess.mode === 'scan' ? 'learn.scan' : sess.mode === 'boss' ? 'learn.checkpoint' : 'learn.session', gc: summary.gcEarned, rp: summary.rpEarned, ref: sess.id, note: summary.papers, at: now }));
+          final = await post(tx, p.doc, final, entry({ id: sess.id, type: sess.mode === 'scan' ? 'learn.scan' : sess.mode === 'boss' ? 'learn.checkpoint' : 'learn.session', gc: summary.gcEarned, rp: summary.rpEarned, ref: sess.id, note: summary.papers, at: now }));
         }
         summary.wallet = final.wallet;
         next.status = 'done'; next.finishedAt = now; tx.set(p.doc, final); response.done = true; response.summary = summary;

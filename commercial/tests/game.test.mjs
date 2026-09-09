@@ -4,12 +4,15 @@ import { randomUUID } from 'node:crypto';
 import { fixture, rejected, canonical } from './support.mjs';
 import { freshProgress, normalizeProgress } from '../server/progress.mjs';
 import { applyGameDerived, SHOP_ITEMS } from '../server/game.mjs';
+import { bootstrap } from '../server/ledger.mjs';
 
 const progPath = (k) => `families/${k.p.familyId}/learning/${k.child.id}`;
 const sessionPath = (k, id) => `${progPath(k)}/sessions/${id}`;
 async function parentAgain(f) { f.advance(2000); return f.login('parentA'); }
 async function earn(f, k, gc = 1000, rp = 1000) {
-  const p = normalizeProgress(await f.store.get(progPath(k))); p.wallet.gc = gc; p.wallet.rp = rp; await f.store.put(progPath(k), p); return p;
+  // a pre-ledger balance, then its opening row — the primitive refuses to move un-bootstrapped money
+  const p = normalizeProgress(await f.store.get(progPath(k))); p.wallet.gc = gc; p.wallet.rp = rp; p.wallet.ledgerSeq = 0; p.wallet.ledgerLast = null; await f.store.put(progPath(k), p);
+  return f.store.transaction(async (tx) => { const r = await bootstrap(tx, progPath(k), await tx.get(progPath(k)), f.now()); if (r.opened) tx.set(progPath(k), r.prog); return r.prog; });
 }
 async function complete(f, k, started) {
   const raw = await f.store.get(sessionPath(k, started.session.id)); let q = started.question, last;

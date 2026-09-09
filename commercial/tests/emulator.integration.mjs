@@ -178,3 +178,25 @@ test('real SMS MFA token, Firestore seat contention, private rules and expiry', 
   await assert.rejects(service.me(childCtx), rejected('SUBSCRIPTION_INACTIVE'));
   await assert.rejects(learning.start(childCtx, { track: 'engine' }), rejected('SUBSCRIPTION_INACTIVE'));
 });
+test('real Firestore: two families under one verified phone race for the single free trial — exactly one wins', async () => {
+  const { Subscriptions } = await import('../server/subscription.mjs');
+  const billing = new Subscriptions({ foundation: service, store });
+  const pa = await parent(`trial-a-${randomUUID()}@example.test`, '+16505550120');
+  const pb = await parent(`trial-b-${randomUUID()}@example.test`, '+16505550121');
+  const la = await service.authenticate(await service.login(pa.idToken)), lb = await service.authenticate(await service.login(pb.idToken));
+  // Give both parents the same phone key (as two sign-ups with one SIM would have) before their families exist.
+  const keyA = (await db.doc(`parents/${pa.uid}`).get()).data().phoneKey; assert.ok(keyA);
+  await db.doc(`parents/${pb.uid}`).update({ phoneKey: keyA });
+  const fa = await service.createFamily(la, { label: 'Trial race A', adultAttestation: true, consentVersion: 'pilot-v1' });
+  const fb = await service.createFamily(lb, { label: 'Trial race B', adultAttestation: true, consentVersion: 'pilot-v1' });
+  const ctxA = await service.authenticate(fa.token), ctxB = await service.authenticate(fb.token);
+  assert.deepEqual((await db.doc(`phones/${keyA}`).get()).data().families.sort(), [fa.id, fb.id].sort());
+  const race = await Promise.allSettled([billing.startTrial(ctxA, {}), billing.startTrial(ctxB, {})]);
+  assert.equal(race.filter((r) => r.status === 'fulfilled').length, 1, JSON.stringify(race.map((r) => r.status === 'rejected' ? r.reason.code : 'ok')));
+  assert.equal(race.find((r) => r.status === 'rejected').reason.code, 'TRIAL_ALREADY_USED');
+  const ledger = (await db.doc(`phones/${keyA}`).get()).data();
+  const winner = race[0].status === 'fulfilled' ? fa.id : fb.id, loser = winner === fa.id ? fb.id : fa.id;
+  assert.equal(ledger.trialFamilyId, winner);
+  assert.equal((await db.doc(`families/${winner}`).get()).data().subscription.state, 'trial');
+  assert.equal((await db.doc(`families/${loser}`).get()).data().subscription, undefined);
+});

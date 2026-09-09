@@ -5,9 +5,9 @@ for development by the review team on 9 Sep 2026). Order agreed with the team:
 
 | Step | Scope | Status |
 |---|---|---|
-| 3.1 | Commercial ledger hardening — balances reconcilable and derived before money enters | merged (PR #9) |
-| **3.2** | Subscription + entitlement state machine: trial, active, grace, past-due, cancelled, expired; seat plans; one trial per `phoneKey` — see `SUBSCRIPTIONS.md` | **this branch** |
-| 3.3 | Payment gateway abstraction + webhook security, with local/fake payment events (the $0 constraint holds) | next |
+| 3.1 | Commercial ledger hardening — balances reconcilable and derived before money enters | merged (PR #9); hardened per audit (bootstrap, never-overwrite, safe repair) |
+| 3.2 | Subscription + entitlement state machine: trial, active, grace, past-due, cancelled, expired; seat plans; one trial per `phoneKey` — see `SUBSCRIPTIONS.md` | merged (PR #10); hardened per audit (seat reactivation, event fingerprints, retry-safe parent actions, real-Firestore trial race) |
+| 3.3 | Payment gateway abstraction + webhook security, with local/fake payment events (the $0 constraint holds); global provider-event inbox | next |
 | 3.4 | Upgrade / downgrade / cancel / refund lifecycle | |
 | 3.5 | Recovery, export, deletion, commercial admin/support tooling | |
 | Stage 4 | Real provider, staging environment, private pilot | |
@@ -19,7 +19,7 @@ for development by the review team on 9 Sep 2026). Order agreed with the team:
 - **One row per movement**, immutable, under `families/{f}/learning/{c}/ledger/{id}`: `type`, signed
   `gc`/`rp` deltas, `ref`/`note`, `seq`, `prev` (the previous row's id) and `balance` (after).
   Types: `learn.session`, `learn.checkpoint`, `learn.scan`, `streak.shield`, `shop.buy`,
-  `reward.request`, `reward.refund`, `rocket.fuel`, `parent.adjust`, `migrate.opening`, `reconcile.repair`.
+  `reward.request`, `reward.refund`, `rocket.fuel`, `parent.adjust`, `migrate.opening`, `ledger.opening` (the one-time opening row for a wallet that existed before the ledger).
 - **`post()` is the only way a balance changes.** It writes the row and returns the progress document
   with the cached `gc`/`rp`, `ledgerSeq` and `ledgerLast` advanced, inside the caller's transaction,
   after all reads. It refuses to take a balance below zero.

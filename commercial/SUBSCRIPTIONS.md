@@ -30,14 +30,29 @@ trial end, the period end, or the end of grace.
 | family | 4 | placeholder | |
 | big | 6 | placeholder | |
 
-Prices are placeholders until 3.3/Stage 4 attach the real provider. Seats are enforced now: fewer
-seats than active children requires a keep list (`SELECT_CHILDREN_FOR_DOWNGRADE`); the others become
-inactive and cannot enter.
+Prices are placeholders until 3.3/Stage 4 attach the real provider.
+
+## Seats: capacity versus occupancy
+
+A plan gives **capacity** (`seats`). **Occupancy** is `family.activeChildIds`, and every child
+document's `status` agrees with it. An event may carry `seatChildIds` — the children who occupy the
+seats for the cycle: children left off go inactive (progress kept), children on it come back. Without
+it the current occupants stay if they fit; if they don't, the event is refused
+(`SELECT_CHILDREN_FOR_DOWNGRADE`). So a downgrade A/B/C → A/B and a later upgrade with A/B/C brings C
+back with everything intact (audit finding 3.2-A).
+
+Between events a parent may **add** a child to a free seat (`POST /api/billing/seats { childIds }`),
+never remove one (`SEATS_CANNOT_REMOVE`): the set of children served in a paid cycle can grow to the
+capacity but cannot be rotated, which closes "four kids on a one-seat plan, one at a time".
 
 ## Events
 
-`Subscriptions.apply(familyId, { id, type, plan?, periodEnd?, keepChildIds?, provider?, providerRef? }, actor)`.
-Recorded under `families/{f}/billing/{eventId}` before acting; a replayed id returns the stored result.
+`Subscriptions.apply(familyId, { id, type, plan?, periodEnd?, seatChildIds?, provider?, providerRef? }, actor)`.
+Recorded under `families/{f}/billing/{eventId}` with a fingerprint of its content before acting: the
+same id with the same content returns the stored result; the same id with different content is
+`IDEMPOTENCY_CONFLICT` (3.2-B). Parent actions accept a browser `operationId` for the same reason, so
+a retried click after a lost response is the same event. A global provider-event inbox
+(`billingEvents/{provider}:{eventId}`) arrives with the webhooks in 3.3 (3.2-C).
 Operator CLI: `scripts/subscription.mjs`. Verified webhooks arrive in 3.3 and call the same `apply()`.
 
 Parent actions (routes, recent authentication required): `POST /api/billing/trial` — the server decides

@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { MemoryStore, fixture, rejected, canonical } from './support.mjs';
-import { entry, post, derive, reconcile } from '../server/ledger.mjs';
+import { entry, post, derive, reconcile, bootstrap, repair, OPENING_ROW_ID } from '../server/ledger.mjs';
 import { importLearning } from '../server/migrate.mjs';
 import { freshProgress } from '../server/progress.mjs';
 
@@ -32,13 +32,60 @@ test('entry() validates, post() chains rows and advances the cached balance, and
   assert.throws(() => entry({ id: 'a', type: 'shop.buy', gc: 1.5, at }), rejected('LEDGER_ENTRY_INVALID'));
   assert.deepEqual(entry({ id: 'open', type: 'migrate.opening', at }), { id: 'open', type: 'migrate.opening', gc: 0, rp: 0, ref: null, note: null, at });
   let prog = freshProgress();
-  prog = await store.transaction(async (tx) => { const p1 = post(tx, 'x', prog, entry({ id: 'r1', type: 'parent.adjust', gc: 100, rp: 50, at })); const p2 = post(tx, 'x', p1, entry({ id: 'r2', type: 'shop.buy', gc: -30, at })); tx.set('x', p2); return p2; });
+  // one row per transaction: post() reads the row's slot before it writes, and the store contract forbids reads after writes
+  prog = await store.transaction(async (tx) => { const p1 = await post(tx, 'x', prog, entry({ id: 'r1', type: 'parent.adjust', gc: 100, rp: 50, at })); tx.set('x', p1); return p1; });
+  prog = await store.transaction(async (tx) => { const p2 = await post(tx, 'x', prog, entry({ id: 'r2', type: 'shop.buy', gc: -30, at })); tx.set('x', p2); return p2; });
   assert.equal(prog.wallet.gc, 70); assert.equal(prog.wallet.rp, 50); assert.equal(prog.wallet.ledgerSeq, 2); assert.equal(prog.wallet.ledgerLast, 'r2');
   const rows = await store.list('x/ledger');
   assert.deepEqual(rows.map((r) => [r.seq, r.prev, r.balance.gc]).sort((a, b) => a[0] - b[0]), [[1, null, 100], [2, 'r1', 70]]);
   await assert.rejects(store.transaction(async (tx) => post(tx, 'x', prog, entry({ id: 'r3', type: 'shop.buy', gc: -71, at }))), rejected('INSUFFICIENT_GRID_COINS'));
   await assert.rejects(store.transaction(async (tx) => post(tx, 'x', prog, entry({ id: 'r3', type: 'reward.request', rp: -51, at }))), rejected('INSUFFICIENT_REWARD_POINTS'));
   assert.equal((await store.list('x/ledger')).length, 2); // the refused rows rolled back
+});
+test('3.1-C: a ledger row is never overwritten — same id and content is a replay, same id and different content is a conflict', async () => {
+  const store = new MemoryStore(); const at = 1_700_000_000_000;
+  let prog = freshProgress();
+  prog = await store.transaction(async (tx) => { const p = await post(tx, 'x', prog, entry({ id: 'op1', type: 'parent.adjust', gc: 100, at })); tx.set('x', p); return p; });
+  const replay = await store.transaction(async (tx) => post(tx, 'x', await tx.get('x'), entry({ id: 'op1', type: 'parent.adjust', gc: 100, at })));
+  assert.equal(replay.wallet.gc, 100); assert.equal(replay.wallet.ledgerSeq, 1); // nothing moved twice
+  await assert.rejects(store.transaction(async (tx) => post(tx, 'x', await tx.get('x'), entry({ id: 'op1', type: 'parent.adjust', gc: 999, at }))), rejected('LEDGER_CONFLICT'));
+  await assert.rejects(store.transaction(async (tx) => post(tx, 'x', await tx.get('x'), entry({ id: 'op1', type: 'shop.buy', gc: -100, at }))), rejected('LEDGER_CONFLICT'));
+  const rows = await store.list('x/ledger'); assert.equal(rows.length, 1); assert.equal(rows[0].gc, 100); // the original row survived untouched
+});
+test('3.1-A: a non-zero wallet with no rows cannot move money until it gets exactly one opening row; bootstrap is idempotent', async () => {
+  const store = new MemoryStore(); const at = 1_700_000_000_000;
+  const preLedger = { ...freshProgress(), wallet: { ...freshProgress().wallet, gc: 500, rp: 300 } }; // written before Stage 3.1 existed
+  await store.put('x', preLedger);
+  await assert.rejects(store.transaction(async (tx) => post(tx, 'x', await tx.get('x'), entry({ id: 'buy', type: 'shop.buy', gc: -100, at }))), rejected('LEDGER_NOT_BOOTSTRAPPED'));
+  assert.equal((await store.list('x/ledger')).length, 0);
+  const first = await store.transaction(async (tx) => { const r = await bootstrap(tx, 'x', await tx.get('x'), at); if (r.opened) tx.set('x', r.prog); return r; });
+  assert.equal(first.opened, true); assert.equal(first.prog.wallet.gc, 500); assert.equal(first.prog.wallet.ledgerSeq, 1); assert.equal(first.prog.wallet.ledgerLast, OPENING_ROW_ID);
+  const second = await store.transaction(async (tx) => bootstrap(tx, 'x', await tx.get('x'), at + 1)); assert.equal(second.opened, false);
+  const rows = await store.list('x/ledger'); assert.equal(rows.length, 1); assert.equal(rows[0].type, 'ledger.opening'); assert.equal(rows[0].gc, 500); assert.equal(rows[0].rp, 300);
+  assert.ok(reconcile(rows, (await store.get('x')).wallet).match);
+  const after = await store.transaction(async (tx) => { const p = await post(tx, 'x', await tx.get('x'), entry({ id: 'buy', type: 'shop.buy', gc: -100, at })); tx.set('x', p); return p; });
+  assert.equal(after.wallet.gc, 400); assert.ok(reconcile(await store.list('x/ledger'), after.wallet).match);
+  const fresh = await store.transaction(async (tx) => bootstrap(tx, 'y', freshProgress(), at)); assert.equal(fresh.opened, false); // nothing to carry, nothing written
+});
+test('3.1-B: repair fixes a drifted cache from a valid ledger inside one transaction, and refuses a damaged ledger', async () => {
+  const store = new MemoryStore(); const at = 1_700_000_000_000;
+  let prog = freshProgress();
+  prog = await store.transaction(async (tx) => { const p = await post(tx, 'x', prog, entry({ id: 'a', type: 'parent.adjust', gc: 100, at })); tx.set('x', p); return p; });
+  prog = await store.transaction(async (tx) => { const p = await post(tx, 'x', prog, entry({ id: 'b', type: 'shop.buy', gc: -30, at })); tx.set('x', p); return p; });
+  assert.deepEqual((await store.transaction(async (tx) => repair(tx, 'x'))).repaired, false);
+  await store.put('x', { ...prog, wallet: { ...prog.wallet, gc: 999 } }); // the cache drifts
+  const fixed = await store.transaction(async (tx) => repair(tx, 'x'));
+  assert.equal(fixed.repaired, true); assert.equal((await store.get('x')).wallet.gc, 70);
+  // a stale external derivation must not win: a legitimate post lands, then repair runs from live state
+  await store.transaction(async (tx) => { const p = await post(tx, 'x', await tx.get('x'), entry({ id: 'c', type: 'parent.adjust', gc: 5, at })); tx.set('x', p); });
+  await store.put('x', { ...(await store.get('x')), wallet: { ...(await store.get('x')).wallet, gc: 1 } });
+  assert.equal((await store.transaction(async (tx) => repair(tx, 'x'))).derived.gc, 75); assert.equal((await store.get('x')).wallet.gc, 75);
+  // damage the chain: repair stops, nothing is written
+  const rowB = await store.get('x/ledger/b'); await store.put('x/ledger/b', { ...rowB, prev: 'zzz' });
+  await store.put('x', { ...(await store.get('x')), wallet: { ...(await store.get('x')).wallet, gc: 1 } });
+  await assert.rejects(store.transaction(async (tx) => repair(tx, 'x')), rejected('LEDGER_DAMAGED'));
+  assert.equal((await store.get('x')).wallet.gc, 1);
+  await assert.rejects(store.transaction(async (tx) => repair(tx, 'nope')), rejected('CHILD_NOT_FOUND'));
 });
 test('derive() and reconcile() catch gaps, chain breaks, dishonest running balances and a drifted cache', () => {
   const row = (seq, id, prev, gc, bal) => ({ id, seq, prev, gc, rp: 0, balance: { gc: bal, rp: 0 } });
