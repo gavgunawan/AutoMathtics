@@ -64,6 +64,7 @@ export const smsLadder = beforeSmsSent({ region: 'asia-southeast1', serviceAccou
     console.warn(JSON.stringify({ smsLadder: 'allowed-on-error', reason: reasonOf(err), ms: Date.now() - started }));
     return;
   }
+  if (verdict.allowed) console.info(JSON.stringify({ smsLadder: 'allowed', rung: verdict.rung, smsType: event.smsType || null, ms: Date.now() - started })); // the request log alone says nothing about what was asked
   if (!verdict.allowed) {
     console.info(JSON.stringify({ smsLadder: 'refused', rung: verdict.rung, waitSeconds: Math.ceil(verdict.waitMs / 1000), smsType: event.smsType || null }));
     throw new HttpsError('resource-exhausted', `SMS_WAIT:${Math.ceil(verdict.waitMs / 1000)}`); // no " : " in this text: the browser SDK splits the provider's message on it

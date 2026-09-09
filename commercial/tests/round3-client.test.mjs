@@ -26,3 +26,15 @@ test('a kids\' device whose child session was refused goes back to the launch pa
   assert.ok(h.root.textContent.includes('Who is on a mission'), h.root.textContent.slice(0, 300)); assert.ok(h.message.textContent.length > 0, 'the child is told why');
   assert.ok(h.nodes('BUTTON').some((n) => n.className === 'player-card'), 'the explorer can be chosen again');
 });
+test('the sign-in provider\'s refusal reaches the parent in words, with its code: an invalid number, a paused device, an unknown refusal with the provider\'s own text', async (t) => {
+  const h = await uiFixture(t, { signedIn: false });
+  const fail = (code, message) => Object.assign(new Error(message), { code });
+  let next = fail('auth/invalid-phone-number', 'Firebase: Error (auth/invalid-phone-number).');
+  h.setAuth('parentA', { signIn: async () => ({ stage: 'enroll' }), sendCode: async () => { throw next; } });
+  await h.submitLogin(); assert.ok(h.root.textContent.includes('Protect the command deck'), h.root.textContent.slice(0, 200));
+  h.nodes('INPUT')[0].value = '0812'; await h.click('Send verification code'); assert.ok(h.message.textContent.includes('international form'), h.message.textContent);
+  next = fail('auth/too-many-requests', 'Firebase: Error (auth/too-many-requests).'); await h.click('Send verification code'); assert.ok(h.message.textContent.includes('paused requests'), h.message.textContent);
+  next = fail('auth/internal-error', 'Firebase: ((HTTP Cloud Function returned an error. Code: 429, Message: SMS quota exceeded)) (auth/internal-error).'); await h.click('Send verification code');
+  assert.ok(h.message.textContent.includes('auth/internal-error') && h.message.textContent.includes('SMS quota exceeded'), h.message.textContent);
+  assert.ok(!h.message.textContent.includes('Firebase:'), 'the provider\'s prefix is dropped');
+});

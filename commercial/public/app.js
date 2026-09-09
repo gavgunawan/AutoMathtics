@@ -24,6 +24,30 @@ const messages = {
   EGG_ALREADY_WARMING: 'Your Mystery Egg is already warming.', REWARD_DAILY_LIMIT: 'That reward has reached its daily limit.',
   SCAN_ALREADY_DONE: 'System Scan is already complete this week.', SCAN_LOCKED: 'System Scan unlocks in Sector B after the first tier.',
 };
+// The sign-in provider's own refusals: in the parent's words where the cause is known, otherwise the provider's code and text,
+// so that a failure can be reported and matched against the provider's own log (the one generic sentence used to hide everything).
+const PROVIDER = {
+  'auth/invalid-phone-number': 'That mobile number is not valid. Use the international form, for example +62 812 3456 7890.',
+  'auth/missing-phone-number': 'Enter the mobile number first.',
+  'auth/too-many-requests': 'The sign-in provider has paused requests from this device or number for a while. Wait, then try again.',
+  'auth/quota-exceeded': 'The SMS limit for this app has been reached for today. Tell the operator.',
+  'auth/captcha-check-failed': 'The \u201cI\u2019m not a robot\u201d check did not pass. Tick it, then send again.',
+  'auth/invalid-app-credential': 'The \u201cI\u2019m not a robot\u201d check expired. Tick it again, then send.',
+  'auth/operation-not-allowed': 'SMS verification is switched off for this app. Tell the operator.',
+  'auth/unauthorized-domain': 'This address is not allowed to sign in. Use the app\u2019s own address.',
+  'auth/requires-recent-login': 'Sign in again, then repeat this step.',
+  'auth/user-disabled': 'This account is disabled. Contact support.',
+  'auth/invalid-credential': 'That email or password did not match.', 'auth/invalid-login-credentials': 'That email or password did not match.', 'auth/wrong-password': 'That email or password did not match.', 'auth/user-not-found': 'That email or password did not match.',
+  'auth/email-already-in-use': 'An account with this email already exists. Sign in instead.', 'auth/weak-password': 'Choose a longer password (at least 12 characters).', 'auth/invalid-email': 'That email address is not valid.',
+  'auth/network-request-failed': 'No connection to the sign-in provider. Check the network and try again.',
+  'auth/code-expired': 'That code has expired. Send a new one.', 'auth/invalid-verification-code': 'That code did not match.',
+  'auth/second-factor-already-in-use': 'That mobile number is already enrolled on this account.', 'auth/multi-factor-info-not-found': 'That mobile factor is no longer on the account. Sign in again.',
+};
+function providerMessage(error) {
+  if (PROVIDER[error.code]) return PROVIDER[error.code];
+  const text = String(error.message || '').replace(/^Firebase:\s*/, '').replace(/\s*\(auth\/[a-z-]+\)\.?$/, '').trim();
+  return `The sign-in provider refused this step (${error.code})${text ? `: ${text.slice(0, 220)}` : ''}. Tell the operator what it says.`;
+}
 // Text-only DOM construction: user nicknames and family labels are never HTML.
 function el(tag, text, className) {
   const node = document.createElement(tag);
@@ -51,7 +75,7 @@ async function run(fn) {
   working = true; root.setAttribute('aria-busy', 'true');
   try { note(''); await fn(); }
   catch (error) {
-    note(messages[error.code] || (error.code?.startsWith('auth/') ? 'The account check failed. Check your details or try again later.' : error.message || 'Please try again.'));
+    note(messages[error.code] || (error.code?.startsWith('auth/') ? providerMessage(error) : error.message || 'Please try again.'));
   } finally {
     working = false; root.removeAttribute('aria-busy');
     if (sessionRefreshPending) {
