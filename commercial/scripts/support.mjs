@@ -17,6 +17,7 @@ import { FirestoreStore } from '../server/firebase.mjs';
 import { Foundation } from '../server/service.mjs';
 import { Subscriptions } from '../server/subscription.mjs';
 import { Payments, FakeGateway } from '../server/payments.mjs';
+import { StripeGateway } from '../server/gateways/stripe.mjs';
 import { Support } from '../server/support.mjs';
 import { pinHasher } from '../server/security.mjs';
 
@@ -35,8 +36,9 @@ if (emulator) {
 const [command, ...rest] = process.argv.slice(2);
 const actor = emulator ? 'emulator-operator' : process.env.OPERATOR_ID;
 if (!actor) throw Error('Set OPERATOR_ID to your auditable operator identity.');
-const secret = process.env.SESSION_SECRET, pepper = process.env.PIN_PEPPER, webhookSecret = process.env.WEBHOOK_SECRET_FAKE;
-if (!/^[a-f0-9]{64,}$/.test(secret || '') || !/^[a-f0-9]{64,}$/.test(pepper || '') || !/^[a-f0-9]{64,}$/.test(webhookSecret || '')) throw Error('SESSION_SECRET, PIN_PEPPER and WEBHOOK_SECRET_FAKE are required (the tool constructs the same services the server does).');
+const secret = process.env.SESSION_SECRET, pepper = process.env.PIN_PEPPER, webhookSecret = process.env.WEBHOOK_SECRET_FAKE, stripeKey = process.env.STRIPE_SECRET_KEY;
+if (!/^[a-f0-9]{64,}$/.test(secret || '') || !/^[a-f0-9]{64,}$/.test(pepper || '')) throw Error('SESSION_SECRET and PIN_PEPPER are required (the tool constructs the same services the server does).');
+if (!/^[a-f0-9]{64,}$/.test(webhookSecret || '') && !stripeKey) throw Error('Set WEBHOOK_SECRET_FAKE (fake provider) or the STRIPE_* variables (Stripe), as the server has them.');
 const { initializeApp, applicationDefault } = await import('firebase-admin/app');
 const { getAuth } = await import('firebase-admin/auth');
 const { getFirestore, Timestamp } = await import('firebase-admin/firestore');
@@ -45,7 +47,10 @@ const app = initializeApp({ projectId, ...(emulator ? {} : { credential: applica
 const store = new FirestoreStore(getFirestore(app), { timestamp: (ms) => Timestamp.fromMillis(ms) });
 const service = new Foundation({ store, identity: new FirebaseIdentity(getAuth(app)), hasher: pinHasher(pepper), secret });
 const billing = new Subscriptions({ foundation: service, store });
-const payments = new Payments({ foundation: service, store, billing, provider: 'fake', gateways: { fake: new FakeGateway({ secret: webhookSecret }) } });
+const gateways = {};
+if (/^[a-f0-9]{64,}$/.test(webhookSecret || '')) gateways.fake = new FakeGateway({ secret: webhookSecret });
+if (stripeKey) gateways.stripe = new StripeGateway({ secretKey: stripeKey, webhookSecret: process.env.WEBHOOK_SECRET_STRIPE, prices: { starter: process.env.STRIPE_PRICE_STARTER, family: process.env.STRIPE_PRICE_FAMILY, big: process.env.STRIPE_PRICE_BIG }, origin: process.env.APP_ORIGIN || 'https://localhost' });
+const payments = new Payments({ foundation: service, store, billing, provider: process.env.PAYMENT_PROVIDER || (gateways.fake ? 'fake' : 'stripe'), gateways });
 const support = new Support({ foundation: service, store, billing, payments });
 const out = (v) => console.log(JSON.stringify(v, null, 2));
 switch (command) {

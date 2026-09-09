@@ -569,3 +569,11 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && model && !working && !transientView) run(refresh);
 });
 await run(refresh);
+// Back from a hosted checkout (Stage 4.1). The redirect proves nothing: the provider's signed webhook
+// is what changes the plan, so tell the parent what to expect and look again shortly.
+const returned = typeof location === 'object' && location?.search ? new URLSearchParams(location.search) : null;
+if (returned?.get('checkout')) {
+  if (typeof history === 'object' && history?.replaceState) history.replaceState(null, '', location.pathname);
+  if (returned.get('result') === 'success') { note('Payment received. Your plan updates as soon as the payment provider confirms it; this page checks again in a moment.'); setTimeout(() => { if (!working) run(refresh); }, 4000); }
+  else note('Checkout cancelled. Nothing was charged.');
+}

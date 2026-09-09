@@ -39,14 +39,28 @@ export function config(env = process.env) {
   // Stage 3.3: the payment provider. Only the zero-cost fake gateway exists until Stage 4; outside
   // the emulator it must be acknowledged explicitly so nobody mistakes a pilot for a shop.
   const provider = env.PAYMENT_PROVIDER || (emulator ? 'fake' : '');
-  if (provider !== 'fake') throw Error('PAYMENT_PROVIDER must be "fake" until Stage 4 attaches a real provider.');
-  if (!emulator && env.FAKE_PAYMENTS_ACK !== 'no-real-money') throw Error('The fake payment provider outside the emulator requires FAKE_PAYMENTS_ACK=no-real-money.');
-  const webhookSecret = env.WEBHOOK_SECRET_FAKE;
-  if (!/^[a-f0-9]{64,}$/.test(webhookSecret || '') || webhookSecret === secret || webhookSecret === pepper || previousPeppers.includes(webhookSecret)) {
-    throw Error('Set WEBHOOK_SECRET_FAKE: a random hex secret of at least 32 bytes, distinct from every other secret.');
+  if (!['fake', 'stripe'].includes(provider)) throw Error('PAYMENT_PROVIDER must be "fake" or "stripe".');
+  let webhookSecret = null, stripe = null;
+  if (provider === 'fake') {
+    if (!emulator && env.FAKE_PAYMENTS_ACK !== 'no-real-money') throw Error('The fake payment provider outside the emulator requires FAKE_PAYMENTS_ACK=no-real-money.');
+    webhookSecret = env.WEBHOOK_SECRET_FAKE;
+    if (!/^[a-f0-9]{64,}$/.test(webhookSecret || '') || webhookSecret === secret || webhookSecret === pepper || previousPeppers.includes(webhookSecret)) {
+      throw Error('Set WEBHOOK_SECRET_FAKE: a random hex secret of at least 32 bytes, distinct from every other secret.');
+    }
+  } else {
+    // Stage 4.1: Stripe. Test-mode keys (sk_test_) are the zero-cost path for the emulator and staging;
+    // production requires a live key and refuses a test one, and a live key is refused anywhere else.
+    const key = env.STRIPE_SECRET_KEY || '', whsec = env.WEBHOOK_SECRET_STRIPE || '';
+    if (!/^sk_(test|live)_[A-Za-z0-9]{16,}$/.test(key)) throw Error('Set STRIPE_SECRET_KEY (sk_test_… for the emulator and staging, sk_live_… for production).');
+    if (mode === 'production' && !key.startsWith('sk_live_')) throw Error('Production requires a live Stripe key.');
+    if (mode !== 'production' && key.startsWith('sk_live_')) throw Error('A live Stripe key is only for production.');
+    if (!/^whsec_[A-Za-z0-9]{16,}$/.test(whsec)) throw Error('Set WEBHOOK_SECRET_STRIPE to the endpoint signing secret (whsec_…).');
+    const prices = { starter: env.STRIPE_PRICE_STARTER, family: env.STRIPE_PRICE_FAMILY, big: env.STRIPE_PRICE_BIG };
+    for (const [k, v] of Object.entries(prices)) if (!/^price_[A-Za-z0-9]{8,}$/.test(v || '')) throw Error(`Set STRIPE_PRICE_${k.toUpperCase()} to the Stripe price id of the ${k} plan.`);
+    stripe = { secretKey: key, webhookSecret: whsec, prices };
   }
   const port = Number(env.PORT || 8787);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw Error('Invalid PORT.');
-  return { mode, emulator, projectId, origin, secret, pepper, previousPeppers, proxyHops, port, payments: { provider, webhookSecrets: { fake: webhookSecret } },
+  return { mode, emulator, projectId, origin, secret, pepper, previousPeppers, proxyHops, port, payments: { provider, webhookSecrets: { fake: webhookSecret }, stripe },
     web: { apiKey: env.FIREBASE_WEB_API_KEY, appId: env.FIREBASE_WEB_APP_ID, projectId, authDomain: `${projectId}.firebaseapp.com` } };
 }

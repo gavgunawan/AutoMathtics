@@ -111,11 +111,32 @@ for SECRET in am-v3-session am-v3-pin-pepper am-v3-webhook-fake; do
 done
 ```
 
+**Stage 4.1 — Stripe instead of the fake provider** (only when the owner has a Stripe account;
+test mode has no fees, and `config.mjs` refuses a live key anywhere but production):
+
+```bash
+# from the Stripe dashboard (test view): the secret key, then the endpoint's signing secret
+printf '%s' 'sk_test_...' | gcloud secrets create am-v3-stripe-key --data-file=- --project "$PROJECT_ID"
+printf '%s' 'whsec_...'   | gcloud secrets create am-v3-webhook-stripe --data-file=- --project "$PROJECT_ID"
+for SECRET in am-v3-stripe-key am-v3-webhook-stripe; do
+  gcloud secrets add-iam-policy-binding "$SECRET" --project "$PROJECT_ID" \
+    --member="serviceAccount:$RUNTIME_SA" --role=roles/secretmanager.secretAccessor
+done
+```
+
+Register the endpoint `https://<service-url>/api/webhooks/stripe` in Stripe for the events
+`checkout.session.completed`, `invoice.paid`, `invoice.payment_failed`,
+`customer.subscription.deleted`, `charge.refunded`; create the three recurring prices and deploy
+with `PAYMENT_PROVIDER=stripe STRIPE_PRICE_STARTER=price_… STRIPE_PRICE_FAMILY=price_…
+STRIPE_PRICE_BIG=price_…` in front of `scripts/deploy-staging.sh`. Locally, `stripe listen
+--forward-to 127.0.0.1:8787/api/webhooks/stripe` prints the `whsec_` for `WEBHOOK_SECRET_STRIPE` and
+forwards real test-mode events to the emulator-backed server (`PAYMENTS.md` → Stripe).
+
 Run creation commands once. If a resource already exists, inspect and reuse it;
 do NOT generate replacement PIN peppers, overwrite secrets or delete resources to
 make a command succeed. Deployment uses secret version `1`. Rotation requires an
 explicit migration/recovery plan. Secret values are piped directly to Secret Manager.
-The runtime account can access only the three individually granted secrets.
+The runtime account can access only the individually granted secrets.
 
 ### 4b. Firestore TTL policies (once per project)
 
