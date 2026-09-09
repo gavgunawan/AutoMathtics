@@ -107,7 +107,7 @@ export function transition(sub, event, now) {
     }
     case 'refund': { // 3.4: money went back through the provider. A partial refund is a record; a full one ends access now. Never a wallet.
       if (state === 'none') fail(409, 'INVALID_TRANSITION');
-      if (!Number.isSafeInteger(event.amountCents) || event.amountCents < 0 || (event.full !== undefined && typeof event.full !== 'boolean')) fail(400, 'INVALID_REQUEST');
+      if (!Number.isSafeInteger(event.amountCents) || event.amountCents < 1 || (event.full !== undefined && typeof event.full !== 'boolean')) fail(400, 'INVALID_REQUEST'); // a zero-cent 'full' refund cannot cancel anyone, even by operator mistake
       const refunds = [...(sub.refunds || []), { amountCents: event.amountCents, full: event.full === true, providerRef: event.providerRef || null, at: now }];
       return { ...sub, refunds, ...(event.full === true ? { state: 'cancelled', endedAt: now, scheduled: null } : {}), updatedAt: now, version };
     }

@@ -23,6 +23,9 @@ export const SIGNATURE_TOLERANCE_MS = 5 * MINUTE;
 export const WEBHOOK_BODY_LIMIT = 65_536;
 export const SIGNATURE_HEADER = 'x-webhook-signature';
 export const CHECKOUT_TTL_MS = 30 * DAY;
+export const INTENT_INFLIGHT_MS = 2 * MINUTE; // an upgrade's provider call is presumed abandoned after this
+// Outcomes a later server-side action can resolve (S3.4-D): kept on the customer mapping and reprocessed by the server.
+export const ACTIONABLE = new Set(['SELECT_CHILDREN_FOR_DOWNGRADE', 'PLAN_CHANGE_NOT_AUTHORIZED', 'CHECKOUT_REQUIRED']);
 export const PROVIDERS = Object.freeze(['fake']);
 
 // Provider event types the machine understands, and the internal event each becomes. Anything
@@ -161,68 +164,126 @@ export class Payments {
     });
   }
   /**
-   * Parent action (3.4): change plan. Up: capacity now, and the provider is asked for the prorated
-   * difference (fake: computed, nothing charged). Down: scheduled for the period end with the
-   * parent's seat choice — nobody loses a seat mid-cycle (3.2-A) — and applied by the renewal
-   * event on that plan. Asking for the current plan clears a pending schedule. A trial becomes
-   * paid through a checkout, never a plan change. Idempotent by operationId.
+   * Parent action (3.4): change plan, through a durable change intent
+   * billingChangeIntents/{provider}:{operationId} (review S3.4, the S3.3-A pattern generalised):
+   *   intent { family, subscription version, from, to, seat choice, kind, fingerprint, status }
+   *   → upgrade: the provider is asked for the prorated difference with the operation id as its
+   *     idempotency key, one such call in flight per family (CHANGE_IN_PROGRESS); then, only if the
+   *     subscription version is unchanged, plan.change commits and the intent is `applied` —
+   *     otherwise the intent is `stale` and the parent is told the subscription moved
+   *     (SUBSCRIPTION_CHANGED). A crash between intent and finalisation resumes with the same key.
+   *   → downgrade / clear: scheduled (plan.schedule) and the intent applied in one transaction.
+   * Same operation id + same fingerprint (plan and seat choice) → replay; different → conflict (S3.4-A).
+   * Up: only while `active` — in grace the renewal comes first (RENEWAL_REQUIRED). A seat list on an
+   * upgrade may add children but never omit a seated one (SEATS_CANNOT_REMOVE, S3.4-B). Down: at the
+   * period end with the parent's seat choice — nobody loses a seat mid-cycle. A trial becomes paid
+   * through a checkout, never a plan change. Afterwards, provider events that were waiting on this
+   * choice are reprocessed by the server itself (S3.4-D).
    */
   async changePlan(ctx, body) {
     object(body, ['plan', 'seatChildIds', 'operationId']);
     const plan = typeof body.plan === 'string' ? PLANS[body.plan] : null;
     if (!plan || !plan.purchasable) fail(400, 'INVALID_PLAN');
     if (body.seatChildIds !== undefined) { if (!Array.isArray(body.seatChildIds)) fail(400, 'INVALID_SEAT_SELECTION'); for (const id of body.seatChildIds) uuid(id); }
-    const eventId = this.billing.eventId(body), gw = this.gateway(this.provider);
+    const operationId = this.billing.eventId(body), gw = this.gateway(this.provider), path = `billingChangeIntents/${gw.name}:${operationId}`;
+    const seatIds = body.seatChildIds ? [...new Set(body.seatChildIds)] : null; // the parent's order is the seating order; the fingerprint is order-free
+    const fingerprint = sha256(JSON.stringify({ action: 'plan', provider: gw.name, plan: plan.id, seatChildIds: seatIds ? [...seatIds].sort() : null }));
     const prepared = await this.store.transaction(async (tx) => {
-      const { s, family } = await this.billing.parent(tx, ctx, true);
-      const seen = await tx.get(`families/${s.familyId}/billing/${eventId}`);
-      if (seen) { // the same click again: the stored result, whatever the state is now
-        if (seen.plan !== plan.id || !['plan.change', 'plan.schedule'].includes(seen.type)) fail(409, 'IDEMPOTENCY_CONFLICT');
-        return { replay: { ...seen.result, kind: seen.type === 'plan.change' ? 'upgrade' : (seen.result.entitlement.scheduled ? 'downgrade' : 'clear'), proration: seen.proration || null } };
+      const { s, family } = await this.billing.parent(tx, ctx, true), now = this.now();
+      const intent = await tx.get(path);
+      if (intent) {
+        if (intent.familyId !== s.familyId || intent.fingerprint !== fingerprint) fail(409, 'IDEMPOTENCY_CONFLICT'); // S3.4-A: the seat choice is part of the request
+        if (intent.status === 'applied') return { done: intent.result, customerRef: intent.customerRef };
+        if (intent.status === 'stale') fail(409, 'SUBSCRIPTION_CHANGED');
+        return { intent }; // creating: an earlier attempt stopped before finalising — resume with the same key
       }
       const sub = family.subscription; if (!sub) fail(409, 'NO_SUBSCRIPTION');
-      const state = deriveState(sub, this.now());
+      const state = deriveState(sub, now);
       if (state === 'trial') fail(409, 'CHECKOUT_REQUIRED');
       if (!['active', 'grace'].includes(state)) fail(409, 'INVALID_TRANSITION');
       const kind = plan.id === sub.plan ? 'clear' : plan.seats > sub.seats ? 'upgrade' : 'downgrade';
-      if (kind === 'downgrade') assignSeats(family, plan.seats, body.seatChildIds); // the choice must be complete now, although it applies at renewal
-      return { sub, kind, customerRef: family.billing?.[gw.name] || null };
+      const record = { provider: gw.name, operationId, familyId: s.familyId, uid: s.uid, customerRef: family.billing?.[gw.name] || null, subscriptionVersion: sub.version, fromPlan: sub.plan, toPlan: plan.id,
+        seatChildIds: seatIds, kind, fingerprint, periodStart: sub.lastPaymentAt || sub.startedAt || now, periodEnd: sub.periodEnd || null, status: 'creating', proration: null, result: null, createdAt: now, expireAt: now + CHECKOUT_TTL_MS };
+      if (kind === 'downgrade') assignSeats(family, plan.seats, seatIds ?? undefined); // the choice must be complete now, although it applies at renewal
+      if (kind !== 'upgrade') { // no provider involved: schedule (or clear) and record the intent in this one transaction
+        const event = { id: operationId, type: 'plan.schedule', plan: plan.id, ...(seatIds ? { seatChildIds: seatIds } : {}) };
+        const result = { ...(await this.billing.commit(tx, s.familyId, family, event, s.uid, now)), kind, proration: null };
+        tx.set(path, { ...record, status: 'applied', result });
+        return { done: result, customerRef: record.customerRef };
+      }
+      if (state !== 'active') fail(409, 'RENEWAL_REQUIRED'); // in grace the renewal comes first; the larger plan can be scheduled into it, not granted for free
+      if (seatIds && (family.activeChildIds || []).some((id) => !seatIds.includes(id))) fail(409, 'SEATS_CANNOT_REMOVE'); // S3.4-B: an upgrade may add, never drop a seated child
+      if (seatIds) assignSeats(family, plan.seats, seatIds); // members and capacity checked now
+      const inflight = family.billingIntent;
+      if (inflight && inflight.operationId !== operationId && inflight.at > now - INTENT_INFLIGHT_MS) fail(409, 'CHANGE_IN_PROGRESS'); // one provider call in flight per family
+      tx.set(`families/${s.familyId}`, { ...family, billingIntent: { operationId, at: now } });
+      tx.set(path, record);
+      return { intent: record };
     });
-    if (prepared.replay) return prepared.replay;
-    const now = this.now();
-    const proration = prepared.kind === 'upgrade'
-      ? await gw.changePlan({ customerRef: prepared.customerRef, from: prepared.sub.plan, to: plan.id, periodStart: prepared.sub.lastPaymentAt || prepared.sub.startedAt, periodEnd: prepared.sub.periodEnd, now })
-      : null;
-    return this.store.transaction(async (tx) => {
+    if (prepared.done) { if (prepared.customerRef) await this.reprocess(gw.name, prepared.customerRef); return prepared.done; }
+    const intent = prepared.intent;
+    const proration = await gw.changePlan({ idempotencyKey: operationId, customerRef: intent.customerRef, from: intent.fromPlan, to: intent.toPlan, periodStart: intent.periodStart, periodEnd: intent.periodEnd, now: this.now() });
+    const finished = await this.store.transaction(async (tx) => {
       const { s, family } = await this.billing.parent(tx, ctx, true);
-      const seats = body.seatChildIds ? { seatChildIds: body.seatChildIds } : {};
-      const event = prepared.kind === 'upgrade'
-        ? { id: eventId, type: 'plan.change', plan: plan.id, provider: gw.name, providerRef: prepared.customerRef, proration, ...seats }
-        : { id: eventId, type: 'plan.schedule', plan: plan.id, ...seats }; // the current plan clears; a smaller one schedules
-      const result = await this.billing.commit(tx, s.familyId, family, event, s.uid, this.now());
-      return { ...result, kind: prepared.kind, proration };
+      const current = await tx.get(path);
+      if (!current || current.status === 'applied') return { result: current?.result ?? null };
+      if (current.status === 'stale') return { stale: true };
+      if ((family.subscription?.version ?? null) !== current.subscriptionVersion) { // the subscription moved while the provider was being asked: never finalise against old facts
+        tx.set(path, { ...current, status: 'stale', proration });
+        tx.set(`families/${s.familyId}`, { ...family, billingIntent: null });
+        return { stale: true };
+      }
+      const event = { id: operationId, type: 'plan.change', plan: plan.id, provider: gw.name, providerRef: intent.customerRef, proration, ...(intent.seatChildIds ? { seatChildIds: intent.seatChildIds } : {}) };
+      const result = { ...(await this.billing.commit(tx, s.familyId, { ...family, billingIntent: null }, event, s.uid, this.now())), kind: 'upgrade', proration };
+      tx.set(path, { ...current, status: 'applied', proration, result });
+      return { result };
     });
+    if (finished.stale) fail(409, 'SUBSCRIPTION_CHANGED');
+    if (intent.customerRef) await this.reprocess(gw.name, intent.customerRef);
+    return finished.result;
   }
   /**
    * A provider webhook. Authenticate (MAC over raw bytes, timestamp window), normalize, then in
    * one transaction: replay check against the global inbox, resolve the family through the
    * customer mapping, apply through the same commit() every other billing event uses, and record
    * the outcome. A rejected or ignored event is recorded too and acknowledged, so the provider
-   * stops retrying and an operator can see exactly what arrived.
+   * stops retrying and an operator can see exactly what arrived. An event that waits on a
+   * server-side action (the parent's seat choice, a checkout completing) is `requires_action`
+   * and is reprocessed by this server when that action happens (S3.4-D) — never by hoping the
+   * provider redelivers an acknowledged event.
    */
   async receive(providerName, rawBody, headers) {
     const gw = this.gateway(providerName);
     if (!Buffer.isBuffer(rawBody)) fail(400, 'INVALID_REQUEST');
     if (rawBody.length > WEBHOOK_BODY_LIMIT) fail(413, 'REQUEST_TOO_LARGE');
     const now = this.now(), ev = gw.verify(rawBody, headers, now);
-    const inboxPath = `billingEvents/${gw.name}:${ev.id}`, fingerprint = sha256(JSON.stringify(ev)), internalType = PROVIDER_EVENTS[ev.type] || null;
+    const outcome = await this.process(gw, ev, sha256(JSON.stringify(ev)), now);
+    if (outcome.status === 'applied' && !outcome.replayed && ev.type === 'checkout.completed') await this.reprocess(gw.name, ev.customer); // an early invoice was waiting for this
+    return outcome;
+  }
+  /** Events recorded `requires_action` for this customer, reprocessed by the server in provider order. Idempotent; safe to call any time (3.5 tooling). */
+  async reprocess(providerName, customerRef) {
+    const gw = this.gateway(providerName);
+    const mapping = await this.store.get(`billingCustomers/${gw.name}:${customerRef}`);
+    const records = [];
+    for (const id of mapping?.pending || []) { const rec = await this.store.get(`billingEvents/${gw.name}:${id}`); if (rec) records.push(rec); }
+    records.sort((a, b) => a.at - b.at || (a.seq ?? 0) - (b.seq ?? 0));
+    const results = [];
+    for (const rec of records) {
+      const ev = { id: rec.providerEventId, type: rec.type, at: rec.at, seq: rec.seq ?? null, customer: rec.customer, data: rec.data };
+      results.push({ id: rec.providerEventId, ...(await this.process(gw, ev, rec.fingerprint, this.now())) });
+    }
+    return results;
+  }
+  /** One normalized event through the inbox, the customer mapping and the state machine, in one transaction. */
+  async process(gw, ev, fingerprint, now) {
+    const inboxPath = `billingEvents/${gw.name}:${ev.id}`, internalType = PROVIDER_EVENTS[ev.type] || null;
     return this.store.transaction(async (tx) => {
       const seen = await tx.get(inboxPath);
       if (seen) {
         if (seen.fingerprint !== fingerprint) fail(409, 'IDEMPOTENCY_CONFLICT');
-        // A rejected event applied nothing, so the provider's redelivery is processed again — this is
-        // how a renewal refused for want of a seat choice lands once the parent has made one (3.4).
-        if (seen.outcome.status !== 'rejected') return { ...seen.outcome, replayed: true };
+        // an event that applied nothing — rejected, or waiting on a server-side action — is processed again; anything else is a replay
+        if (!['rejected', 'requires_action'].includes(seen.outcome.status)) return { ...seen.outcome, replayed: true };
       }
       const mappingPath = `billingCustomers/${gw.name}:${ev.customer}`, mapping = await tx.get(mappingPath);
       const familyId = mapping?.familyId || null;
@@ -256,15 +317,20 @@ export class Payments {
             outcome = { status: 'applied', state: result.state, eventId: event.id };
           } catch (error) {
             if (!(error instanceof Fault)) throw error; // infrastructure: let the provider retry
-            outcome = { status: 'rejected', reason: error.code }; // the machine refused it (e.g. a downgrade that needs a seat choice): recorded for the operator
+            // the machine refused it: waiting on a server-side action it can resolve later, or a hard rejection for the operator
+            outcome = { status: ACTIONABLE.has(error.code) ? 'requires_action' : 'rejected', reason: error.code };
           }
         }
       }
-      if (outcome.status === 'applied') {
-        tx.set(mappingPath, { ...mapping, lastEventAt: ev.at, lastEventSeq: ev.seq, lastEventId: ev.id });
-        if (checkout && ev.type === 'checkout.completed') tx.set(checkoutPath, { ...checkout, status: 'completed', completedAt: now, completedBy: ev.id }); // a `creating` intent whose session the provider did open is completed too
+      if (mapping) {
+        const before = mapping.pending || [], pending = before.filter((id) => id !== ev.id);
+        if (outcome.status === 'requires_action') pending.push(ev.id);
+        const next = { ...mapping, pending };
+        if (outcome.status === 'applied') { next.lastEventAt = ev.at; next.lastEventSeq = ev.seq; next.lastEventId = ev.id; }
+        if (outcome.status === 'applied' || pending.length !== before.length || outcome.status === 'requires_action') tx.set(mappingPath, next);
+        if (outcome.status === 'applied' && checkout && ev.type === 'checkout.completed') tx.set(checkoutPath, { ...checkout, status: 'completed', completedAt: now, completedBy: ev.id }); // a `creating` intent whose session the provider did open is completed too
       }
-      tx.set(inboxPath, { provider: gw.name, providerEventId: ev.id, type: ev.type, at: ev.at, receivedAt: seen?.receivedAt ?? now, lastReceivedAt: now, attempts: (seen?.attempts || 0) + 1, customer: ev.customer, familyId, data: ev.data, fingerprint, outcome });
+      tx.set(inboxPath, { provider: gw.name, providerEventId: ev.id, type: ev.type, at: ev.at, seq: ev.seq ?? null, receivedAt: seen?.receivedAt ?? now, lastReceivedAt: now, attempts: (seen?.attempts || 0) + 1, customer: ev.customer, familyId, data: ev.data, fingerprint, outcome });
       this.audit(tx, `webhook.${outcome.status}`, `webhook:${gw.name}`, familyId);
       return outcome;
     });

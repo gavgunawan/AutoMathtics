@@ -62,18 +62,25 @@ Operator CLI: `scripts/subscription.mjs`; signed fake webhooks: `scripts/fake-we
 `POST /api/billing/plan { plan, seatChildIds?, operationId }` (parent, recent auth, paid subscription in
 `active` or `grace`; a trial becomes paid through a checkout, `CHECKOUT_REQUIRED`):
 
-- **Upgrade** (more seats): capacity grows at once (`plan.change`); the gateway is asked for the
+- Every plan change is a **durable change intent** `billingChangeIntents/{provider}:{operationId}`
+  (family, subscription version, from/to plan, seat choice, kind, fingerprint, status). Same operation id
+  + same plan and seat choice → replay; anything else under that id → `IDEMPOTENCY_CONFLICT` (S3.4-A).
+- **Upgrade** (more seats, **only while `active`** — in grace the renewal comes first,
+  `RENEWAL_REQUIRED`): the intent is written, the gateway is asked for the
   prorated difference for the unused share of the period (`proration` on the event record; the fake
-  gateway computes it and charges nothing). Newly freed seats can be given with `seatChildIds` or later
-  with `/api/billing/seats`.
+  gateway computes it and charges nothing) with the operation id as the provider's idempotency key — one
+  such call in flight per family (`CHANGE_IN_PROGRESS`) — and `plan.change` commits only if the
+  subscription version is still the one the intent saw (`SUBSCRIPTION_CHANGED` otherwise; the intent is
+  `stale`). Newly freed seats can be given with `seatChildIds` — which may add children but never omit a
+  seated one (`SEATS_CANNOT_REMOVE`, S3.4-B) — or later with `/api/billing/seats`.
 - **Downgrade** (fewer seats): **scheduled for the period end** (`plan.schedule`, visible as
   `entitlement.scheduled`). If more children are seated than the new plan holds, the parent chooses who
   keeps a seat now (`seatChildIds`, else `SELECT_CHILDREN_FOR_DOWNGRADE`); nobody loses a seat before the
   renewal (3.2-A holds). The renewal payment on the scheduled plan applies it — the provider never sends
-  seat ids; the choice is the server's. This is also how a renewal the machine refused in 3.3
-  (`rejected: SELECT_CHILDREN_FOR_DOWNGRADE`) resolves: once the choice is recorded, the provider's
-  redelivery of the same event is processed and applied (a rejected inbox event is re-processable; an
-  applied one is a replay).
+  seat ids; the choice is the server's. A renewal the machine refused for want of that choice (or
+  for want of any intent) is recorded `requires_action` and **reprocessed by the server itself** the
+  moment the parent's change is recorded or a checkout completes (S3.4-D) — never by hoping the
+  provider redelivers an event it was told was received. If it does redeliver, that is a replay.
 - **The invoice never changes the plan on its own (S3.3-B).** A renewal at the current price is a
   renewal; a payment at another price needs one of the intents above (the scheduled change, a checkout
   for that plan, an operator) or it is recorded and rejected (`PLAN_CHANGE_NOT_AUTHORIZED`). So the
@@ -85,7 +92,9 @@ Operator CLI: `scripts/subscription.mjs`; signed fake webhooks: `scripts/fake-we
 - **Cancel** is unchanged: at period end, undoable, access never cut short.
 - **Refund** is never a parent action. The operator (`scripts/subscription.mjs … refund AMOUNT_CENTS [full]`)
   or the provider (`charge.refunded`) records it on the subscription (`refunds[]`). A **full** refund ends
-  access now (state `cancelled`); a partial one is a record only. A refund never touches a child wallet.
+  access now (state `cancelled`); a partial one is a record only; the amount must be positive — a
+  zero-cent "full" refund cancels nobody. A refund never touches a child wallet. Before real money a
+  real adapter derives amount, full/partial and status from the provider's refund object, not the payload.
 
 Parent actions (routes, recent authentication required): `POST /api/billing/trial` — the server decides
 from the verified phone: no subscription yet, a phone on record, and `phones/{phoneKey}.trialFamilyId`

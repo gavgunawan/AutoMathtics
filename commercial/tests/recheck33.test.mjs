@@ -60,8 +60,8 @@ test('checkout.completed must name a checkout this server opened, for this famil
 test('S3.3-B: an invoice renews the plan on record; any other plan needs a server-recorded intent — a scheduled change, a checkout, or an operator', async () => {
   const f = fixture(); const { a, co, ids: [A] } = await paidFamily(f, 'family', ['A']); // four seats, one child seated: the "fits" case
   const renew = (plan, more = {}) => deliver(f, evt(f, co.customerRef, 'invoice.paid', { price: `price_fake_${plan}`, periodEnd: f.now() + 60 * DAY }, more));
-  assert.deepEqual(await renew('starter'), { status: 'rejected', reason: 'PLAN_CHANGE_NOT_AUTHORIZED' }, 'a smaller plan the child would fit is still not a plan the family chose');
-  assert.deepEqual(await renew('big'), { status: 'rejected', reason: 'PLAN_CHANGE_NOT_AUTHORIZED' }, 'nor is a bigger one');
+  assert.deepEqual(await renew('starter'), { status: 'requires_action', reason: 'PLAN_CHANGE_NOT_AUTHORIZED' }, 'a smaller plan the child would fit is still not a plan the family chose');
+  assert.deepEqual(await renew('big'), { status: 'requires_action', reason: 'PLAN_CHANGE_NOT_AUTHORIZED' }, 'nor is a bigger one');
   let fam = await f.store.get(`families/${a.familyId}`); assert.equal(fam.subscription.plan, 'family'); assert.equal(fam.subscription.seats, 4);
   assert.equal((await renew('family')).status, 'applied', 'the same plan is an ordinary renewal');
   // the parent's scheduled downgrade is the intent: the renewal at that price lands and applies the seat choice
@@ -83,14 +83,15 @@ test('S3.3-B: the first paid plan comes from a checkout — an invoice that arri
   const f = fixture(); const a = await f.family('parentA', 0); await f.billing.startTrial(a.ctx, op());
   const co = await f.payments.checkout(a.ctx, { plan: 'starter', ...op() });
   const invoice = evt(f, co.customerRef, 'invoice.paid', { price: 'price_fake_starter', periodEnd: f.now() + 30 * DAY });
-  assert.deepEqual(await deliver(f, invoice), { status: 'rejected', reason: 'CHECKOUT_REQUIRED' });
+  assert.deepEqual(await deliver(f, invoice), { status: 'requires_action', reason: 'CHECKOUT_REQUIRED' });
   assert.equal((await f.store.get(`families/${a.familyId}`)).subscription.state, 'trial');
   assert.equal((await deliver(f, evt(f, co.customerRef, 'checkout.completed', { price: 'price_fake_starter', periodEnd: f.now() + 30 * DAY, checkoutId: co.checkoutId }))).status, 'applied');
-  assert.equal((await deliver(f, invoice)).status, 'applied', 'the provider retries the invoice: same plan now, so a renewal');
+  assert.equal((await f.store.get(`billingEvents/fake:${invoice.id}`)).outcome.status, 'applied', 'S3.4-D: the server reprocessed the waiting invoice itself when the checkout completed');
+  assert.equal((await deliver(f, invoice)).replayed, true, 'the provider retrying it is a replay');
   assert.equal((await f.store.get(`families/${a.familyId}`)).subscription.state, 'active');
   // a cancelled or expired family comes back on its own plan by invoice, on another only through a checkout
   await f.billing.apply(a.familyId, { id: randomUUID(), type: 'terminate' }, 'test-operator');
-  assert.deepEqual(await deliver(f, evt(f, co.customerRef, 'invoice.paid', { price: 'price_fake_family', periodEnd: f.now() + 30 * DAY })), { status: 'rejected', reason: 'PLAN_CHANGE_NOT_AUTHORIZED' });
+  assert.deepEqual(await deliver(f, evt(f, co.customerRef, 'invoice.paid', { price: 'price_fake_family', periodEnd: f.now() + 30 * DAY })), { status: 'requires_action', reason: 'PLAN_CHANGE_NOT_AUTHORIZED' });
   assert.equal((await deliver(f, evt(f, co.customerRef, 'invoice.paid', { price: 'price_fake_starter', periodEnd: f.now() + 30 * DAY }))).state, 'active');
 });
 test('cancellation/renewal race: a renewal never undoes a cancellation the parent asked for; the paid period is honoured and then it ends', async () => {

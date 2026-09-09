@@ -70,7 +70,10 @@ provider ──POST /api/webhooks/{provider}, X-Webhook-Signature──▶ verif
   `subscription.updated` is deliberately **not** mapped: a webhook cannot change seat capacity.
   Plan changes are the parent's (`POST /api/billing/plan`, 3.4, `SUBSCRIPTIONS.md` → Lifecycle);
   the provider then bills the prorated difference or renews at the scheduled price.
-- **Outcomes are acknowledged.** `applied`, `ignored` (unsupported type, stale) and `rejected`
+- **Outcomes are acknowledged.** `applied`, `ignored` (unsupported type, stale), `requires_action`
+  (the machine refused for want of a server-side action — the parent's seat choice or plan change, a
+  checkout completing — kept on `billingCustomers/{…}.pending` and reprocessed by the server when that
+  action happens, S3.4-D) and `rejected`
   (unknown customer, unknown price, mismatch, or the state machine refused — e.g. a renewal on a
   plan smaller than the seated children, `SELECT_CHILDREN_FOR_DOWNGRADE`) all return 200 so the
   provider stops retrying; the inbox row is the operator's audit trail. A **rejected** event applied

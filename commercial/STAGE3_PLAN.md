@@ -47,6 +47,18 @@ for development by the review team on 9 Sep 2026). Order agreed with the team:
 | 3.3 must resolve the family from the provider-customer mapping and map provider price ids to plans; never trust plan/seats/family from the payload | closed: `billingCustomers` mapping (PR #12) + price table (`FAKE_PRICES`), `UNKNOWN_PRICE`, payload naming a plan is malformed |
 | 3.3 keep `plan.change` out of webhook mapping | closed: `subscription.updated` is recorded and ignored until 3.4 |
 
+## 3.4 review follow-ups (9 Sep 2026, after PR #15)
+
+| Item | Status |
+|---|---|
+| **S3.4-A** plan-change idempotency ignored the seat selection | closed: change intent fingerprint = plan + normalized seat ids; same id + different choice → `IDEMPOTENCY_CONFLICT` (regression in `tests/review34.test.mjs`) |
+| **S3.4-B** an upgrade could drop a seated child via `seatChildIds` | closed: an upgrade's seat list must contain every active child (`SEATS_CANNOT_REMOVE`) |
+| **S3.4-C** the 3.4 test that let a renewal on an unrelated plan apply | closed in PR #15 (`PLAN_CHANGE_NOT_AUTHORIZED`); the rule table is in "3.3 re-check follow-ups" |
+| **S3.4-D** rejected-renewal recovery relied on a provider redelivery | closed: `requires_action` outcomes are kept on the customer mapping and reprocessed by the server when the parent's change is recorded or a checkout completes; a redelivery is a replay |
+| Upgrade during grace granted capacity for a zero prorated charge | closed: immediate upgrade only while `active` (`RENEWAL_REQUIRED` in grace); a downgrade can still be scheduled into the renewal |
+| Refund bound | closed: `amountCents ≥ 1`; adapter derives refund facts from the provider object before Stage 4 |
+| Real-provider plan-change atomicity | closed: `billingChangeIntents/{provider}:{operationId}` written before the provider call with the operation id as idempotency key, one call in flight per family (`CHANGE_IN_PROGRESS`), finalised only if the subscription version is unchanged (`SUBSCRIPTION_CHANGED`) |
+
 ## 3.3 re-check follow-ups (9 Sep 2026, after PR #14) — the 3.4 acceptance list
 
 | # | Criterion | Where |
