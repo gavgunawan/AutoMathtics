@@ -102,7 +102,7 @@ test('the whole life of a subscription through signed webhooks: checkout → pai
   const sel = await f.service.authenticate(await f.service.lock(a.ctx)); await assert.rejects(f.service.selectChild(sel, kids[0].id, '763829'), rejected('SUBSCRIPTION_INACTIVE'));
   // and a new payment brings it back
   const small = await deliver(f, evt(f, co.customerRef, 'invoice.paid', { price: 'price_fake_starter', periodEnd: f.now() + 30 * DAY }));
-  assert.deepEqual(small, { status: 'rejected', reason: 'PLAN_CHANGE_NOT_AUTHORIZED' }, 'S3.3-B: an invoice cannot bring the family back on a plan nobody chose');
+  assert.deepEqual(small, { status: 'requires_action', reason: 'PLAN_CHANGE_NOT_AUTHORIZED' }, 'S3.3-B: an invoice cannot bring the family back on a plan nobody chose');
   const back = await deliver(f, evt(f, co.customerRef, 'invoice.paid', { price: 'price_fake_family', periodEnd: f.now() + 30 * DAY })); assert.equal(back.state, 'active');
   // nothing in any of that touched a wallet or wrote a ledger row
   for (const k of kids) assert.equal((await f.store.list(`families/${a.familyId}/learning/${k.id}/ledger`)).length, 0);

@@ -40,6 +40,7 @@ test('the machine: a scheduled downgrade waits for the renewal; a refund is a re
   const full = transition(partial, { type: 'refund', amountCents: 900, full: true }, T0 + 6 * DAY);
   assert.equal(deriveState(full, T0 + 6 * DAY), 'cancelled'); assert.equal(full.refunds.length, 2); assert.equal(full.endedAt, T0 + 6 * DAY);
   assert.throws(() => transition(paid, { type: 'refund', amountCents: -1 }, T0), rejected('INVALID_REQUEST'));
+  assert.throws(() => transition(paid, { type: 'refund', amountCents: 0, full: true }, T0), rejected('INVALID_REQUEST'), 'a zero-cent full refund cancels nobody');
   assert.throws(() => transition(paid, { type: 'refund' }, T0), rejected('INVALID_REQUEST'));
   assert.throws(() => transition(null, { type: 'refund', amountCents: 1 }, T0), rejected('INVALID_TRANSITION'));
 });
@@ -85,21 +86,21 @@ test('a parent downgrades: the seat choice is recorded now, nobody loses a seat 
   assert.equal((await f.store.get(`families/${a.familyId}`)).subscription.scheduled, null);
   // S3.3-B: a renewal on a plan nobody asked for is refused and recorded; the schedule and the seats stay as they were
   await f.payments.changePlan(p.ctx, { plan: 'starter', seatChildIds: [A, B], ...op() });
-  assert.deepEqual(await deliver(f, evt(f, co.customerRef, 'invoice.paid', { price: 'price_fake_big', periodEnd: f.now() + 90 * DAY })), { status: 'rejected', reason: 'PLAN_CHANGE_NOT_AUTHORIZED' });
+  assert.deepEqual(await deliver(f, evt(f, co.customerRef, 'invoice.paid', { price: 'price_fake_big', periodEnd: f.now() + 90 * DAY })), { status: 'requires_action', reason: 'PLAN_CHANGE_NOT_AUTHORIZED' });
   const after = await f.store.get(`families/${a.familyId}`); assert.equal(after.subscription.seats, 4); assert.equal(after.subscription.scheduled.plan, 'starter'); assert.deepEqual(after.activeChildIds, [A, B, C]);
 });
-test('a renewal the machine refused is recorded as rejected; once the parent has chosen seats, the provider\'s redelivery of the same event is applied', async () => {
+test('S3.4-D: a renewal waiting on the parent\'s seat choice is recorded as requires_action and reprocessed by the server itself once the choice is made — no provider redelivery needed', async () => {
   const f = fixture(); const { a, co, ids: [A, B] } = await paidFamily(f, 'family', ['A', 'B', 'C']);
   const renewal = evt(f, co.customerRef, 'invoice.paid', { price: 'price_fake_starter', periodEnd: f.now() + 60 * DAY });
-  // S3.3-B: with no intent on record the invoice is refused outright — the seat question never even arises
-  assert.deepEqual(await deliver(f, renewal), { status: 'rejected', reason: 'PLAN_CHANGE_NOT_AUTHORIZED' });
-  assert.equal((await f.store.get(`billingEvents/fake:${renewal.id}`)).attempts, 1);
-  assert.deepEqual(await deliver(f, renewal), { status: 'rejected', reason: 'PLAN_CHANGE_NOT_AUTHORIZED' }, 'still refused while nobody has chosen');
-  await f.payments.changePlan(a.ctx, { plan: 'starter', seatChildIds: [A, B], ...op() });
-  const again = await deliver(f, renewal); assert.equal(again.status, 'applied'); assert.equal(again.replayed, undefined);
+  // S3.3-B: with no intent on record the invoice is refused — the seat question never even arises — but it waits
+  assert.deepEqual(await deliver(f, renewal), { status: 'requires_action', reason: 'PLAN_CHANGE_NOT_AUTHORIZED' });
+  assert.deepEqual((await f.store.get(`billingCustomers/fake:${co.customerRef}`)).pending, [renewal.id], 'the event waits on the customer record');
+  assert.deepEqual(await deliver(f, renewal), { status: 'requires_action', reason: 'PLAN_CHANGE_NOT_AUTHORIZED' }, 'a redelivery meanwhile changes nothing');
+  await f.payments.changePlan(a.ctx, { plan: 'starter', seatChildIds: [A, B], ...op() }); // the parent's choice; nothing is delivered again
   const rec = await f.store.get(`billingEvents/fake:${renewal.id}`); assert.equal(rec.outcome.status, 'applied'); assert.equal(rec.attempts, 3);
-  assert.deepEqual((await f.store.get(`families/${a.familyId}`)).activeChildIds, [A, B]);
-  assert.deepEqual(await deliver(f, renewal), { ...again, replayed: true }, 'and from now on it is a replay');
+  assert.deepEqual((await f.store.get(`billingCustomers/fake:${co.customerRef}`)).pending, []);
+  const fam = await f.store.get(`families/${a.familyId}`); assert.deepEqual(fam.activeChildIds, [A, B]); assert.equal(fam.subscription.seats, 2); assert.equal(fam.subscription.scheduled, null);
+  assert.deepEqual(await deliver(f, renewal), { status: 'applied', state: 'active', eventId: rec.outcome.eventId, replayed: true }, 'if the provider does redeliver, it is a replay');
   assert.equal((await f.store.list(`families/${a.familyId}/billing`)).length, 3, 'checkout, schedule, renewal: one row each');
   await assert.rejects(deliver(f, { ...renewal, data: { ...renewal.data, price: 'price_fake_big' } }), rejected('IDEMPOTENCY_CONFLICT'));
 });
