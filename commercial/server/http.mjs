@@ -182,8 +182,9 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
       if (path === '/api/children') return json(201, await service.createChild(ctx, data, req.headers['idempotency-key']));
       if (path === '/api/session/lock') { object(data, []); const next = await service.lock(ctx); setCookie(res, next, DEVICE_COOKIE_S); return json(200, { ok: true }); }
       if (path === '/api/session/select') { object(data, []); const next = await service.selector(ctx); setCookie(res, next, DEVICE_COOKIE_S); return json(200, { ok: true }); }
-      const match = path.match(/^\/api\/children\/([a-f0-9-]+)\/(enter|pin)$/);
+      const match = path.match(/^\/api\/children\/([a-f0-9-]+)\/(enter|pin|start)$/);
       if (match) {
+        if (match[2] === 'start') return json(200, await service.setChildStart(ctx, match[1], data));
         object(data, ['pin']);
         if (match[2] === 'enter') { const next = await service.selectChild(ctx, match[1], data.pin); setCookie(res, next, DEVICE_COOKIE_S); }
         else await service.resetPin(ctx, match[1], data.pin);

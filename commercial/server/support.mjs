@@ -62,7 +62,7 @@ export class Support {
       const c = await tx.get(`families/${f}/children/${id}`); if (!c) continue;
       const prog = await tx.get(`families/${f}/learning/${id}`);
       const ledger = (await tx.list(`families/${f}/learning/${id}/ledger`)).sort((a, b) => a.seq - b.seq);
-      children.push({ id: c.id, nickname: c.nickname, icon: c.icon, status: c.status, createdAt: c.createdAt || null, progress: prog ? normalizeProgress(prog) : null, ledger });
+      children.push({ id: c.id, nickname: c.nickname, icon: c.icon, status: c.status, createdAt: c.createdAt || null, demographics: c.demographics || null, start: c.start || null, progress: prog ? normalizeProgress(prog) : null, ledger });
     }
     const config = await tx.get(`families/${f}/game/config`);
     const billing = (await tx.list(`families/${f}/billing`)).sort((a, b) => a.at - b.at)

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { fail, object, uuid } from './security.mjs';
-import { TRACKS, LEVELS, GC_PASS, RP_PASS, PAPERS_PER_LEVEL, PAPERS_PER_SESSION, normalizeProgress, trk, withTrk, trackDone, bossDue, settleJumps, nextRun, buildQuestions, buildScanQuestions, grade, answerText, bonusesFor, dayISO, weekISO, scanState } from './progress.mjs';
+import { TRACKS, LEVELS, GC_PASS, RP_PASS, PAPERS_PER_LEVEL, PAPERS_PER_SESSION, normalizeProgress, trk, withTrk, trackDone, bossDue, settleJumps, nextRun, buildQuestions, buildScanQuestions, buildPlacementQuestions, placementFromResults, grade, answerText, bonusesFor, dayISO, weekISO, scanState } from './progress.mjs';
 import { applyGameDerived, heatmap } from './game.mjs';
 import { entry, post } from './ledger.mjs';
 
@@ -25,13 +25,13 @@ export class Learning {
   }
   publicQuestion(sess, i) {
     const q = sess.questions[i];
-    return q ? { index: i, paper: q.paper, tier: q.tier, level: q.level, levelId: LEVELS[q.level]?.id || '?', seconds: q.seconds, display: q.display, read: q.read, answerType: q.answer.type } : null;
+    return q ? { index: i, paper: q.paper, tier: q.tier, level: q.level, levelId: LEVELS[q.level]?.id || '?', track: q.track || sess.track, seconds: q.seconds, display: q.display, read: q.read, answerType: q.answer.type } : null;
   }
   publicProgress(prog, family) {
     const t = (name) => { const x = trk(prog, name); return { ...x, levelId: LEVELS[x.level].id, done: trackDone(prog, name), bossDue: bossDue(prog, name), next: (() => { const r = nextRun(prog, name); return { mode: r.mode, startPaper: r.startPaper, tierEnd: r.tierEnd }; })() }; };
     const tz = family?.timeZone || DEFAULT_TIME_ZONE;
     return { engine: t('engine'), nav: t('nav'), wallet: prog.wallet, pacePercent: prog.pacePercent, stats: prog.stats, history: prog.history.slice(0, 20),
-      scan: scanState(prog, this.now(), tz), heatmap: heatmap(prog) };
+      scan: scanState(prog, this.now(), tz), heatmap: heatmap(prog), placement: prog.placement || null };
   }
   async state(ctx) {
     return this.store.transaction(async (tx) => {
@@ -43,19 +43,24 @@ export class Learning {
   async start(ctx, body) {
     object(body, ['track', 'mode']); let track = body.track; if (!TRACKS.includes(track)) fail(400, 'INVALID_REQUEST');
     const requestedMode = body.mode === undefined || body.mode === null ? null : body.mode;
-    if (requestedMode !== null && requestedMode !== 'scan') fail(400, 'INVALID_REQUEST'); if (requestedMode === 'scan') track = 'engine';
+    if (requestedMode !== null && requestedMode !== 'scan' && requestedMode !== 'placement') fail(400, 'INVALID_REQUEST'); if (requestedMode !== null) track = 'engine';
     const id = randomUUID(), shieldRowId = randomUUID();
     return this.store.transaction(async (tx) => {
       const { p, prog: original, s, family } = await this.child(tx, ctx); const active = original.activeSession ? await tx.get(p.session(original.activeSession)) : null;
       if (active && active.status === 'active' && this.now() < active.createdAt + SESSION_LIFE)
         return { session: this.publicSession(active), question: this.publicQuestion(active, active.index), resumed: true };
       const commitRate = await this.foundation.rateIn(tx, `learning-start:${s.familyId}:${s.childId}`, 20, HOUR);
+      // A pending placement test comes first: nothing else starts until it is done (or the parent picks another start)
+      const pendingPlacement = original.placement?.status === 'pending';
+      if (pendingPlacement && requestedMode !== 'placement') fail(409, 'PLACEMENT_PENDING');
+      if (requestedMode === 'placement' && !pendingPlacement) fail(409, 'PLACEMENT_NOT_PENDING');
       const tz = family.timeZone || DEFAULT_TIME_ZONE; const derived = applyGameDerived(original, this.now(), tz); let prog = derived.progress;
       // A streak shield bridging yesterday may have paid a bonus block; that money enters through the ledger, not by mutation.
       const shieldGc = prog.wallet.gc - original.wallet.gc, shieldRp = prog.wallet.rp - original.wallet.rp;
       if (shieldGc || shieldRp) prog = await post(tx, p.doc, { ...prog, wallet: { ...prog.wallet, gc: original.wallet.gc, rp: original.wallet.rp } }, entry({ id: shieldRowId, type: 'streak.shield', gc: shieldGc, rp: shieldRp, at: this.now() }));
       let run, questions;
-      if (requestedMode === 'scan') {
+      if (requestedMode === 'placement') { run = { mode: 'placement', level: original.placement.level, startPaper: null, tierEnd: null }; questions = buildPlacementQuestions(run.level, prog.pacePercent / 100); }
+      else if (requestedMode === 'scan') {
         const state = scanState(prog, this.now(), tz); if (!state.available) fail(409, state.unlocked ? 'SCAN_ALREADY_DONE' : 'SCAN_LOCKED');
         run = { mode: 'scan', level: trk(prog, 'engine').level, startPaper: null, tierEnd: null }; questions = buildScanQuestions(run.level, prog.pacePercent / 100);
       } else { run = nextRun(prog, track); questions = buildQuestions(track, run, prog.pacePercent / 100); }
@@ -101,7 +106,7 @@ export class Learning {
     });
   }
   label(sess) {
-    if (sess.mode === 'boss') return `CP T${sess.tierEnd / 20}`; if (sess.mode === 'scan') return 'SYSTEM SCAN';
+    if (sess.mode === 'boss') return `CP T${sess.tierEnd / 20}`; if (sess.mode === 'scan') return 'SYSTEM SCAN'; if (sess.mode === 'placement') return 'PLACEMENT TEST';
     return `${sess.mode === 'practice' ? 'practice ' : ''}${sess.startPaper}–${sess.startPaper + PAPERS_PER_SESSION - 1}`;
   }
   finish(value, sess, now, timeZone) {
@@ -110,6 +115,16 @@ export class Learning {
     const row = { ts: now, date, track: sess.track, mode: sess.mode, level: sess.level, levelId: LEVELS[sess.level].id, papers: this.label(sess), correct, incorrect, timeout, total, passed,
       secs: Math.round((now - sess.createdAt) / 1000), qlog: sess.results.map((r) => ({ t: r.tier, l: r.level, track: r.track, s: r.secs, a: r.allowed, ok: r.r === 'correct' ? 1 : 0 })) };
     let np = { ...prog, activeSession: null, history: [row, ...prog.history].slice(0, HISTORY_MAX), stats: { sessions: prog.stats.sessions + 1, passes: prog.stats.passes + (passed ? 1 : 0) }, wallet: { ...prog.wallet } };
+    if (sess.mode === 'placement') { // the test places each track and pays nothing; no pass, no streak day, no coins
+      const placement = placementFromResults(sess.results, sess.level);
+      for (const t of TRACKS) np = withTrk(np, t, { level: placement[t].level, paper: placement[t].paper, bossCleared: placement[t].bossCleared });
+      np.placement = { ...prog.placement, status: 'done', finishedAt: now, result: placement };
+      np.stats = { ...np.stats, passes: prog.stats.passes };
+      np.history[0] = { ...row, passed: false, placement: { engine: `${LEVELS[placement.engine.level].id}${placement.engine.paper}`, nav: `${LEVELS[placement.nav.level].id}${placement.nav.paper}` } };
+      const summary = { passed: false, rewarded: false, correct, incorrect, timeout, total, gcEarned: 0, rpEarned: 0, wallet: np.wallet, track: sess.track, mode: sess.mode, papers: row.papers, gameEvents: [], leveledUp: false, jumped: [],
+        placement: Object.fromEntries(TRACKS.map((t) => [t, { ...placement[t], levelId: LEVELS[placement[t].level].id }])) };
+      return { progress: np, summary };
+    }
     let gcEarned = 0, rpEarned = 0, jumped = [];
     // A finished sector's practice runs are unpaid and count for no streak: passing the same papers
     // again while the other track catches up must not become a way to farm coins.
