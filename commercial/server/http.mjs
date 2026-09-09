@@ -165,6 +165,7 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
       if (payments && path === '/api/billing/plan') return json(200, await payments.changePlan(ctx, data));
       if (support && path === '/api/family/deletion') return json(200, await support.requestDeletion(ctx, data));
       if (support && path === '/api/family/deletion/cancel') return json(200, await support.cancelDeletion(ctx, data));
+      if (support && path === '/api/account/deletion') return json(200, await support.deleteAccount(ctx, data)); // Stage 4: the sign-in account, once no family remains
       if (game && path === '/api/game/shop/buy') return json(200, await game.buy(ctx, data));
       if (game && path === '/api/game/shop/equip') return json(200, await game.equip(ctx, data));
       if (game && path === '/api/game/rewards/redeem') return json(200, await game.redeem(ctx, data));

@@ -34,6 +34,8 @@ export class FirebaseIdentity {
     this.auth = auth; this.now = now; this.cacheMs = cacheMs; this.cacheMax = cacheMax;
     this.cache = new Map(); this.lookups = 0;
   }
+  /** Stage 4: the parent's Auth account itself. Only support.deleteAccount calls this, after the family is gone. */
+  async deleteUser(uid) { this.cache.delete(uid); await this.auth.deleteUser(uid); }
   async lookup(uid, fresh = false) {
     const hit = this.cache.get(uid);
     if (!fresh && hit && hit.until > this.now()) return hit.user;

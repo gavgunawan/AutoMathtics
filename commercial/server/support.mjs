@@ -29,7 +29,7 @@ export const RETENTION = Object.freeze({
   'billingReconciliations/*': 'operator reconciliation decisions',
   'phones/*': 'one trial per verified phone: anti-abuse; holds no phone number',
   'families/{f} (tombstone)': 'family id, subscription facts, customer references, deletion record; label and children removed',
-  'parents/{uid} (tombstone)': 'deleted flag and phone key, so a returning parent starts fresh and gets no second trial',
+  'parents/{uid} (tombstone)': 'deleted flag and phone key, so a returning parent starts fresh and gets no second trial; after the sign-in account is deleted too, this is all that remains of the parent',
   'audit/*': 'security and accountability trail (uid, familyId, childId, action); expires by TTL 400 days after each row',
   'deletions/{f}': 'the deletion record: who asked, who executed, what was removed and what was kept',
   'supportOperations/*': 'which operator started which corrective action, and how it ended',
@@ -95,6 +95,56 @@ export class Support {
       tx.set(`families/${s.familyId}`, rest);
       this.audit(tx, 'family.deletion_cancelled', s.uid, s.familyId, { hadEffectiveAt: deletion.effectiveAt });
       return { pending: false };
+    });
+  }
+
+  /**
+   * Stage 4: the parent's sign-in account, once no family points at it — either the family was deleted
+   * (its tombstone left the parent record with familyId null) or none was ever created. Two steps so a
+   * failure at the identity provider leaves a record that says so and can be retried:
+   *   1. one transaction: every session of this uid deleted, parents/{uid} marked `identityDeletion`;
+   *   2. the Auth account is deleted at the provider; then the record gets `identityDeletedAt`.
+   * What stays: the parent tombstone with its phone key (one trial per phone survives the account)
+   * and nothing else personal — the email and phone number live in the Auth account and go with it.
+   */
+  async deleteAccount(ctx, body) {
+    object(body, ['operationId']); uuid(body?.operationId ?? (fail(400, 'OPERATION_ID_REQUIRED')));
+    const { uid } = await this.store.transaction(async (tx) => {
+      const { s, parent } = await this.foundation.authorize(tx, ctx, ['parent'], false);
+      this.foundation.requireRecent(s);
+      if (s.familyId || parent.familyId) fail(409, 'FAMILY_STILL_EXISTS'); // delete the family first; that is the 14-day workflow
+      return this.beginIdentityDeletion(tx, s.uid, parent, s.uid);
+    });
+    return this.finishIdentityDeletion(uid, uid);
+  }
+  /** Operator path for the same thing (a parent who cannot sign in any more, or a retry after a provider failure). */
+  async deleteAccountFor(uid, operator) {
+    text(uid, 1, 128); this.operator(operator);
+    await this.store.transaction(async (tx) => {
+      const parent = await tx.get(`parents/${uid}`);
+      if (!parent) fail(404, 'PARENT_NOT_FOUND');
+      if (parent.familyId) fail(409, 'FAMILY_STILL_EXISTS');
+      return this.beginIdentityDeletion(tx, uid, parent, operator);
+    });
+    return this.finishIdentityDeletion(uid, operator);
+  }
+  async beginIdentityDeletion(tx, uid, parent, actor) {
+    const now = this.now(), sessions = await tx.query('sessions', 'uid', uid, 200);
+    for (const [key] of sessions) tx.delete(`sessions/${key}`);
+    tx.set(`parents/${uid}`, { ...parent, deleted: true, deletedAt: parent.deletedAt || now, familyId: null, reauthAfter: Math.max(parent.reauthAfter || 0, Math.floor(now / 1000)), phoneKey: parent.phoneKey || null,
+      identityDeletion: { requestedAt: parent.identityDeletion?.requestedAt || now, requestedBy: actor, deletedAt: parent.identityDeletion?.deletedAt || null } });
+    this.audit(tx, 'account.deletion_started', actor, null, { subject: uid, sessions: sessions.length });
+    return { uid };
+  }
+  async finishIdentityDeletion(uid, actor) {
+    try { await this.foundation.identity.deleteUser(uid); }
+    catch (error) { if (error?.code === 'auth/user-not-found' || /not.found|missing/i.test(String(error?.message))) { /* already gone at the provider: finish the record */ } else throw error; }
+    return this.store.transaction(async (tx) => {
+      const parent = await tx.get(`parents/${uid}`), now = this.now();
+      const record = { ...parent, identityDeletion: { ...(parent.identityDeletion || { requestedAt: now, requestedBy: actor }), deletedAt: now } };
+      tx.set(`parents/${uid}`, record);
+      this.audit(tx, 'account.deleted', actor, null, { subject: uid });
+      return { deleted: true, deletedAt: now };
     });
   }
 

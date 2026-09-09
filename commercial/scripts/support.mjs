@@ -10,6 +10,8 @@
 //        OUTCOME: no_provider_change | provider_reverted | applied_by_operator | refunded
 //   node scripts/support.mjs export FAMILY_UUID                      the family's data as JSON (stdout)
 //   node scripts/support.mjs delete FAMILY_UUID                      execute a deletion the parent requested and whose 14 days have passed
+//   node scripts/support.mjs delete-account PARENT_UID               delete the sign-in account of a parent with no family (retry after a provider failure)
+//        CONFIRM_DELETION=PARENT_UID is required
 //        CONFIRM_DELETION=FAMILY_UUID is required; FORCE_BEFORE_GRACE=yes executes early (audited as forced)
 import { FirestoreStore } from '../server/firebase.mjs';
 import { Foundation } from '../server/service.mjs';
@@ -57,5 +59,9 @@ switch (command) {
     if (process.env.CONFIRM_DELETION !== rest[0]) throw Error('Set CONFIRM_DELETION to the exact family id to execute a deletion.');
     out(await support.executeDeletion(rest[0], { operator: actor, force: process.env.FORCE_BEFORE_GRACE === 'yes' })); break;
   }
-  default: console.error('Usage: node scripts/support.mjs family|customer|inbox|reprocess|reconcile-intent|export|delete ...'); process.exit(1);
+  case 'delete-account': {
+    if (process.env.CONFIRM_DELETION !== rest[0]) throw Error('Set CONFIRM_DELETION to the exact parent uid to delete a sign-in account.');
+    out(await support.deleteAccountFor(rest[0], actor)); break;
+  }
+  default: console.error('Usage: node scripts/support.mjs family|customer|inbox|reprocess|reconcile-intent|export|delete|delete-account ...'); process.exit(1);
 }
