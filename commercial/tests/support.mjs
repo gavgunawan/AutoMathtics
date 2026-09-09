@@ -28,6 +28,7 @@ export class MemoryStore {
   async list(collectionPath) { const prefix = `${collectionPath}/`; return [...this.data.entries()].filter(([k]) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/')).map(([, v]) => structuredClone(v)); }
   async entries(collectionPath, limit) { const prefix = `${collectionPath}/`; const all = [...this.data.entries()].filter(([k]) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/')).map(([k, v]) => [k.slice(prefix.length), structuredClone(v)]); return limit ? all.slice(0, limit) : all; }
   async query(collectionPath, field, value, limit) { return (await this.entries(collectionPath)).filter(([, v]) => v[field] === value).slice(0, limit); }
+  async entriesAfter(collectionPath, afterId, limit) { const all = (await this.entries(collectionPath)).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)); const from = afterId ? all.findIndex(([id]) => id > afterId) : 0; return from < 0 ? [] : all.slice(from, from + limit); }
   transaction(fn, { readOnly = false } = {}) {
     const run = this.tail.then(async () => {
       const working = new Map(structuredClone([...this.data])); let written = false, writes = 0;

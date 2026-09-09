@@ -97,7 +97,7 @@ test('webhooks: signature before parsing, then Stripe\'s events become the inbox
   const closing = event(f, 'refund.created', { object: 'refund', id: 're_2', charge: 'ch_1', amount: 400, status: 'succeeded' });
   const np2 = await last.gw.verify(...Object.values(signed(f, closing)).slice(0, 2), f.now()); assert.equal(np2.data.amountCents, 400); assert.equal(np2.data.full, true);
   const pendingRefund = event(f, 'refund.created', { object: 'refund', id: 're_3', charge: 'ch_1', amount: 100, status: 'pending' });
-  assert.equal((await last.gw.verify(...Object.values(signed(f, pendingRefund)).slice(0, 2), f.now())).type, 'stripe.refund.created:pending', 'a refund not yet succeeded is recorded and ignored');
+  const npend = await last.gw.verify(...Object.values(signed(f, pendingRefund)).slice(0, 2), f.now()); assert.equal(npend.type, 'refund.created', 'a refund counts from the moment it exists'); assert.equal(npend.data.amountCents, 100); assert.equal(npend.data.ref, 're_3');
   const total = event(f, 'charge.refunded', { object: 'charge', customer: 'cus_stripe1', amount: 900, amount_refunded: 900, refunded: true });
   assert.equal((await gw.verify(...Object.values(signed(f, total)).slice(0, 2), f.now())).type, 'stripe.charge.refunded', 'the charge running total is never a refund event');
   const gone = event(f, 'customer.subscription.deleted', { object: 'subscription', customer: 'cus_stripe1', metadata: { familyId: 'fam_1' } });

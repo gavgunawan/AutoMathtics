@@ -13,6 +13,8 @@ export class FirestoreStore {
   async list(collectionPath) { const snap = await this.db.collection(collectionPath).get(); return snap.docs.map((d) => this.decode(d.data())); }
   async entries(collectionPath, limit) { const q = limit ? this.db.collection(collectionPath).limit(limit) : this.db.collection(collectionPath); const snap = await q.get(); return snap.docs.map((d) => [d.id, this.decode(d.data())]); }
   async query(collectionPath, field, value, limit) { const snap = await this.db.collection(collectionPath).where(field, '==', value).limit(limit).get(); return snap.docs.map((d) => [d.id, this.decode(d.data())]); }
+  /** A page of a collection in document-id order, starting after `afterId` (null: the first page) — the sweep walks collections of any size with this. */
+  async entriesAfter(collectionPath, afterId, limit) { let q = this.db.collection(collectionPath).orderBy('__name__'); if (afterId) q = q.startAfter(afterId); const snap = await q.limit(limit).get(); return snap.docs.map((d) => [d.id, this.decode(d.data())]); }
   // readOnly transactions take no document locks, so read-only routes never contend with writers.
   transaction(fn, { readOnly = false } = {}) {
     return this.db.runTransaction((t) => fn({

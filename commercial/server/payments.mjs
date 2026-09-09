@@ -43,6 +43,7 @@ export const PROVIDER_EVENTS = Object.freeze({
   'subscription.deleted': 'terminate',
   'charge.refunded': 'refund', // the fake provider's refund fixture: one event per refund
   'refund.created': 'refund', // a real provider's per-refund object (never the charge's running total)
+  'dispute.opened': 'refund', // a card dispute takes the money back the moment it is opened: access ends then (the owner's policy)
 });
 // The fake provider's price ids. A payload never names a server plan; the gateway's own table
 // turns the provider's price id into one (a real provider's price ids go in its adapter's table).

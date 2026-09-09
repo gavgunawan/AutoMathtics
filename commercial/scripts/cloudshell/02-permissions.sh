@@ -22,7 +22,7 @@ for NAME in am-v3-session am-v3-pin-pepper; do
   gcloud secrets add-iam-policy-binding "$NAME" --project "$PROJECT_ID" --member="serviceAccount:$RUNTIME_SA" --role=roles/secretmanager.secretAccessor --quiet >/dev/null
 done
 # short-lived records expire by TTL; financial records never do (PAYMENTS.md → retention)
-for GROUP in sessions rateLimits pinAttempts operations audit recoveries; do
+for GROUP in sessions rateLimits pinAttempts operations audit recoveries sweeps; do
   gcloud firestore fields ttls update expireAt --collection-group="$GROUP" --enable-ttl --project "$PROJECT_ID" --quiet --async >/dev/null 2>&1 && echo "TTL policy requested for $GROUP"
 done
 echo 'BLOCK B DONE. Next: the two Stripe secrets, typed by you.'

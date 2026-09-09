@@ -15,7 +15,8 @@ import { fail, object, uuid, text } from './security.mjs';
 import { normalizeProgress, freshProgress } from './progress.mjs';
 import { reconcile } from './ledger.mjs';
 import { deriveState, effectiveEntitlement } from './subscription.mjs';
-import { sweepSessions } from './recovery.mjs';
+import { sweepSessions, RECOVERY_WINDOW_MS } from './recovery.mjs';
+import { INTENT_INFLIGHT_MS, AWAITING_PAYMENT_MS } from './payments.mjs';
 
 const DAY = 86_400_000, AUDIT_RETENTION_MS = 400 * DAY;
 export const DELETION_GRACE_MS = 14 * DAY;
@@ -34,6 +35,7 @@ export const RETENTION = Object.freeze({
   'audit/*': 'security and accountability trail (uid, familyId, childId, action); expires by TTL 400 days after each row',
   'deletions/{f}': 'the deletion record: who asked, who executed, what was removed and what was kept',
   'supportOperations/*': 'which operator started which corrective action, and how it ended',
+  'sweeps/*': 'the routine invariant sweep: counts and findings; expires by TTL 90 days after each run',
 });
 export const DELETION_BATCH = 300; // comfortably under Firestore's 500 writes per transaction
 const ACCESS = new Set(['trial', 'active', 'grace']);
@@ -202,6 +204,9 @@ export class Support {
       ledgerDamaged: children.filter((c) => c.ledger?.damaged).map((c) => c.id), ledgerDrift: children.filter((c) => c.ledger && !c.ledger.match && !c.ledger.damaged).map((c) => c.id),
       deletion: family.deletion || null, deleted: family.deleted === true,
       pendingRecoveries: recoveries.filter((r) => r.status === 'pending').map((r) => r.uid),
+      seatOverflow: (() => { const e = effectiveEntitlement(family, now); return !!e && e.status === 'active' && e.accessUntil > now && (family.activeChildIds || []).length > e.seatLimit; })(), // never true unless data was damaged: every access and every event enforces it
+      refundFailures: inbox.filter((e) => e.type === 'refund.failed').length, // a refund the provider could not complete: access already ended; the operator decides
+      disputesWon: inbox.filter((e) => e.type === 'dispute.won').length,      // the money came back after a dispute ended access; the operator may restore it
     };
     return { familyId, deleted: family.deleted === true, label: family.deleted ? null : family.label, createdAt: family.createdAt, phoneKey: family.phoneKey || null, timeZone: family.timeZone || null,
       entitlement: effectiveEntitlement(family, now), subscription: sub ? { ...sub, state: deriveState(sub, now) } : null, manualGrant: family.entitlement || null,
@@ -237,6 +242,107 @@ export class Support {
       this.audit(tx, 'support.reprocess', operator, familyId, { operationId: id, results: results.map((r) => `${r.id}:${r.status}`) });
     });
     return results;
+  }
+  /**
+   * The routine sweep (RECONCILIATION.md → Routine sweep): every family, every customer mapping, the inbox,
+   * against the invariants the code enforces at each access and each event — so anything that slipped past
+   * them, or was damaged, shows up somewhere a person looks daily. Read-only; one `sweeps/{id}` record and one
+   * audit row per run. Walks collections in pages of `batch`; keeps at most `maxFindings` findings in the
+   * record (the counts are complete). The CLI exits non-zero when there is a finding, so a scheduled run fails
+   * visibly.
+   */
+  async inspectAll({ operator, batch = 100, maxFindings = 200 } = {}) {
+    this.operator(operator);
+    const now = this.now(), startedAt = now, findings = [], counts = { families: 0, tombstones: 0, children: 0, activeChildren: 0, parents: 0, customerLinks: 0, customerMappings: 0, openIntents: 0, liveCheckouts: 0, openRecoveries: 0, inboxWaiting: 0, inboxReconciliation: 0, findings: 0 };
+    const add = (code, family, detail) => { counts.findings++; if (findings.length < maxFindings) findings.push({ code, family, detail }); };
+    for (let after = null; ;) {
+      const page = await this.store.entriesAfter('families', after, batch);
+      for (const [id, f] of page) await this.inspectFamily(id, f, now, add, counts);
+      if (page.length < batch) break; after = page.at(-1)[0];
+    }
+    for (let after = null; ;) { // every provider customer must point at a family that points back (NO_TRANSFER)
+      const page = await this.store.entriesAfter('billingCustomers', after, batch);
+      for (const [id, m] of page) {
+        counts.customerMappings++;
+        const fam = m.familyId ? await this.store.get(`families/${m.familyId}`) : null;
+        if (!fam) add('ORPHAN_CUSTOMER', m.familyId || null, `${id} points at no family`);
+        else if (!(fam.billing?.[m.provider] === m.customerRef || fam.providerCustomer?.[m.provider] === m.customerRef || (m.aliasOf && fam.billing?.[m.provider] === m.aliasOf))) add('CUSTOMER_NOT_ON_FAMILY', m.familyId, id);
+      }
+      if (page.length < batch) break; after = page.at(-1)[0];
+    }
+    for (let after = null; ;) { // the inbox: what still waits on somebody
+      const page = await this.store.entriesAfter('billingEvents', after, batch);
+      for (const [, e] of page) { if (e.outcome?.status === 'requires_action') counts.inboxWaiting++; if (e.outcome?.status === 'reconciliation_required' && !e.outcome.resolution) counts.inboxReconciliation++; }
+      if (page.length < batch) break; after = page.at(-1)[0];
+    }
+    const id = randomUUID(), record = { id, kind: 'sweep', operator, startedAt, finishedAt: this.now(), counts, findings, truncated: counts.findings > findings.length, expireAt: now + 90 * DAY };
+    await this.store.transaction(async (tx) => { tx.set(`sweeps/${id}`, record); this.audit(tx, 'support.sweep', operator, null, { sweepId: id, findings: counts.findings, families: counts.families }); });
+    return record;
+  }
+  /** One family against the invariants: seats, children, members and parents, provider links, subscription facts, open work. */
+  async inspectFamily(id, f, now, add, counts) {
+    if (f.deleted === true) {
+      counts.tombstones++;
+      if ((await this.store.entries(`families/${id}/children`, 1)).length) add('TOMBSTONE_RESIDUE', id, 'a child document remains');
+      if ((await this.store.entries(`families/${id}/learning`, 1)).length) add('TOMBSTONE_RESIDUE', id, 'a learning document remains');
+      if ((await this.store.query('sessions', 'familyId', id, 1)).length) add('TOMBSTONE_RESIDUE', id, 'a session remains');
+      if (f.deletion?.providerCancellation?.status === 'failed') add('DELETED_FAMILY_PROVIDER_LIVE', id, 'the provider subscription was not ended at deletion: reconcile-provider, then cancel at the provider');
+      return;
+    }
+    counts.families++;
+    const active = f.activeChildIds || [], childIds = f.childIds || [], e = effectiveEntitlement(f, now), live = !!e && e.status === 'active' && e.accessUntil > now;
+    counts.children += childIds.length; counts.activeChildren += active.length;
+    if (live && active.length > e.seatLimit) add('SEAT_OVERFLOW', id, `${active.length} active children for ${e.seatLimit} seats`);
+    if (new Set(active).size !== active.length) add('DUPLICATE_SEAT', id, 'a child seated twice');
+    for (const c of active) if (!childIds.includes(c)) add('ACTIVE_NOT_A_CHILD', id, c);
+    const children = await this.store.entries(`families/${id}/children`, 100);
+    if (children.length !== childIds.length) add('CHILD_LIST_MISMATCH', id, `${children.length} documents, ${childIds.length} listed`);
+    for (const [cid, c] of children) {
+      if (!childIds.includes(cid)) add('CHILD_NOT_LISTED', id, cid);
+      const seated = active.includes(cid);
+      if (seated && c.status !== 'active') add('SEATED_CHILD_INACTIVE', id, cid);
+      if (!seated && c.status === 'active') add('ACTIVE_CHILD_UNSEATED', id, cid);
+      const prog = await this.store.get(`families/${id}/learning/${cid}`);
+      if (prog) {
+        const led = reconcile(await this.store.list(`families/${id}/learning/${cid}/ledger`), normalizeProgress(prog).wallet);
+        if (led?.damaged) add('LEDGER_DAMAGED', id, cid); else if (led && !led.match) add('LEDGER_DRIFT', id, cid);
+      }
+    }
+    const members = await this.store.entries(`families/${id}/members`, 20);
+    if (!members.some(([, m]) => m.role === 'owner' && m.status === 'active')) add('NO_OWNER', id, 'no active owner member');
+    for (const [uid, m] of members) {
+      counts.parents++;
+      const p = await this.store.get(`parents/${uid}`);
+      if (!p) { add('MEMBER_WITHOUT_PARENT', id, uid); continue; }
+      if (m.status === 'active' && p.familyId !== id) add('PARENT_LINK_MISMATCH', id, `${uid} points at ${p.familyId || 'no family'}`);
+      if (m.status === 'active' && p.identityDeletion) add('DELETED_ACCOUNT_STILL_MEMBER', id, uid);
+      const rec = await this.store.get(`recoveries/${uid}`);
+      if (rec && (rec.status === 'pending' || rec.status === 'completing')) { counts.openRecoveries++; if (rec.status === 'completing' && rec.claimedAt < now - 3_600_000) add('RECOVERY_STUCK', id, `${uid}: claimed ${new Date(rec.claimedAt).toISOString()}, never completed`); if (rec.status === 'pending' && rec.readyAt + RECOVERY_WINDOW_MS < now) add('RECOVERY_LAPSED', id, uid); }
+    }
+    for (const [provider, ref] of [...Object.entries(f.billing || {}), ...Object.entries(f.providerCustomer || {})]) {
+      counts.customerLinks++;
+      const m = await this.store.get(`billingCustomers/${provider}:${ref}`);
+      if (!m) add('CUSTOMER_MAPPING_MISSING', id, `${provider}:${ref}`); else if (m.familyId !== id) add('CUSTOMER_MAPPING_MISMATCH', id, `${provider}:${ref} points at ${m.familyId}`);
+    }
+    const sub = f.subscription || null;
+    if (sub) {
+      const state = deriveState(sub, now);
+      if (sub.periodEnd && sub.periodEnd > now + 400 * DAY) add('SUBSCRIPTION_PERIOD_ABSURD', id, new Date(sub.periodEnd).toISOString());
+      if (['active', 'grace', 'past_due'].includes(state) && sub.plan !== 'trial' && sub.provider !== 'manual' && !f.billing?.[sub.provider]) add('PAID_WITHOUT_CUSTOMER', id, `${state} on ${sub.plan} via ${sub.provider}, no customer reference`);
+    }
+    for (const [, i] of await this.store.query('billingChangeIntents', 'familyId', id, 100)) {
+      if (['creating', 'awaiting_payment', 'stale', 'superseded', 'frozen_by_deletion'].includes(i.status)) counts.openIntents++;
+      if (i.status === 'creating' && i.createdAt < now - 5 * INTENT_INFLIGHT_MS) add('STALE_INTENT', id, i.operationId);
+      if (i.status === 'awaiting_payment' && i.awaitingSince < now - AWAITING_PAYMENT_MS) add('LAPSED_AWAITING_PAYMENT', id, i.operationId);
+    }
+    for (const [provider, cid] of Object.entries(f.checkoutIntent || {})) {
+      if (!cid) continue; counts.liveCheckouts++;
+      const c = await this.store.get(`checkouts/${provider}:${cid}`);
+      if (!c) add('CHECKOUT_MISSING', id, `${provider}:${cid}`); else if (['creating', 'pending'].includes(c.status) && c.createdAt < now - DAY) add('STALE_CHECKOUT', id, cid);
+    }
+    if (f.billingIntent && f.billingIntent.at < now - AWAITING_PAYMENT_MS) add('STALE_INFLIGHT_MARKER', id, f.billingIntent.operationId);
+    if (f.deletion && !['executing', 'done'].includes(f.deletion.status || '') && f.deletion.effectiveAt && f.deletion.effectiveAt < now) add('DELETION_DUE', id, `effective ${new Date(f.deletion.effectiveAt).toISOString()}: run delete`);
+    if (f.deletion?.status === 'executing' && f.deletion.startedAt < now - 3_600_000) add('DELETION_STUCK', id, `started ${new Date(f.deletion.startedAt).toISOString()}: rerun delete`);
   }
   /** Stage 4.4: the operator's only recovery verb — protective and audited; nothing here removes a factor or completes a request (RECOVERY.md). */
   async cancelRecovery(uid, operator, note) {
