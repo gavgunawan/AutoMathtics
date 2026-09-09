@@ -119,6 +119,18 @@ async function parent(email, phoneNumber, verified = true) {
   };
 }
 
+// a fresh MFA sign-in for an already enrolled parent (the same ceremony parent() ran), for tests that need a second session later
+async function signInAgain(email, uid) {
+  const password = 'Synthetic-password-7638';
+  const signIn = await post('v1/accounts:signInWithPassword', { email, password, returnSecureToken: true });
+  const mfaEnrollmentId = signIn.mfaInfo?.[0]?.mfaEnrollmentId; assert.ok(signIn.mfaPendingCredential && mfaEnrollmentId);
+  const mfaStart = await post('v2/accounts/mfaSignIn:start', { mfaPendingCredential: signIn.mfaPendingCredential, mfaEnrollmentId });
+  const codes = await fetch(`http://127.0.0.1:9099/emulator/v1/projects/${projectId}/verificationCodes`).then((r) => r.json());
+  const code = codes.verificationCodes.find((c) => c.sessionInfo === mfaStart.phoneResponseInfo.sessionInfo)?.code; assert.ok(code);
+  const final = await post('v2/accounts/mfaSignIn:finalize', { mfaPendingCredential: signIn.mfaPendingCredential, phoneVerificationInfo: { sessionInfo: mfaStart.phoneResponseInfo.sessionInfo, code } });
+  return { uid, idToken: final.idToken };
+}
+
 test('real Auth emulator rejects unverified email before account access', async () => {
   const p = await parent(`unverified-${randomUUID()}@example.test`, '+16505550110', false);
   await assert.rejects(service.login(p.idToken), rejected('VERIFY_EMAIL'));
@@ -317,4 +329,28 @@ test('real Firestore: a requested deletion removes the people and the game and l
   assert.deepEqual(await payments.receive('fake', lateRaw, { 'x-webhook-signature': signWebhook(webhookSecret, lateRaw, Date.now()) }), { status: 'reconciliation_required', reason: 'FAMILY_DELETED' });
   const after = (await db.doc(`families/${fam.id}`).get()).data(); assert.equal(after.deleted, true); assert.equal(after.subscription.state, 'cancelled');
   assert.equal((await db.doc(`billingEvents/fake:${late.id}`).get()).data().outcome.reason, 'FAMILY_DELETED');
+});
+test('real Auth: once the family is gone the parent deletes the sign-in account, and the Auth emulator no longer knows the user (Stage 4.0)', async () => {
+  const { Subscriptions } = await import('../server/subscription.mjs');
+  const { Payments, FakeGateway } = await import('../server/payments.mjs');
+  const { Support } = await import('../server/support.mjs');
+  const { webhookSecret } = await import('./support.mjs');
+  const billing = new Subscriptions({ foundation: service, store });
+  const payments = new Payments({ foundation: service, store, billing, provider: 'fake', gateways: { fake: new FakeGateway({ secret: webhookSecret }) } });
+  const support = new Support({ foundation: service, store, billing, payments });
+  const email = `leaving-${randomUUID()}@example.test`, p = await parent(email, '+16505550160');
+  const l = await service.authenticate(await service.login(p.idToken));
+  const fam = await service.createFamily(l, { label: 'Leaving for good', adultAttestation: true, consentVersion: 'pilot-v1' });
+  const ctx = await service.authenticate(fam.token);
+  await assert.rejects(support.deleteAccount(ctx, { operationId: randomUUID() }), rejected('FAMILY_STILL_EXISTS'));
+  await support.requestDeletion(ctx, { operationId: randomUUID() });
+  await support.executeDeletion(fam.id, { operator: 'emulator-operator', force: true });
+  await new Promise((r) => setTimeout(r, 1100)); // reauthAfter moved to this second: a token minted in the next one is fresh
+  const again = await signInAgain(email, p.uid); const ctx2 = await service.authenticate(await service.login(again.idToken));
+  assert.equal((await service.me(ctx2)).family, null);
+  const r = await support.deleteAccount(ctx2, { operationId: randomUUID() }); assert.equal(r.deleted, true);
+  await assert.rejects(auth.getUser(p.uid), (e) => e.code === 'auth/user-not-found', 'the Auth account is gone at the provider');
+  const tomb = (await db.doc(`parents/${p.uid}`).get()).data(); assert.equal(tomb.deleted, true); assert.ok(tomb.identityDeletion.deletedAt); assert.equal(typeof tomb.phoneKey, 'string');
+  assert.equal((await db.collection('sessions').where('uid', '==', p.uid).get()).size, 0);
+  await assert.rejects(service.login(again.idToken), rejected('INVALID_LOGIN'), 'a token of the deleted user cannot sign in');
 });

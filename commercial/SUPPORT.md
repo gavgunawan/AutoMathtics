@@ -68,12 +68,18 @@ A late provider event for a deleted (or executing) family is recorded in the inb
 `reconciliation_required: FAMILY_DELETED`, shown in the family report, and never revives product
 entitlement; Stage 4 reconciles, refunds or cancels at the provider.
 
-### What deletion is, and is not
+### The sign-in account (Stage 4)
 
-This deletes the **family** and its data. The parent's Firebase Authentication sign-in account is
-separate and is not deleted here; the browser module has no account-deletion operation yet.
-Self-service Auth-account deletion after the family deletion, and the retention period of the
-identity, are on the Stage 4 acceptance list.
+Family deletion removes the family and its data; the parent's Firebase Authentication account is
+separate. Once no family points at the parent — the family tombstone left `familyId: null`, or none
+was ever created — the parent may delete the sign-in account itself: `POST /api/account/deletion
+{ operationId }` (recent sign-in; `FAMILY_STILL_EXISTS` while a family remains). Two steps, so a
+provider failure is visible and retryable: every session of the uid is deleted and `parents/{uid}`
+gets `identityDeletion.requestedAt` in one transaction; then the Auth account is deleted at the
+provider and the record gets `identityDeletion.deletedAt`. The operator path is
+`scripts/support.mjs delete-account PARENT_UID` (also the retry). **Identity retention**: the email
+and phone number live in the Auth account and go with it; what remains is the parent tombstone with
+its phone key, so one trial per phone survives the account, and the audit rows (TTL 400 days).
 
 A tombstoned family admits no session (`FAMILY_DELETED`). Deleting the Firebase Auth account
 itself is the parent's action through the identity provider; the tombstone means a returning

@@ -54,9 +54,10 @@ export const fakeHasher = {
 export function fixture() {
   let clock = Date.parse('2026-09-06T10:00:00Z');
   const store = new MemoryStore(), users = new Map(), tokens = new Map();
-  const auth = { verifyCalls: [], getUserCalls: 0,
+  const auth = { verifyCalls: [], getUserCalls: 0, deleted: [], failDelete: null,
     verifyIdToken: async (t, revoked) => { auth.verifyCalls.push(revoked); if (!tokens.has(t)) throw Error('invalid'); return structuredClone(tokens.get(t)); },
     getUser: async (uid) => { auth.getUserCalls++; if (!users.has(uid)) throw Error('missing'); return structuredClone(users.get(uid)); },
+    deleteUser: async (uid) => { if (auth.failDelete) { const e = auth.failDelete; auth.failDelete = null; throw e; } if (!users.has(uid)) throw Error('missing'); users.delete(uid); auth.deleted.push(uid); },
   };
   const identity = new FirebaseIdentity(auth, { now: () => clock });
   const service = new Foundation({ store, identity, hasher: fakeHasher, secret, now: () => clock });
