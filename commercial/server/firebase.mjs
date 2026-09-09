@@ -11,14 +11,16 @@ export class FirestoreStore {
   async get(path) { const snap = await this.db.doc(path).get(); return snap.exists ? this.decode(snap.data()) : null; }
   // Every document directly under a collection path (reconciliation reads a child's whole ledger).
   async list(collectionPath) { const snap = await this.db.collection(collectionPath).get(); return snap.docs.map((d) => this.decode(d.data())); }
-  async entries(collectionPath) { const snap = await this.db.collection(collectionPath).get(); return snap.docs.map((d) => [d.id, this.decode(d.data())]); }
+  async entries(collectionPath, limit) { const q = limit ? this.db.collection(collectionPath).limit(limit) : this.db.collection(collectionPath); const snap = await q.get(); return snap.docs.map((d) => [d.id, this.decode(d.data())]); }
+  async query(collectionPath, field, value, limit) { const snap = await this.db.collection(collectionPath).where(field, '==', value).limit(limit).get(); return snap.docs.map((d) => [d.id, this.decode(d.data())]); }
   // readOnly transactions take no document locks, so read-only routes never contend with writers.
   transaction(fn, { readOnly = false } = {}) {
     return this.db.runTransaction((t) => fn({
       get: async (path) => { const s = await t.get(this.db.doc(path)); return s.exists ? this.decode(s.data()) : null; },
       // A whole collection read under the transaction (Firestore locks the documents it returns).
       list: async (collectionPath) => { const s = await t.get(this.db.collection(collectionPath)); return s.docs.map((d) => this.decode(d.data())); },
-      entries: async (collectionPath) => { const s = await t.get(this.db.collection(collectionPath)); return s.docs.map((d) => [d.id, this.decode(d.data())]); },
+      entries: async (collectionPath, limit) => { const s = await t.get(limit ? this.db.collection(collectionPath).limit(limit) : this.db.collection(collectionPath)); return s.docs.map((d) => [d.id, this.decode(d.data())]); },
+      query: async (collectionPath, field, value, limit) => { const s = await t.get(this.db.collection(collectionPath).where(field, '==', value).limit(limit)); return s.docs.map((d) => [d.id, this.decode(d.data())]); },
       set: (path, value) => t.set(this.db.doc(path), this.encode(value)),
       delete: (path) => t.delete(this.db.doc(path)),
     }), readOnly ? { readOnly: true } : undefined);
