@@ -129,7 +129,7 @@ for GROUP in sessions rateLimits pinAttempts operations audit; do
 done
 ```
 
-`checkouts`, `billingChangeIntents`, `billingEvents`, `billingCustomers` and `families/*/billing` carry no
+`checkouts`, `billingChangeIntents`, `billingReconciliations`, `deletions`, `billingEvents`, `billingCustomers` and `families/*/billing` carry no
 `expireAt` on purpose: they are financial idempotency and recovery evidence and are kept under the
 retention policy in `PAYMENTS.md`, never by TTL (S3.4-G).
 

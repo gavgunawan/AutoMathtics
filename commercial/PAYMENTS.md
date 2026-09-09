@@ -136,7 +136,10 @@ intent cannot be bypassed with a fresh checkout. Past-due recovery is explicit p
 dunning invoice (a renewal on the plan on record) or start a checkout for any plan. One checkout
 is live per family and provider (`families/{f}.checkoutIntent`): a newer one supersedes the
 older in the same transaction, and the older one's later completion is refused
-(`CHECKOUT_SUPERSEDED`) — never two transitions for two paid sessions.
+(`CHECKOUT_SUPERSEDED`) — never two transitions for two paid sessions. Replaying a superseded checkout's
+operation id returns it marked `superseded` with no URL: a superseded hosted session is never shown again.
+Stage 4: the adapter cancels or expires the provider's session where the provider allows it; where it
+cannot, a late payment on it is reconciled and refunded (`SUPPORT.md`).
 
 ## What the change intent does and does not give (S3.4-F, honest wording)
 

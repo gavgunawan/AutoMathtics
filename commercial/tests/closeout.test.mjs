@@ -46,7 +46,7 @@ test('S3.3/3.4-E: one live checkout per family and provider — a newer one supe
   const second = await f.payments.checkout(a.ctx, { plan: 'family', ...op() });
   const rec1 = await f.store.get(`checkouts/fake:${first.checkoutId}`); assert.equal(rec1.status, 'superseded'); assert.equal(rec1.supersededBy, second.checkoutId);
   assert.equal((await f.store.get(`families/${a.familyId}`)).checkoutIntent.fake, second.checkoutId);
-  assert.deepEqual(await f.payments.checkout(a.ctx, { plan: 'starter', operationId: first.checkoutId }), first, 'the superseded checkout still replays its own result');
+  assert.deepEqual(await f.payments.checkout(a.ctx, { plan: 'starter', operationId: first.checkoutId }), { ...first, url: null, superseded: true }, 'the superseded checkout replays as superseded, never with a session to pay');
   assert.deepEqual(await complete(f, first, 'starter'), { status: 'rejected', reason: 'CHECKOUT_SUPERSEDED' }, 'paying the old session cannot transition the family');
   assert.equal((await f.store.get(`families/${a.familyId}`)).subscription, undefined);
   assert.equal((await complete(f, second, 'family')).status, 'applied');

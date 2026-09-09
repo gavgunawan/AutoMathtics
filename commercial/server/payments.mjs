@@ -144,6 +144,7 @@ export class Payments {
       const existing = await tx.get(path);
       if (existing) {
         if (existing.familyId !== s.familyId || existing.fingerprint !== fingerprint) fail(409, 'IDEMPOTENCY_CONFLICT'); // same id, another plan or family: never the first checkout
+        if (existing.status === 'superseded') return { done: { ...existing.result, url: null, superseded: true } }; // never redisplay a superseded hosted session
         if (existing.status !== 'creating') return { done: existing.result };
         return { familyId: s.familyId, uid: s.uid, customerRef: existing.customerRef }; // an earlier attempt stopped between the intent and the provider: resume with the same key
       }
@@ -202,7 +203,7 @@ export class Payments {
       if (intent) {
         if (intent.familyId !== s.familyId || intent.fingerprint !== fingerprint) fail(409, 'IDEMPOTENCY_CONFLICT'); // S3.4-A: the seat choice is part of the request
         if (intent.status === 'applied') return { done: intent.result, customerRef: intent.customerRef };
-        if (intent.status === 'stale' || intent.status === 'superseded') fail(409, 'SUBSCRIPTION_CHANGED');
+        if (intent.status !== 'creating') fail(409, 'SUBSCRIPTION_CHANGED'); // stale, superseded or reconciled: closed for good
         return { intent }; // creating: an earlier attempt stopped before finalising — resume with the same key
       }
       const sub = family.subscription; if (!sub) fail(409, 'NO_SUBSCRIPTION');
@@ -238,7 +239,7 @@ export class Payments {
       const { s, family } = await this.billing.parent(tx, ctx, true);
       const current = await tx.get(path);
       if (!current || current.status === 'applied') return { result: current?.result ?? null };
-      if (current.status === 'stale' || current.status === 'superseded') return { stale: true };
+      if (current.status !== 'creating') return { stale: true }; // stale, superseded or reconciled by an operator meanwhile
       const mine = family.billingIntent?.operationId === operationId;
       if (!mine || (family.subscription?.version ?? null) !== current.subscriptionVersion) {
         // the subscription moved, or another change took this one over, while the provider was being asked:

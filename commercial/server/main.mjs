@@ -6,6 +6,7 @@ import { Learning } from './learning.mjs';
 import { Game } from './game.mjs';
 import { Subscriptions } from './subscription.mjs';
 import { Payments, FakeGateway } from './payments.mjs';
+import { Support } from './support.mjs';
 import { createApp } from './http.mjs';
 
 const cfg = config(); // Validate BEFORE loading SDKs or opening network connections.
@@ -20,7 +21,8 @@ const learning = new Learning({ foundation: service, store });
 const game = new Game({ foundation: service, store });
 const billing = new Subscriptions({ foundation: service, store });
 const payments = new Payments({ foundation: service, store, billing, provider: cfg.payments.provider, gateways: { fake: new FakeGateway({ secret: cfg.payments.webhookSecrets.fake }) } });
-const server = createApp(service, cfg, { reportError: (event) => console.error(JSON.stringify(event)), learning, game, billing, payments });
+const support = new Support({ foundation: service, store, billing, payments });
+const server = createApp(service, cfg, { reportError: (event) => console.error(JSON.stringify(event)), learning, game, billing, payments, support });
 server.listen(cfg.port, cfg.emulator ? '127.0.0.1' : '0.0.0.0', () => {
   console.log(JSON.stringify({ event: 'foundation_ready', mode: cfg.mode, port: cfg.port }));
 });

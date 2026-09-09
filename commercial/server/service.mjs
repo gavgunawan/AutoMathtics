@@ -69,6 +69,7 @@ export class Foundation {
     const member = await tx.get(`families/${s.familyId}/members/${s.uid}`);
     const family = await tx.get(`families/${s.familyId}`);
     if (!member || member.role !== 'owner' || member.status !== 'active' || !family) fail(403, 'ACCESS_DENIED');
+    if (family.deleted === true) fail(403, 'FAMILY_DELETED'); // a tombstone (Stage 3.5) admits nobody
     if (s.role !== 'child' || allowRevokedChild) return { s, parent, family };
     // A child session is only as good as its child: active, entitled, and holding the current
     // PIN version. This lives here, not in the routes, so no future route can forget it.
@@ -127,7 +128,7 @@ export class Foundation {
       }
       return { role: s.role, csrf: s.csrf, ...(s.role === 'parent' ? { parent: { uid: s.uid } } : {}), family: family ? {
         id: family.id, label: family.label, children,
-        ...(s.role === 'parent' ? { entitlement: effectiveEntitlement(family, this.now()), activeCount: family.activeChildIds.length } : {}),
+        ...(s.role === 'parent' ? { entitlement: effectiveEntitlement(family, this.now()), activeCount: family.activeChildIds.length, deletion: family.deletion ? { requestedAt: family.deletion.requestedAt, effectiveAt: family.deletion.effectiveAt } : null } : {}),
       } : null };
     }, { readOnly: true });
   }
