@@ -4,6 +4,7 @@ import { Foundation } from './service.mjs';
 import { FirebaseIdentity, FirestoreStore } from './firebase.mjs';
 import { Learning } from './learning.mjs';
 import { Game } from './game.mjs';
+import { Subscriptions } from './subscription.mjs';
 import { createApp } from './http.mjs';
 
 const cfg = config(); // Validate BEFORE loading SDKs or opening network connections.
@@ -16,7 +17,8 @@ const service = new Foundation({ store, identity: new FirebaseIdentity(getAuth(a
   hasher: pinHasher(cfg.pepper, cfg.previousPeppers), secret: cfg.secret });
 const learning = new Learning({ foundation: service, store });
 const game = new Game({ foundation: service, store });
-const server = createApp(service, cfg, { reportError: (event) => console.error(JSON.stringify(event)), learning, game });
+const billing = new Subscriptions({ foundation: service, store });
+const server = createApp(service, cfg, { reportError: (event) => console.error(JSON.stringify(event)), learning, game, billing });
 server.listen(cfg.port, cfg.emulator ? '127.0.0.1' : '0.0.0.0', () => {
   console.log(JSON.stringify({ event: 'foundation_ready', mode: cfg.mode, port: cfg.port }));
 });

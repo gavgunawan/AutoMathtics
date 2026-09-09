@@ -5,9 +5,9 @@ for development by the review team on 9 Sep 2026). Order agreed with the team:
 
 | Step | Scope | Status |
 |---|---|---|
-| **3.1** | Commercial ledger hardening — balances reconcilable and derived before money enters | **this branch** |
-| 3.2 | Subscription + entitlement state machine: trial, active, grace, past-due, cancelled, expired; seat plans; one trial per `phoneKey` | next |
-| 3.3 | Payment gateway abstraction + webhook security, with local/fake payment events (the $0 constraint holds) | |
+| 3.1 | Commercial ledger hardening — balances reconcilable and derived before money enters | merged (PR #9) |
+| **3.2** | Subscription + entitlement state machine: trial, active, grace, past-due, cancelled, expired; seat plans; one trial per `phoneKey` — see `SUBSCRIPTIONS.md` | **this branch** |
+| 3.3 | Payment gateway abstraction + webhook security, with local/fake payment events (the $0 constraint holds) | next |
 | 3.4 | Upgrade / downgrade / cancel / refund lifecycle | |
 | 3.5 | Recovery, export, deletion, commercial admin/support tooling | |
 | Stage 4 | Real provider, staging environment, private pilot | |

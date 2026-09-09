@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Fault, fail, sha256, mac, randomToken, object, text, uuid, pin, childInput, publicChild } from './security.mjs';
+import { effectiveEntitlement } from './subscription.mjs';
 
 const MINUTE = 60_000, DAY = 24 * 60 * MINUTE;
 const FAMILY_LIMIT = 20; // Pilot safety cap, independent of paid seat count.
@@ -80,8 +81,9 @@ export class Foundation {
   requireRecent(s) {
     if (s.authTime * 1000 < this.now() - 5 * MINUTE) fail(403, 'REAUTHENTICATE');
   }
+  // A subscription (Stage 3.2) wins over a manual pilot grant; its state is derived from its facts and the clock.
   entitlement(family, childId = null) {
-    const e = family.entitlement;
+    const e = effectiveEntitlement(family, this.now());
     if (!e || e.status !== 'active' || !Number.isSafeInteger(e.accessUntil) || e.accessUntil <= this.now()) fail(403, 'SUBSCRIPTION_INACTIVE');
     if (!Number.isInteger(e.seatLimit) || e.seatLimit < 1 || e.seatLimit > FAMILY_LIMIT ||
         !Array.isArray(family.activeChildIds) || family.activeChildIds.length > e.seatLimit) fail(403, 'ACCESS_DENIED');
@@ -125,7 +127,7 @@ export class Foundation {
       }
       return { role: s.role, csrf: s.csrf, ...(s.role === 'parent' ? { parent: { uid: s.uid } } : {}), family: family ? {
         id: family.id, label: family.label, children,
-        ...(s.role === 'parent' ? { entitlement: family.entitlement, activeCount: family.activeChildIds.length } : {}),
+        ...(s.role === 'parent' ? { entitlement: effectiveEntitlement(family, this.now()), activeCount: family.activeChildIds.length } : {}),
       } : null };
     }, { readOnly: true });
   }
@@ -144,7 +146,8 @@ export class Foundation {
       if (parent.familyId) return { id: parent.familyId, token: null }; // Existing family; no boundary change.
       tx.set(`families/${familyId}`, { id: familyId, label, childIds: [], activeChildIds: [], createdAt: this.now(), timeZone: DEFAULT_TIME_ZONE, phoneKey: parent.phoneKey || null,
         entitlement: { status: 'inactive', seatLimit: 0, accessUntil: 0, version: 0, source: 'manual' } });
-      if (ledgerPath) tx.set(ledgerPath, { families: [...(ledger?.families || []), familyId], count: (ledger?.count || 0) + 1, firstAt: ledger?.firstAt || this.now(), lastAt: this.now() });
+      // Merge, never replace: the ledger also carries trialFamilyId/trialAt, and a second family must not reset them.
+      if (ledgerPath) tx.set(ledgerPath, { ...(ledger || {}), families: [...(ledger?.families || []), familyId], count: (ledger?.count || 0) + 1, firstAt: ledger?.firstAt || this.now(), lastAt: this.now() });
       tx.set(`families/${familyId}/members/${s.uid}`, { role: 'owner', status: 'active' });
       tx.set(`parents/${s.uid}`, { ...parent, familyId, consentVersion: 'pilot-v1', attestedAt: this.now() });
       const token = this.rotateSession(tx, ctx, s, { familyId });
@@ -160,7 +163,7 @@ export class Foundation {
       return authorized;
     });
     this.requireRecent(initial.s);
-    this.entitlement(initial.family);
+    const seats = this.entitlement(initial.family).seatLimit; // the effective entitlement (a subscription, or the manual grant)
     const familyId = initial.s.familyId, childId = randomUUID();
     // The replay record commits to the profile, never to the PIN in any form: the browser mints
     // a new request id whenever any field changes, so a PIN-only edit is a new request anyway.
@@ -171,7 +174,7 @@ export class Foundation {
       if (existing.uid !== ctx.uid || existing.fingerprint !== fingerprint) fail(409, 'IDEMPOTENCY_CONFLICT');
       return { child: existing.child };
     }
-    if (initial.family.activeChildIds.length >= initial.family.entitlement.seatLimit) fail(409, 'CHILD_LIMIT_REACHED');
+    if (initial.family.activeChildIds.length >= seats) fail(409, 'CHILD_LIMIT_REACHED');
     if (initial.family.childIds.length >= FAMILY_LIMIT) fail(409, 'PILOT_PROFILE_LIMIT');
     const hash = await this.hasher.hash(familyId, childId, input.pin);
     return this.store.transaction(async (tx) => {
@@ -351,6 +354,7 @@ export async function grantEntitlement(store, { familyId, seatLimit, accessUntil
   return store.transaction(async (tx) => {
     const path = `families/${familyId}`, family = await tx.get(path);
     if (!family) fail(404, 'FAMILY_NOT_FOUND');
+    if (family.subscription) fail(409, 'SUBSCRIPTION_MANAGED'); // a subscribed family's seats come from its subscription events
     const active = keepChildIds ?? family.activeChildIds;
     if (active.length > seatLimit || active.some((id) => !family.childIds.includes(id))) fail(409, 'SELECT_CHILDREN_FOR_DOWNGRADE');
     const children = [];
