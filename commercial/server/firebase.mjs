@@ -47,7 +47,10 @@ export class FirebaseIdentity {
         !user.multiFactor?.enrolledFactors?.some((f) => f.factorId === 'phone' && f.uid === mfaUid)) fail(403, 'VERIFY_MOBILE_WITH_MFA');
     if (!Number.isSafeInteger(decoded.auth_time) || decoded.auth_time * 1000 < now - 300_000 ||
         decoded.auth_time * 1000 > now + 30_000) fail(403, 'REAUTHENTICATE');
-    const who = { uid: decoded.uid, email: user.email, mfaUid, authTime: decoded.auth_time };
+    // The verified phone behind the MFA factor is the one identity a parent cannot mint for free;
+    // the service keys families to an HMAC of it (never the number itself).
+    const factor = user.multiFactor.enrolledFactors.find((f) => f.factorId === 'phone' && f.uid === mfaUid);
+    const who = { uid: decoded.uid, email: user.email, mfaUid, authTime: decoded.auth_time, phone: typeof factor.phoneNumber === 'string' ? factor.phoneNumber : null };
     this.check(user, who);
     return who;
   }
