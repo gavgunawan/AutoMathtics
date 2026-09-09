@@ -67,6 +67,7 @@ hand. A dispute lost changes nothing more.
 | `DELETED_FAMILY_PROVIDER_LIVE` | the family is deleted, the provider still bills (`deletions/{f}.providerCancellation` says `failed`) | cancel at the provider now; `resolve-event PROVIDER EVENT_ID cancelled_at_provider "…"` for the late notice; refund in the dashboard if a charge landed after the deletion |
 | `UNKNOWN_PROVIDER_PRICE` | the provider bills a price id the adapter does not know | a price was created or changed in the dashboard: fix the `STRIPE_PRICE_*` configuration or move the subscription to a known price |
 | `PROVIDER_UNREACHABLE` | no verdict this run | retry; if it persists, the key or the network, not the family |
+| `MULTIPLE_PROVIDER_SUBSCRIPTIONS` | the customer has two (or more) live subscriptions at the provider — something the dashboard can do, or a crash the fourth-round fix now prevents | look at both in the dashboard, cancel the one that is not the family's (`reconcile-provider` names the refs and prices), then reconcile again. Until then a plan change, a cancellation, a fresh checkout and a deletion all fail closed with this code — nothing picks one of the two blindly |
 
 An intent in `awaiting_payment` is an upgrade Stripe holds until its proration invoice is paid: nothing to do
 for a day (the parent finishes the payment on the hosted invoice; the `invoice.paid` of that invoice — its id is on

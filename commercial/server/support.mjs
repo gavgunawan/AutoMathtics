@@ -44,8 +44,11 @@ const flagged = (docs, key, values) => docs.filter((d) => values.includes(d[key]
 export const EVENT_OUTCOMES = Object.freeze(['refunded_at_provider', 'cancelled_at_provider', 'applied_by_operator', 'no_action_needed']);
 const OPEN_EVENT = new Set(['reconciliation_required', 'rejected']);
 
+// The audit collection is every family's, TTL 400 days; one family writes a few rows a day, so the cap is years of rows.
+const AUDIT_PAGE = 1000, AUDIT_CAP = 50_000;
 export class Support {
-  constructor({ foundation, store, billing = null, payments = null, now = Date.now }) {
+  constructor({ foundation, store, billing = null, payments = null, now = Date.now, auditPage = AUDIT_PAGE, auditCap = AUDIT_CAP }) {
+    this.auditPage = auditPage; this.auditCap = auditCap;
     this.foundation = foundation; this.store = store; this.billing = billing; this.payments = payments; this.now = now;
   }
   audit(tx, action, actor, familyId, extra = {}) {
@@ -73,10 +76,22 @@ export class Support {
     const config = await tx.get(`families/${f}/game/config`);
     const billing = (await tx.list(`families/${f}/billing`)).sort((a, b) => a.at - b.at)
       .map((e) => ({ id: e.id, type: e.type, plan: e.plan, periodEnd: e.periodEnd, amountCents: e.amountCents ?? null, at: e.at, actor: e.actor, state: e.result?.state || null }));
-    const audit = (await tx.query('audit', 'familyId', f, 5000)).map(([, a]) => a).sort((a, b) => a.at - b.at).map((a) => ({ action: a.action, at: a.at, childId: a.childId || null })); // this family's rows only: the collection is every family's (Stage 4 review, third round)
+    const trail = await this.familyAudit(tx, f), audit = trail.rows.map((a) => ({ action: a.action, at: a.at, childId: a.childId || null })); // every row of this family's, in pages (fourth round)
     return { exportedAt: this.now(), exportedBy: uid,
       family: { id: f, label: family.label, createdAt: family.createdAt, timeZone: family.timeZone || null, activeChildIds: family.activeChildIds || [], deletion: family.deletion || null },
-      entitlement: effectiveEntitlement(family, this.now()), subscription: family.subscription || null, billing, gameConfig: config || null, children, audit };
+      entitlement: effectiveEntitlement(family, this.now()), subscription: family.subscription || null, billing, gameConfig: config || null, children, audit, auditTruncated: trail.truncated };
+  }
+  /** Every audit row of one family, oldest first, read in pages under the reader given (a transaction or the store); `truncated` only past the cap. */
+  async familyAudit(reader, familyId) {
+    const rows = []; let after = null, truncated = false;
+    for (;;) {
+      const page = await reader.queryAfter('audit', 'familyId', familyId, after, this.auditPage);
+      for (const [, a] of page) rows.push(a);
+      if (page.length < this.auditPage) break;
+      if (rows.length >= this.auditCap) { truncated = true; break; }
+      after = page.at(-1)[0];
+    }
+    return { rows: rows.slice(0, this.auditCap).sort((a, b) => a.at - b.at), truncated };
   }
   /** The parent asks for the family to be deleted. Nothing changes for 14 days; the parent can take it back. */
   async requestDeletion(ctx, body) {
@@ -187,7 +202,7 @@ export class Support {
     const checkouts = (await this.store.list('checkouts')).filter((c) => c.familyId === familyId).sort((a, b) => a.createdAt - b.createdAt)
       .map((c) => ({ checkoutId: c.checkoutId, provider: c.provider, plan: c.plan, status: c.status, providerCheckoutRef: c.providerCheckoutRef || null, supersededBy: c.supersededBy || null, createdAt: c.createdAt }));
     const billing = (await this.store.list(`families/${familyId}/billing`)).sort((a, b) => a.at - b.at).map((e) => ({ id: e.id, type: e.type, plan: e.plan, at: e.at, actor: e.actor, state: e.result?.state || null }));
-    const audit = (await this.store.query('audit', 'familyId', familyId, 5000)).map(([, a]) => a).sort((a, b) => a.at - b.at).map((a) => ({ action: a.action, uid: a.uid, at: a.at, childId: a.childId || null })); // this family's rows only
+    const trail = await this.familyAudit(this.store, familyId), audit = trail.rows.map((a) => ({ action: a.action, uid: a.uid, at: a.at, childId: a.childId || null })), auditTruncated = trail.truncated; // every row, in pages (fourth round)
     const reconciliations = (await this.store.list('billingReconciliations')).filter((r) => r.familyId === familyId);
     const providerChecks = reconciliations.filter((r) => r.kind === 'provider_state').sort((a, b) => b.at - a.at);
     const members = family.deleted ? [] : await this.store.entries(`families/${familyId}/members`), recoveries = []; // Stage 4.4: the parents' recovery requests
@@ -210,7 +225,7 @@ export class Support {
     };
     return { familyId, deleted: family.deleted === true, label: family.deleted ? null : family.label, createdAt: family.createdAt, phoneKey: family.phoneKey || null, timeZone: family.timeZone || null,
       entitlement: effectiveEntitlement(family, now), subscription: sub ? { ...sub, state: deriveState(sub, now) } : null, manualGrant: family.entitlement || null,
-      children, customers, inbox, intents, checkouts, billing, reconciliations, recoveries, audit, attention };
+      children, customers, inbox, intents, checkouts, billing, reconciliations, recoveries, audit, auditTruncated, attention };
   }
   /** Provider customer reference → family. */
   async customerLookup(provider, ref) {
@@ -379,6 +394,7 @@ export class Support {
       else if (st.error) add('PROVIDER_UNREACHABLE', st.error);
       else if (st.simulated) { /* the fake provider holds nothing to compare */ }
       else if (!st.customer) { if (wantsProvider && relevant) add('NO_PROVIDER_CUSTOMER', `the family is ${state} on ${local.plan}; the provider knows no customer for its reference`); }
+      else if (st.multiple) add('MULTIPLE_PROVIDER_SUBSCRIPTIONS', `${st.liveCount} live subscriptions at the provider (${(st.subscriptions || []).map((x) => `${x.ref} ${x.plan || x.price}`).join(', ')}): cancel the wrong one in the dashboard, then reconcile again — plan changes, cancellations, deletions and checkouts fail closed until then`);
       else if (!live) { if (wantsProvider && relevant) add('NO_PROVIDER_SUBSCRIPTION', `the family is ${state} on ${local.plan}; the provider has ${ps ? `a ${ps.status}` : 'no'} subscription`); }
       else if (gone) add('DELETED_FAMILY_PROVIDER_LIVE', `the family is deleted; the provider's subscription ${ps.ref} is ${ps.status} — cancel it there, then resolve-event its late notice`);
       else if (!wantsProvider) add('PROVIDER_SUBSCRIPTION_LIVE', `the family is ${state}; the provider's subscription ${ps.ref} is ${ps.status}`);
@@ -388,7 +404,7 @@ export class Support {
         if (ps.periodEnd && local.periodEnd && Math.abs(ps.periodEnd - local.periodEnd) > 60_000) add('PERIOD_END_MISMATCH', `provider ${new Date(ps.periodEnd).toISOString()}; family ${new Date(local.periodEnd).toISOString()}`);
         if (ps.cancelAtPeriodEnd !== local.cancelAtPeriodEnd) add('CANCEL_FLAG_MISMATCH', `provider cancel at period end ${ps.cancelAtPeriodEnd}; family ${local.cancelAtPeriodEnd}`);
       }
-      providers.push({ provider, ref, available: st.available, simulated: st.simulated === true, error: st.error || null, customer: st.customer || null, subscription: ps, findings });
+      providers.push({ provider, ref, available: st.available, simulated: st.simulated === true, error: st.error || null, customer: st.customer || null, subscription: ps, liveCount: st.liveCount ?? null, findings });
     }
     const target = (i) => (i.kind === 'clear' ? i.fromPlan : i.toPlan);
     const intents = (await this.store.query('billingChangeIntents', 'familyId', familyId, 100)).map(([, i]) => i).filter((i) => ['creating', 'awaiting_payment', 'stale', 'superseded', 'frozen_by_deletion'].includes(i.status)).sort((a, b) => a.createdAt - b.createdAt)

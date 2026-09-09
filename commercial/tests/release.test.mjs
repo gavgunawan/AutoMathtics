@@ -24,13 +24,21 @@ test('live health endpoint identifies v3.0 without exposing private configuratio
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   t.after(() => { server.closeAllConnections(); server.close(); });
   const res = await fetch(`http://127.0.0.1:${server.address().port}/api/health`);
-  assert.deepEqual(await res.json(), { status: 'ok', version: VERSION });
+  assert.deepEqual(await res.json(), { status: 'ok', version: VERSION, release: null });
   assert.match(res.headers.get('cache-control'), /no-store/);
   // the proxy-depth measurement (DEPLOY_V3.md §5): a count, and the leading entry only when it is a documentation address
   const probe = await fetch(`http://127.0.0.1:${server.address().port}/api/health`, { headers: { 'X-Forwarded-For': '203.0.113.250, 198.51.100.7, 192.0.2.9' } });
-  assert.deepEqual(await probe.json(), { status: 'ok', version: VERSION, forwarded: 3, leading: '203.0.113.250' });
+  assert.deepEqual(await probe.json(), { status: 'ok', version: VERSION, release: null, forwarded: 3, leading: '203.0.113.250' });
   const real = await fetch(`http://127.0.0.1:${server.address().port}/api/health`, { headers: { 'X-Forwarded-For': '8.8.8.8, 192.0.2.9' } });
-  assert.deepEqual(await real.json(), { status: 'ok', version: VERSION, forwarded: 2 }, 'a real address is never echoed');
+  assert.deepEqual(await real.json(), { status: 'ok', version: VERSION, release: null, forwarded: 2 }, 'a real address is never echoed');
+});
+test('the commit a revision runs is a fact the service states: /api/health carries RELEASE_SHA, the deploy helper records it and refuses a dirty or commitless checkout', async (t) => {
+  const f = fixture(), sha = 'ab'.repeat(20);
+  const server = createApp(f.service, { origin: 'https://pilot.example.test', secret, emulator: false, releaseSha: sha, web: { authDomain: 'demo-am-foundation.firebaseapp.com' } });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening'); t.after(() => { server.closeAllConnections(); server.close(); });
+  assert.deepEqual(await (await fetch(`http://127.0.0.1:${server.address().port}/api/health`)).json(), { status: 'ok', version: VERSION, release: sha });
+  const helper = await read('../scripts/deploy-staging.sh');
+  for (const s of ['RELEASE_SHA="$(git rev-parse HEAD', '^[0-9a-f]{40}$', 'git status --porcelain --untracked-files=no', '--labels "release-sha=$RELEASE_SHA"', 'RELEASE_SHA: p.RELEASE_SHA', 'result.release !== sha']) assert.ok(helper.includes(s), s);
 });
 test('the parent screens wear the game\'s own faces, served from this origin: /fonts with a year of cache, font-src self, no third-party font request', async (t) => {
   const f = fixture();

@@ -107,10 +107,21 @@ export class StripeGateway {
     const found = await this.api('GET', `/v1/customers/search?query=${encodeURIComponent(`metadata['customerRef']:'${customerRef}'`)}&limit=1`);
     return found.data?.[0] || null;
   }
-  /** The subscription that matters for a customer: a live one, else the most recent. */
+  /** Every subscription of a customer, the live ones apart. */
+  async subscriptionsOf(cusId) {
+    const subs = await this.api('GET', `/v1/subscriptions?customer=${cusId}&status=all&limit=100`), data = subs.data || [];
+    return { live: data.filter((s) => LIVE.has(s.status)), all: data };
+  }
+  /**
+   * The subscription that matters for a customer: the live one, else the most recent. Two live ones is a state this server
+   * never makes (a checkout ends the previous one first) but the dashboard can: then nothing here may pick one — a plan change,
+   * a cancellation, an ending would land on the wrong subscription half the time — and the operator resolves it first
+   * (RECONCILIATION.md, `MULTIPLE_PROVIDER_SUBSCRIPTIONS`; Stage 4 review, fourth round).
+   */
   async subscriptionOf(cusId) {
-    const subs = await this.api('GET', `/v1/subscriptions?customer=${cusId}&status=all&limit=10`), data = subs.data || [];
-    return data.find((s) => LIVE.has(s.status)) || data[0] || null;
+    const { live, all } = await this.subscriptionsOf(cusId);
+    if (live.length > 1) fail(409, 'MULTIPLE_PROVIDER_SUBSCRIPTIONS');
+    return live[0] || all[0] || null;
   }
   async liveSubscription(customerRef) {
     const cus = await this.findCustomer(customerRef); if (!cus) fail(409, 'NO_PROVIDER_SUBSCRIPTION');
@@ -162,9 +173,9 @@ export class StripeGateway {
   /** What Stripe holds for this customer, for the reconciliation report. Read-only. */
   async inspect(customerRef) {
     const cus = await this.findCustomer(customerRef);
-    if (!cus) return { provider: this.name, customer: null, subscription: null, simulated: false };
-    const sub = await this.subscriptionOf(cus.id);
-    return { provider: this.name, customer: { id: cus.id }, subscription: sub ? this.describe(sub) : null, simulated: false };
+    if (!cus) return { provider: this.name, customer: null, subscription: null, liveCount: 0, multiple: false, simulated: false };
+    const { live, all } = await this.subscriptionsOf(cus.id), sub = live[0] || all[0] || null; // read-only: two live ones are reported, never chosen between
+    return { provider: this.name, customer: { id: cus.id }, subscription: sub ? this.describe(sub) : null, liveCount: live.length, multiple: live.length > 1, subscriptions: live.map((s) => this.describe(s)), simulated: false };
   }
   /** Signature first, then Stripe's event → the inbox shape. Async: a completed checkout is resolved against the subscription Stripe holds. */
   async verify(rawBody, headers, nowMs) {

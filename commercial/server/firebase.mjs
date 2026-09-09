@@ -14,6 +14,8 @@ export class FirestoreStore {
   async entries(collectionPath, limit) { const q = limit ? this.db.collection(collectionPath).limit(limit) : this.db.collection(collectionPath); const snap = await q.get(); return snap.docs.map((d) => [d.id, this.decode(d.data())]); }
   async query(collectionPath, field, value, limit) { const snap = await this.db.collection(collectionPath).where(field, '==', value).limit(limit).get(); return snap.docs.map((d) => [d.id, this.decode(d.data())]); }
   /** A page of a collection in document-id order, starting after `afterId` (null: the first page) — the sweep walks collections of any size with this. */
+  /** A filtered page after a document id: an equality filter ordered by the document id needs no composite index (the single-field index carries the id order). */
+  async queryAfter(collectionPath, field, value, afterId, limit) { let q = this.db.collection(collectionPath).where(field, '==', value).orderBy('__name__'); if (afterId) q = q.startAfter(afterId); const snap = await q.limit(limit).get(); return snap.docs.map((d) => [d.id, this.decode(d.data())]); }
   async entriesAfter(collectionPath, afterId, limit) { let q = this.db.collection(collectionPath).orderBy('__name__'); if (afterId) q = q.startAfter(afterId); const snap = await q.limit(limit).get(); return snap.docs.map((d) => [d.id, this.decode(d.data())]); }
   // readOnly transactions take no document locks, so read-only routes never contend with writers.
   transaction(fn, { readOnly = false } = {}) {
@@ -23,6 +25,7 @@ export class FirestoreStore {
       list: async (collectionPath) => { const s = await t.get(this.db.collection(collectionPath)); return s.docs.map((d) => this.decode(d.data())); },
       entries: async (collectionPath, limit) => { const s = await t.get(limit ? this.db.collection(collectionPath).limit(limit) : this.db.collection(collectionPath)); return s.docs.map((d) => [d.id, this.decode(d.data())]); },
       query: async (collectionPath, field, value, limit) => { const s = await t.get(this.db.collection(collectionPath).where(field, '==', value).limit(limit)); return s.docs.map((d) => [d.id, this.decode(d.data())]); },
+      queryAfter: async (collectionPath, field, value, afterId, limit) => { let q = this.db.collection(collectionPath).where(field, '==', value).orderBy('__name__'); if (afterId) q = q.startAfter(afterId); const s = await t.get(q.limit(limit)); return s.docs.map((d) => [d.id, this.decode(d.data())]); },
       set: (path, value) => t.set(this.db.doc(path), this.encode(value)),
       delete: (path) => t.delete(this.db.doc(path)),
     }), readOnly ? { readOnly: true } : undefined);

@@ -82,10 +82,10 @@ test('the v2 import refuses play, not a document: a child created with a year le
 });
 test('the family export reads its own audit rows only', async () => {
   const src = await readFile(new URL('../server/support.mjs', import.meta.url), 'utf8');
-  assert.ok(!/list\('audit'\)/.test(src), 'no scan of the whole audit collection'); assert.match(src, /query\('audit', 'familyId'/);
+  assert.ok(!/list\('audit'\)/.test(src), 'no scan of the whole audit collection'); assert.match(src, /queryAfter\('audit', 'familyId'/);
   const f = fixture(), a = await f.family('parentA', 1); await f.family('parentB', 1);
   const reads = []; const real = f.store.transaction.bind(f.store);
-  f.store.transaction = (fn, opts) => real(async (tx) => { const q = tx.query.bind(tx); tx.query = (c, field, value, limit) => { reads.push([c, field, value]); return q(c, field, value, limit); }; return fn(tx); }, opts);
+  f.store.transaction = (fn, opts) => real(async (tx) => { const q = tx.queryAfter.bind(tx); tx.queryAfter = (c, field, value, after, limit) => { reads.push([c, field, value]); return q(c, field, value, after, limit); }; return fn(tx); }, opts);
   const exp = await f.support.exportFamily(a.ctx);
   assert.ok(exp.audit.length > 0); assert.ok(reads.some(([c, field, value]) => c === 'audit' && field === 'familyId' && value === a.familyId), 'queried by family id');
 });

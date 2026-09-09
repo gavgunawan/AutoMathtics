@@ -126,9 +126,21 @@ transaction 1: authorise parent → checkouts/{provider}:{operationId} exists?
                same family + same fingerprint(provider, plan, price) → resume (creating) or replay (pending/completed)
                otherwise IDEMPOTENCY_CONFLICT
                new: mint/reuse cus_… → write intent { status: creating, fingerprint, priceId, … }
+provider debts: what the intent owes the provider is written ON the intent in transaction 1 —
+               endPrevious { required, status: pending | done | not_applicable, result } (a family back from
+               past_due / cancelled / expired ends its previous subscription first) and supersededRef (the
+               older hosted session to expire) — and settled here, before any session is opened; a fault
+               propagates and leaves the debt pending, so a resume (the same operation id) settles it first
 provider call: createCheckout({ idempotencyKey: operationId, … })
 transaction 2: intent still creating → pending + providerCheckoutRef + result; else the other attempt's result
 ```
+
+A crash or a provider fault anywhere between transaction 1 and the session therefore never opens a second
+subscription over a live one: the resume finds `endPrevious.status: pending` and ends it before asking for
+the session (Stage 4 review, fourth round; `tests/round4-payments.test.mjs` covers a crash before the
+ending, a provider fault, and a crash after the ending). Two live subscriptions at the provider — a state
+the dashboard can make — stop every money-changing call with `MULTIPLE_PROVIDER_SUBSCRIPTIONS` until an
+operator has cancelled one (`RECONCILIATION.md`).
 
 The intent is durable before the provider is contacted. Two simultaneous requests with one
 operation id, or a crash between the intent and the provider, both resume the same intent and

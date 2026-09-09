@@ -29,6 +29,9 @@ test('production fails closed for emulator variables, weak secrets and missing o
   const stripe = { PAYMENT_PROVIDER: 'stripe', STRIPE_SECRET_KEY: 'sk_test_' + 'a1b2c3d4'.repeat(3), WEBHOOK_SECRET_STRIPE: 'whsec_' + 'z9y8x7w6'.repeat(3), STRIPE_PRICE_STARTER: 'price_1Starter00', STRIPE_PRICE_FAMILY: 'price_1Family000', STRIPE_PRICE_BIG: 'price_1BigFam000' };
   assert.equal(config({ ...env, ...stripe }).payments.stripe.prices.family, 'price_1Family000');
   assert.equal(config({ ...prod, ...stripe, APP_MODE: 'staging' }).payments.provider, 'stripe');
+  // the deployed commit rides along as RELEASE_SHA (deploy-staging.sh); anything but a full sha is ignored, never trusted
+  assert.equal(config({ ...prod, ...stripe, APP_MODE: 'staging', RELEASE_SHA: 'ab'.repeat(20) }).releaseSha, 'ab'.repeat(20));
+  assert.equal(config({ ...prod, ...stripe, APP_MODE: 'staging', RELEASE_SHA: 'main' }).releaseSha, null); assert.equal(config({ ...prod, ...stripe, APP_MODE: 'staging' }).releaseSha, null);
   assert.throws(() => config({ ...prod, ...stripe }), /live Stripe key/);
   assert.throws(() => config({ ...env, ...stripe, STRIPE_SECRET_KEY: 'sk_live_' + 'a1b2c3d4'.repeat(3) }), /only for production/);
   for (const patch of [{ STRIPE_SECRET_KEY: undefined }, { WEBHOOK_SECRET_STRIPE: 'nope' }, { STRIPE_PRICE_BIG: undefined }, { STRIPE_PRICE_STARTER: 'plan_x' }]) assert.throws(() => config({ ...env, ...stripe, ...patch }));
