@@ -40,7 +40,7 @@ function field(label, type = 'text', options = {}) {
 }
 function panel(kicker, title, subtitle) {
   root.replaceChildren();
-  const box = el('section', null, 'panel');
+  const box = el('section', null, 'panel'); box.setAttribute('data-deck', model?.role === 'child' ? 'GRID // ONLINE' : 'MISSION CONTROL // ONLINE'); // the corner tag every deck carries
   box.append(el('p', kicker, 'kicker'), el('h1', title), el('p', subtitle, 'muted'));
   root.append(box); return box;
 }
@@ -93,14 +93,15 @@ async function authStep(result, afterReady = null) {
   }
   if (result.stage === 'signin') { signInScreen(false, afterReady, Boolean(afterReady)); note(result.notice); return; }
   if (result.stage === 'verify') {
-    const box = panel('01 / VERIFY EMAIL', 'Check your inbox', 'Open the verification email, then return here. No family data is available before verification.');
-    box.append(button('I have verified my email', async () => authStep(await (await auth()).checkEmail(), afterReady), 'primary'),
+    const box = panel('STEP 1 OF 3 · EMAIL', 'Check your inbox.', 'Open the verification email, then come back here. Nothing about your family exists until this is done.');
+    box.append(rail(1), button('I have verified my email', async () => authStep(await (await auth()).checkEmail(), afterReady), 'primary'),
       button('Resend verification email', async () => { await (await auth()).resendEmail(); note('Verification email requested.'); }, 'ghost'));
     return;
   }
   const enrolling = result.stage === 'enroll';
-  const box = panel('02 / VERIFY MOBILE', enrolling ? 'Protect your parent account' : 'Your second security check',
-    enrolling ? 'Verify your own mobile number. Children do not need a phone or email address.' : `Send a code to ${result.phone || 'your verified mobile'} to finish signing in.`);
+  const box = panel(enrolling ? 'STEP 1 OF 3 · MOBILE' : 'SECOND CHECK', enrolling ? 'Protect the command deck.' : 'Your second security check',
+    enrolling ? 'Verify your own mobile number. Children never need a phone or an email address.' : `Send a code to ${result.phone || 'your verified mobile'} to finish signing in.`);
+  if (enrolling) box.append(rail(1));
   const phone = field('Mobile number, including country code', 'tel', { placeholder: '+62...', autocomplete: 'tel' });
   const consent = el('input'); consent.type = 'checkbox';
   const consentLabel = el('label', null, 'check');
@@ -126,17 +127,20 @@ function recoveryScreen(email) {
     }, 'ghost'),
     button('Back to sign-in', () => signInScreen(), 'text-button'));
 }
+// the three steps a parent walks to the grid: lit = here, done = behind
+function rail(current) {
+  const steps = el('div', null, 'steps');
+  ['01  PARENT SIGN-IN', '02  YOUR CREW', '03  KIDS\u2019 MODE'].forEach((t, i) => steps.append(el('span', t, i + 1 < current ? 'done' : i + 1 === current ? 'lit' : '')));
+  return steps;
+}
 function signInScreen(signup = false, afterReady = null, reauth = false) {
   if (!reauth) reauthEpoch++;
   model = null;
-  const box = panel(reauth ? 'PARENT VERIFICATION' : 'YOUR FAMILY. YOUR GRID.',
-    reauth ? 'Confirm it\u2019s you.' : (signup ? 'A new adventure starts here.' : 'Big futures. Small steps.'),
-    reauth ? 'This sensitive parent action requires a fresh password and SMS check.' :
-      (signup ? 'Create an adult account first. Then build a private space for your children.' : 'One secure parent account. A personal learning world for every child.'));
-  if (!reauth) {
-    const steps = el('div', null, 'steps');
-    ['01  PARENT SIGN-IN', '02  YOUR FAMILY', '03  KIDS\u2019 MODE'].forEach((t) => steps.append(el('span', t))); box.append(steps);
-  }
+  const box = panel(reauth ? 'PARENT VERIFICATION' : 'MISSION CONTROL',
+    reauth ? 'Confirm it\u2019s you.' : (signup ? 'A new crew starts here.' : 'Big futures. Small steps.'),
+    reauth ? 'This sensitive parent action needs a fresh password and SMS check.' :
+      (signup ? 'Create your adult account first. Then build a private grid for your explorers.' : 'One secure parent account. A personal learning grid for every child.'));
+  if (!reauth) box.append(rail(1));
   const form = el('form', null, 'auth-form');
   const email = field('Parent email', 'email', { autocomplete: 'email', maxLength: 254 });
   const password = field('Password', 'password', { autocomplete: signup ? 'new-password' : 'current-password', minLength: signup ? 12 : 1, maxLength: 128 });
@@ -155,7 +159,7 @@ function signInScreen(signup = false, afterReady = null, reauth = false) {
   if (!reauth) box.append(button(signup ? 'Already registered? Sign in' : 'New here? Create a parent account', () => signInScreen(!signup), 'ghost'));
   if (!signup && !reauth) box.append(button('Forgot password?', async () => { if (!email.input.checkValidity()) { email.input.reportValidity(); return; }
     await (await auth()).resetPassword(email.input.value); note('If this email can receive a reset link, one has been requested. Mobile verification is still required.'); }, 'text-button'));
-  box.append(el('p', 'EMAIL VERIFIED  /  MOBILE VERIFIED  /  FAMILY-ONLY ACCESS', 'trust'));
+  box.append(el('p', 'EMAIL VERIFIED  //  MOBILE VERIFIED  //  FAMILY-ONLY ACCESS', 'trust'));
 }
 function reauthenticate(afterReady) {
   // This scope comes from authenticated /me, not an editable email form or storage.
@@ -190,7 +194,8 @@ function renderModel() {
 }
 function familySetup(draft = {}) {
   transientView = true;
-  const box = panel('FAMILY SETUP', 'Make this space yours.', 'The server creates one private family linked to your verified parent account.');
+  const box = panel('STEP 2 OF 3 · YOUR CREW', 'Name your crew.', 'One private family, linked to your verified parent account. Your explorers join next.');
+  box.append(rail(2));
   const label = field('Family display name', 'text', { placeholder: 'Our family', maxLength: 40, value: draft.label || '' });
   const check = el('input'); check.type = 'checkbox';
   const wrap = el('label', null, 'check');
@@ -295,7 +300,7 @@ async function parentScreen() {
   const family = model.family, e = family.entitlement || { status: 'inactive', seatLimit: 0, accessUntil: 0 };
   const billing = await api('/billing'); // plans, trial eligibility and the payment reference come from the server, never guessed from /me
   const active = e.status === 'active' && e.accessUntil > Date.now(); // Display only; API is authoritative.
-  const box = panel('PARENT WORKSPACE', family.label, 'Manage your children here. Hand over the device to remove parent access.');
+  const box = panel('MISSION CONTROL', family.label, 'Your explorers, your grid. Hand the device over when it\u2019s time to play; parent access stays locked until you sign in again.');
   if (model.recovery && model.recovery.status !== 'pending' && !model.recovery.acknowledgedAt) { // Stage 4.4: a finished recovery request is shown until the parent acknowledges it
     const r = model.recovery, when = new Date(r.requestedAt).toLocaleDateString();
     box.append(el('p', r.status === 'completed' ? `Account recovery requested on ${when} was completed and a new mobile was verified. If that wasn\u2019t you, reset your password now and contact support.`
@@ -383,7 +388,7 @@ function startChooser(defaults = {}) {
 }
 function addChildScreen(draft = {}) {
   transientView = true;
-  const box = panel('NEW CHILD PROFILE', 'Meet your next explorer.', 'A nickname and an icon are enough for the profile. Age and year level help us place the child and understand who we serve. No child email, phone number, photo or full birth date.');
+  const box = panel('NEW CHILD PROFILE', 'Meet your next explorer.', 'A nickname and an icon are all the grid needs. Age and year level help us place the explorer. No child email, phone number, photo or full birth date \u2014 ever.');
   const name = field('Nickname', 'text', { maxLength: 24, autocomplete: 'off', value: draft.nickname || '' });
   const select = el('select'); select.setAttribute('aria-label', 'Profile icon');
   for (const [key, icon] of Object.entries(icons)) { const option = el('option', `${icon} ${key}`); option.value = key; select.append(option); }
@@ -409,7 +414,7 @@ function addChildScreen(draft = {}) {
 }
 function startScreen(child) {
   transientView = true;
-  const box = panel('STARTING POINT', child.nickname, 'Only possible before the child has played anything. A recent parent sign-in is required.');
+  const box = panel('LAUNCH POINT', child.nickname, 'Only possible before the child has played anything. A recent parent sign-in is required.');
   const start = startChooser({ yearLevel: child.yearLevel, start: child.start });
   box.append(start.wrap, start.options, button('Save starting point', async () => {
     try { await api(`/children/${child.id}/start`, { start: start.value(), yearLevel: Number(start.year.value) }); note('Starting point saved.'); await refresh(); }
@@ -432,7 +437,7 @@ function resetPinScreen(child) {
   }, 'primary'), button('Back', refresh, 'ghost'), button('Reauthenticate parent', () => reauthenticate(() => resetPinScreen(child)), 'text-button'));
 }
 function selectorScreen() {
-  const box = panel('KIDS\u2019 MODE / PARENT ACCESS LOCKED', 'Who is on a mission today?', 'Choose your profile and enter your PIN. Parent settings are no longer available in this session.');
+  const box = panel('LAUNCH PAD · PARENT ACCESS LOCKED', 'Who is on a mission today?', 'Pick your explorer and enter your PIN. Parent settings stay locked until a parent signs in again.');
   box.append(cards(model.family.children.filter((c) => c.status === 'active'), (child) => {
     transientView = true;
     const pane = panel('YOUR PRIVATE GRID', child.nickname, 'Enter your six-digit PIN.');
@@ -475,7 +480,7 @@ function gameHero(box, child, g) {
 async function childScreen() {
   stopTimer(); playStreak = 0; const child = model.child;
   const [st, g] = await Promise.all([api('/learn/state'), api('/game/state')]); gameModel = g;
-  const box = panel('CHILD SESSION / FAMILY PROTECTED', `Welcome, ${child.nickname}.`, 'Your questions, marks, progress and game wallet are all server-owned.');
+  const box = panel('YOUR GRID', `Welcome, ${child.nickname}.`, 'Pick a track and go. Every mark, coin and crown is kept safe by the grid.');
   gameHero(box, child, g);
   const wallet = el('div', null, 'allowance'); wallet.append(el('strong', `⚡ ${g.wallet.gc}`, 'count'), el('span', 'grid coins'), el('strong', `🏆 ${g.wallet.rp}`, 'count'), el('span', 'reward points'), el('span', `🛡️ ${g.wallet.shields}`, 'badge')); box.append(wallet);
   if (g.wallet.egg && !g.wallet.egg.hatched) box.append(el('p', `🥚 Mystery Egg warming · ${Math.max(0, st.stats.passes - g.wallet.egg.passesAt)} / 5 passes`, 'notice'));

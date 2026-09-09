@@ -7,7 +7,9 @@ import { WEBHOOK_BODY_LIMIT } from './payments.mjs';
 // Firebase Hosting forwards only the specially named __session cookie to Cloud Run.
 const COOKIE = '__session';
 const FILES = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'],
-  '/auth.js': ['auth.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css'] };
+  '/auth.js': ['auth.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css'],
+  // the game's own faces, served from this origin (public/fonts, SIL Open Font License): no third-party request at sign-in
+  ...Object.fromEntries(['Orbitron-700', 'Rajdhani-500', 'Rajdhani-600', 'Rajdhani-700', 'JetBrainsMono-600'].map((f) => [`/fonts/${f}.woff2`, [`fonts/${f}.woff2`, 'font/woff2']])) };
 const PARENT_COOKIE_S = 30 * 60, DEVICE_COOKIE_S = 12 * 3600; // match the server-side session lifetimes
 const cookieToken = (req) => {
   const matches = (req.headers.cookie || '').split(';').map((v) => v.trim()).filter((v) => v.startsWith(`${COOKIE}=`));
@@ -63,14 +65,15 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
         "default-src 'none'", "base-uri 'none'", "frame-ancestors 'none'", "form-action 'self'", "object-src 'none'",
         // Path-scoped sources: a bare https://www.google.com would admit its JSONP endpoints as script.
         "script-src 'self' https://www.gstatic.com/firebasejs/ https://www.gstatic.com/recaptcha/ https://www.google.com/recaptcha/ https://www.recaptcha.net/recaptcha/",
-        "style-src 'self'", "img-src 'self' data: https://www.gstatic.com/recaptcha/",
+        "style-src 'self'", "font-src 'self'", "img-src 'self' data: https://www.gstatic.com/recaptcha/",
         `connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.googleapis.com https://www.google.com/recaptcha/${cfg.emulator ? ' http://127.0.0.1:9099' : ''}`,
         `frame-src https://www.google.com/recaptcha/ https://www.recaptcha.net/recaptcha/ https://${cfg.web.authDomain}/__/auth/`,
       ].join('; '));
       const path = new URL(req.url, cfg.origin).pathname;
       if (req.method === 'GET' && FILES[path]) {
         const [file, type] = FILES[path];
-        res.setHeader('Content-Type', `${type}; charset=utf-8`);
+        if (type === 'font/woff2') { res.setHeader('Content-Type', type); res.setHeader('Cache-Control', 'public, max-age=31536000, immutable'); } // a font never changes under its name
+        else res.setHeader('Content-Type', `${type}; charset=utf-8`);
         return res.end(await readFile(new URL(file, publicDir)));
       }
       if (req.method === 'GET' && path === '/api/health') { // not /healthz: the Cloud Run frontend swallows that path
