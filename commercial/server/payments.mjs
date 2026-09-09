@@ -318,11 +318,13 @@ export class Payments {
       else if (internalType === 'payment.succeeded' && !plan) outcome = { status: 'rejected', reason: 'UNKNOWN_PRICE' };
       else if (checkout && plan && checkout.plan !== plan) outcome = { status: 'rejected', reason: 'CHECKOUT_MISMATCH' }; // paid for a different plan than the one this checkout was opened for
       else if (ev.type === 'checkout.completed' && checkout.status === 'completed') outcome = { status: 'rejected', reason: 'CHECKOUT_ALREADY_COMPLETED' };
-      else if (ev.type === 'checkout.completed' && checkout.status === 'superseded') outcome = { status: 'rejected', reason: 'CHECKOUT_SUPERSEDED' }; // a newer checkout replaced it: no double transition
+      else if (ev.type === 'checkout.completed' && ['superseded', 'superseded_by_deletion'].includes(checkout.status)) outcome = { status: 'rejected', reason: 'CHECKOUT_SUPERSEDED' }; // a newer checkout, or the family's deletion, replaced it: no double transition
       else if (stale) outcome = { status: 'ignored', reason: 'STALE_EVENT' }; // an older event arriving after a newer one never rolls the facts back
       else {
         const family = await tx.get(`families/${familyId}`);
         if (!family) outcome = { status: 'rejected', reason: 'FAMILY_NOT_FOUND' };
+        // A deleted family (or one being deleted) is recorded for support and Stage 4 reconciliation — a refund, a cancellation at the provider — and never regains product entitlement.
+        else if (family.deleted === true || family.deletion?.status === 'executing') outcome = { status: 'reconciliation_required', reason: 'FAMILY_DELETED' };
         else {
           // Only a bound checkout carries an intent to be on a plan; a renewal invoice never does (S3.3-B).
           const event = { id: derivedEventId(`${gw.name}:${ev.id}`), type: internalType, provider: gw.name, providerRef: ev.customer, authorized: ev.type === 'checkout.completed',

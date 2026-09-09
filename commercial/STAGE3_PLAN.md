@@ -9,8 +9,8 @@ for development by the review team on 9 Sep 2026). Order agreed with the team:
 | 3.2 | Subscription + entitlement state machine: trial, active, grace, past-due, cancelled, expired; seat plans; one trial per `phoneKey` — see `SUBSCRIPTIONS.md` | merged (PR #10); hardened per audit (seat reactivation, event fingerprints, retry-safe parent actions, real-Firestore trial race) |
 | 3.3 | Payment gateway abstraction + webhook security, with local/fake payment events (the $0 constraint holds); global provider-event inbox — see `PAYMENTS.md` | merged (PR #12); hardened per the second review (price ids → plans, no `plan.change` over webhooks) |
 | 3.4 | Upgrade / downgrade / cancel / refund lifecycle — see `SUBSCRIPTIONS.md` → Lifecycle | merged (PR #14); hardened per review (PR #16) and close-out (PR #17); closed for development |
-| 3.5 | Recovery, export, deletion, commercial admin/support tooling — see `SUPPORT.md` | **this branch** |
-| Stage 4 | Real provider, staging environment, private pilot | |
+| 3.5 | Recovery, export, deletion, commercial admin/support tooling — see `SUPPORT.md` | merged (PR #18); deletion hardened per the full-system review (quiesced, batched, resumable, webhook-proof) |
+| Stage 4 | Real provider, staging environment, private pilot. Acceptance list carried from Stage 3: real adapter with idempotency keys and a total event order; cancel/expire superseded provider checkouts; refund facts from the provider's refund object; reconciliation of `reconciliation_required` and `frozen`/`stale` intents; **self-service Firebase Auth account deletion after family deletion and the identity retention period**; **lost-phone / changed-number MFA recovery ceremony that does not enable takeover**; growth of `refunds[]` / `pending[]` | |
 
 ## 3.1 — what this branch delivers
 
@@ -46,6 +46,18 @@ for development by the review team on 9 Sep 2026). Order agreed with the team:
 | Policy: manual pilot grant vs trial | decided: an active manual grant blocks the trial (`MANUAL_GRANT_ACTIVE`); the operator chooses when a family moves to subscription management |
 | 3.3 must resolve the family from the provider-customer mapping and map provider price ids to plans; never trust plan/seats/family from the payload | closed: `billingCustomers` mapping (PR #12) + price table (`FAKE_PRICES`), `UNKNOWN_PRICE`, payload naming a plan is malformed |
 | 3.3 keep `plan.change` out of webhook mapping | closed: `subscription.updated` is recorded and ignored until 3.4 |
+
+## Full-system review follow-ups (9 Sep 2026, after PR #18) — Stage 3 exit
+
+| Item | Status |
+|---|---|
+| **Blocker 1** deletion not quiesced; partial deletion after a crash; concurrent Stage 1/2 writes | closed: phase 0 sets `deletion.status = executing` atomically, `authorize()` refuses executing families, live checkouts and open intents frozen, sessions swept; the job is resumable (phase and counts recorded) — crash-after-first-phase and concurrent-write tests, in memory and against the emulator |
+| **Blocker 2** whole-child deletion in one transaction (500-write limit) | closed: bounded sweeps of 300 per transaction over sessions, ledger rows and receipts; the in-memory store now refuses more than 500 writes per transaction like Firestore; tested with more than 500 rows, in memory and against the emulator |
+| **Blocker 3** a late webhook could reactivate a tombstoned family | closed: `reconciliation_required: FAMILY_DELETED` recorded in the inbox for a deleted or executing family, never applied; frozen checkouts are `CHECKOUT_SUPERSEDED`; signed-webhook-after-deletion test in memory and against the emulator |
+| Operator reprocessing not durably attributed | closed: `supportOperations/{id}` written under the operator before anything moves, finalised after |
+| Retention declaration vs reality | closed: `audit/*` (TTL 400 days), `deletions/{f}`, `supportOperations/*` added to RETENTION and SUPPORT.md; UI wording corrected |
+| Transaction-retry counters | closed: counts are returned by each transaction and accumulated in the deletion record |
+| Family deletion is not Auth-account deletion; lost-MFA recovery | stated in SUPPORT.md and the UI; on the Stage 4 acceptance list |
 
 ## 3.3/3.4 close-out follow-ups (9 Sep 2026, after PR #16)
 

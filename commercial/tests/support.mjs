@@ -25,15 +25,18 @@ export class MemoryStore {
   data = new Map(); tail = Promise.resolve();
   async get(path) { return structuredClone(this.data.get(path) || null); }
   async list(collectionPath) { const prefix = `${collectionPath}/`; return [...this.data.entries()].filter(([k]) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/')).map(([, v]) => structuredClone(v)); }
-  async entries(collectionPath) { const prefix = `${collectionPath}/`; return [...this.data.entries()].filter(([k]) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/')).map(([k, v]) => [k.slice(prefix.length), structuredClone(v)]); }
+  async entries(collectionPath, limit) { const prefix = `${collectionPath}/`; const all = [...this.data.entries()].filter(([k]) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/')).map(([k, v]) => [k.slice(prefix.length), structuredClone(v)]); return limit ? all.slice(0, limit) : all; }
+  async query(collectionPath, field, value, limit) { return (await this.entries(collectionPath)).filter(([, v]) => v[field] === value).slice(0, limit); }
   transaction(fn, { readOnly = false } = {}) {
     const run = this.tail.then(async () => {
-      const working = new Map(structuredClone([...this.data])); let written = false;
-      const write = () => { if (readOnly) throw Error('Write in readOnly transaction'); written = true; };
+      const working = new Map(structuredClone([...this.data])); let written = false, writes = 0;
+      // Firestore commits at most 500 writes in one transaction: fail the same way here so a sweep that would be refused in production cannot pass in memory.
+      const write = () => { if (readOnly) throw Error('Write in readOnly transaction'); if (++writes > 500) throw Error('Firestore allows at most 500 writes in one transaction'); written = true; };
       const result = await fn({
         get: async (p) => { if (written) throw Error('Read after write'); return structuredClone(working.get(p) || null); },
         list: async (c) => { if (written) throw Error('Read after write'); const prefix = `${c}/`; return [...working.entries()].filter(([k]) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/')).map(([, v]) => structuredClone(v)); },
-        entries: async (c) => { if (written) throw Error('Read after write'); const prefix = `${c}/`; return [...working.entries()].filter(([k]) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/')).map(([k, v]) => [k.slice(prefix.length), structuredClone(v)]); },
+        entries: async (c, limit) => { if (written) throw Error('Read after write'); const prefix = `${c}/`; const all = [...working.entries()].filter(([k]) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/')).map(([k, v]) => [k.slice(prefix.length), structuredClone(v)]); return limit ? all.slice(0, limit) : all; },
+        query: async (c, field, value, limit) => { if (written) throw Error('Read after write'); const prefix = `${c}/`; return [...working.entries()].filter(([k, v]) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/') && v[field] === value).slice(0, limit).map(([k, v]) => [k.slice(prefix.length), structuredClone(v)]); },
         set: (p, v) => { write(); assertFirestoreShape(v, p); working.set(p, structuredClone(v)); },
         delete: (p) => { write(); working.delete(p); },
       });

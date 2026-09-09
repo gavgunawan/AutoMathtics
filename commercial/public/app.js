@@ -256,7 +256,7 @@ function downgradeScreen(plan, family, op) {
 }
 function deletionScreen(family) {
   transientView = true;
-  const box = panel('DELETE FAMILY', family.label, 'The children\u2019s profiles, progress, coins and this family\u2019s settings will be removed after 14 days. Payment records are kept as required. A used free trial stays used.');
+  const box = panel('DELETE FAMILY', family.label, 'The children\u2019s profiles, progress, coins and this family\u2019s settings will be removed after 14 days. Payment records and the security audit trail are kept as required. A used free trial stays used. Your sign-in account itself is separate and is not deleted here.');
   const op = crypto.randomUUID();
   box.append(el('p', 'You can cancel any time in the next 14 days from the parent workspace. Download your data first if you want to keep it.', 'notice'),
     button('Delete after 14 days', async () => { await api('/family/deletion', { operationId: op }); note('Deletion scheduled.'); await refresh(); }, 'primary'), button('Back', refresh, 'ghost'));
@@ -317,7 +317,7 @@ async function parentScreen() {
   }, 'text-button'));
   if (family.deletion) {
     const cancelOp = crypto.randomUUID();
-    box.append(el('p', `This family is scheduled for deletion on ${new Date(family.deletion.effectiveAt).toLocaleDateString()}. Everything except the payment records will be removed.`, 'notice'));
+    box.append(el('p', `This family is scheduled for deletion on ${new Date(family.deletion.effectiveAt).toLocaleDateString()}. Everything except the payment records and the security audit trail will be removed.`, 'notice'));
     keep.append(button('Keep my family', async () => { await api('/family/deletion/cancel', { operationId: cancelOp }); note('Deletion cancelled.'); await refresh(); }, 'primary'));
   } else {
     keep.append(button('Delete this family', () => deletionScreen(family), 'text-button'));

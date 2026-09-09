@@ -30,7 +30,11 @@ export const RETENTION = Object.freeze({
   'phones/*': 'one trial per verified phone: anti-abuse; holds no phone number',
   'families/{f} (tombstone)': 'family id, subscription facts, customer references, deletion record; label and children removed',
   'parents/{uid} (tombstone)': 'deleted flag and phone key, so a returning parent starts fresh and gets no second trial',
+  'audit/*': 'security and accountability trail (uid, familyId, childId, action); expires by TTL 400 days after each row',
+  'deletions/{f}': 'the deletion record: who asked, who executed, what was removed and what was kept',
+  'supportOperations/*': 'which operator started which corrective action, and how it ended',
 });
+export const DELETION_BATCH = 300; // comfortably under Firestore's 500 writes per transaction
 const ACCESS = new Set(['trial', 'active', 'grace']);
 const flagged = (docs, key, values) => docs.filter((d) => values.includes(d[key]));
 
@@ -126,9 +130,10 @@ export class Support {
     const sub = family.subscription || null;
     const attention = {
       requiresAction: inbox.filter((e) => e.outcome?.status === 'requires_action').length,
+      reconciliationRequired: inbox.filter((e) => e.outcome?.status === 'reconciliation_required').length, // late provider events on a deleted family: Stage 4 refunds/cancels at the provider
       rejected: inbox.filter((e) => e.outcome?.status === 'rejected').length,
-      openIntents: flagged(intents, 'status', ['creating', 'stale', 'superseded']).map((i) => i.operationId),
-      openCheckouts: flagged(checkouts, 'status', ['creating', 'superseded']).map((c) => c.checkoutId),
+      openIntents: flagged(intents, 'status', ['creating', 'stale', 'superseded', 'frozen_by_deletion']).map((i) => i.operationId),
+      openCheckouts: flagged(checkouts, 'status', ['creating', 'superseded', 'superseded_by_deletion']).map((c) => c.checkoutId),
       inFlight: family.billingIntent || null, liveCheckout: family.checkoutIntent || null,
       ledgerDamaged: children.filter((c) => c.ledger?.damaged).map((c) => c.id), ledgerDrift: children.filter((c) => c.ledger && !c.ledger.match && !c.ledger.damaged).map((c) => c.id),
       deletion: family.deletion || null, deleted: family.deleted === true,
@@ -156,9 +161,16 @@ export class Support {
   async reprocess(familyId, operator) {
     uuid(familyId); this.operator(operator);
     const family = await this.store.get(`families/${familyId}`); if (!family) fail(404, 'FAMILY_NOT_FOUND');
+    // The operator's intent is durable before anything moves: a crash mid-way leaves supportOperations/{id} `running` under their name.
+    const id = randomUUID(), startedAt = this.now();
+    await this.store.transaction(async (tx) => { tx.set(`supportOperations/${id}`, { id, action: 'reprocess', operator, familyId, startedAt, status: 'running', results: null, finishedAt: null }); this.audit(tx, 'support.reprocess_started', operator, familyId, { operationId: id }); });
     const results = [];
     for (const [provider, ref] of Object.entries(family.billing || {})) for (const r of await this.payments.reprocess(provider, ref)) results.push({ provider, ...r });
-    await this.store.transaction(async (tx) => this.audit(tx, 'support.reprocess', operator, familyId, { results: results.map((r) => `${r.id}:${r.status}`) }));
+    await this.store.transaction(async (tx) => {
+      const row = await tx.get(`supportOperations/${id}`);
+      tx.set(`supportOperations/${id}`, { ...row, status: 'done', results: results.map((r) => ({ provider: r.provider, id: r.id, status: r.status, reason: r.reason || null })), finishedAt: this.now() });
+      this.audit(tx, 'support.reprocess', operator, familyId, { operationId: id, results: results.map((r) => `${r.id}:${r.status}`) });
+    });
     return results;
   }
   /**
@@ -175,7 +187,7 @@ export class Support {
     return this.store.transaction(async (tx) => {
       const intent = await tx.get(path);
       if (!intent) fail(404, 'INTENT_NOT_FOUND');
-      if (!['creating', 'stale', 'superseded'].includes(intent.status)) fail(409, 'INTENT_NOT_OPEN');
+      if (!['creating', 'stale', 'superseded', 'frozen_by_deletion'].includes(intent.status)) fail(409, 'INTENT_NOT_OPEN');
       const id = randomUUID(), now = this.now();
       const record = { id, provider, operationId, familyId: intent.familyId, previousStatus: intent.status, providerOperationRef: intent.providerOperationRef || null, outcome, note, operator, at: now };
       tx.set(`billingReconciliations/${id}`, record);
@@ -185,50 +197,92 @@ export class Support {
     });
   }
   /**
-   * Execute a deletion the parent asked for, once its 14 days have passed (an operator may force
-   * it earlier with the explicit flag). Personal and product data go; learning and game data go;
-   * financial records stay with the linkage reduced to tombstones (RETENTION). Idempotent.
+   * Delete `batch` documents of a collection per transaction until it is empty, counting them on the
+   * family's deletion record in the same transaction, so a crash can neither lose a count nor count
+   * twice (a retried transaction re-reads before it writes). Safe to re-run.
    */
-  async executeDeletion(familyId, { operator, force = false } = {}) {
+  async sweep(collection, batch, familyId, key, select = (tx) => tx.entries(collection, batch)) {
+    let total = 0;
+    for (;;) {
+      const n = await this.store.transaction(async (tx) => {
+        const rows = await select(tx), f = await tx.get(`families/${familyId}`);
+        for (const [id] of rows) tx.delete(`${collection}/${id}`);
+        if (rows.length && f && !f.deleted) { const counts = { ...(f.deletion.counts || {}) }; counts[key] = (counts[key] || 0) + rows.length; tx.set(`families/${familyId}`, { ...f, deletion: { ...f.deletion, counts } }); }
+        return rows.length;
+      });
+      total += n; if (n < batch) return total;
+    }
+  }
+  sweepWhere(collection, field, value, batch, familyId, key) { return this.sweep(collection, batch, familyId, key, (tx) => tx.query(collection, field, value, batch)); }
+  async progress(familyId, phase) { // which phase the job reached, for a rerun after a crash
+    await this.store.transaction(async (tx) => { const f = await tx.get(`families/${familyId}`); if (!f || f.deleted) return; tx.set(`families/${familyId}`, { ...f, deletion: { ...f.deletion, phase } }); });
+  }
+  /**
+   * Execute a deletion the parent asked for, once its 14 days have passed (an operator may force it
+   * earlier with the explicit flag). A job in phases, each phase a bounded transaction, the whole
+   * thing resumable after a crash:
+   *   0. begin — one transaction: the family is `executing` from here on (Stage 1 admits nobody),
+   *      live checkouts and open change intents are frozen, the record names the operator;
+   *   1. login sessions, in batches;
+   *   2. per child: learning sessions, ledger rows, operation receipts in batches, then progress;
+   *   3. children, credentials, PIN attempts, receipts, members, game config; parent and family
+   *      tombstones; deletions/{f}.
+   * The subscription is ended first as a recorded event. Personal and product data go; financial
+   * records stay with the linkage reduced to tombstones (RETENTION). Idempotent.
+   */
+  async executeDeletion(familyId, { operator, force = false, batch = DELETION_BATCH } = {}) {
     uuid(familyId); this.operator(operator);
-    const family = await this.store.get(`families/${familyId}`);
-    if (!family) fail(404, 'FAMILY_NOT_FOUND');
-    if (family.deleted) return await this.store.get(`deletions/${familyId}`);
-    if (!family.deletion) fail(409, 'NO_DELETION_PENDING');
-    if (family.deletion.effectiveAt > this.now() && force !== true) fail(409, 'DELETION_NOT_DUE');
-    const now = this.now(), counts = { children: 0, sessions: 0, ledgerRows: 0, operations: 0, loginSessions: 0 };
-    // 1. the subscription ends first, as a financial event the records keep (the adapter tells the provider in Stage 4)
-    if (family.subscription && ACCESS.has(deriveState(family.subscription, now))) await this.billing.apply(familyId, { id: randomUUID(), type: 'terminate' }, operator);
-    // 2. each child's learning and game data, one transaction per child (ids come from entries())
+    const family0 = await this.store.get(`families/${familyId}`);
+    if (!family0) fail(404, 'FAMILY_NOT_FOUND');
+    if (family0.deleted) return await this.store.get(`deletions/${familyId}`);
+    if (!family0.deletion) fail(409, 'NO_DELETION_PENDING');
+    if (family0.deletion.status !== 'executing' && family0.deletion.effectiveAt > this.now() && force !== true) fail(409, 'DELETION_NOT_DUE');
+    // the subscription ends first, as a financial event the records keep (Stage 4's adapter tells the provider); a rerun finds it already ended
+    if (family0.subscription && ACCESS.has(deriveState(family0.subscription, this.now()))) await this.billing.apply(familyId, { id: randomUUID(), type: 'terminate' }, operator);
+    // phase 0 — begin, atomically
+    const family = await this.store.transaction(async (tx) => {
+      const f = await tx.get(`families/${familyId}`);
+      if (!f || f.deleted) return f;
+      if (f.deletion?.status === 'executing') return f; // resuming
+      const now = this.now();
+      const checkouts = []; for (const [provider, id] of Object.entries(f.checkoutIntent || {})) if (id) checkouts.push([`checkouts/${provider}:${id}`, await tx.get(`checkouts/${provider}:${id}`)]);
+      const intents = (await tx.entries('billingChangeIntents')).filter(([, i]) => i.familyId === familyId && i.status === 'creating');
+      const deletion = { ...f.deletion, status: 'executing', executionId: randomUUID(), startedAt: now, executedBy: operator, forced: force === true, phase: 'begun', counts: {} };
+      const next = { ...f, deletion, billingIntent: null, checkoutIntent: null };
+      tx.set(`families/${familyId}`, next);
+      for (const [path, c] of checkouts) if (c && ['creating', 'pending'].includes(c.status)) tx.set(path, { ...c, status: 'superseded_by_deletion', supersededAt: now });
+      for (const [id, i] of intents) tx.set(`billingChangeIntents/${id}`, { ...i, status: 'frozen_by_deletion', frozenAt: now });
+      this.audit(tx, 'family.deletion_started', operator, familyId, { executionId: deletion.executionId, forced: force === true });
+      return next;
+    });
+    if (!family || family.deleted) return await this.store.get(`deletions/${familyId}`);
+    // phase 1 — login sessions of the family and of its parents (nobody could use them: authorize refuses an executing family)
+    const members = await this.store.entries(`families/${familyId}/members`), uids = members.map(([uid]) => uid);
+    await this.sweepWhere('sessions', 'familyId', familyId, batch, familyId, 'loginSessions');
+    for (const uid of uids) await this.sweepWhere('sessions', 'uid', uid, batch, familyId, 'loginSessions');
+    await this.progress(familyId, 'sessions');
+    // phase 2 — each child's learning and game data, bounded batches, then the progress document
     for (const childId of family.childIds || []) {
       const base = `families/${familyId}/learning/${childId}`;
-      await this.store.transaction(async (tx) => {
-        const sessions = await tx.entries(`${base}/sessions`), ledger = await tx.entries(`${base}/ledger`), ops = await tx.entries(`${base}/operations`), prog = await tx.get(base);
-        for (const [id] of sessions) tx.delete(`${base}/sessions/${id}`);
-        for (const [id] of ledger) tx.delete(`${base}/ledger/${id}`);
-        for (const [id] of ops) tx.delete(`${base}/operations/${id}`);
-        if (prog) tx.delete(base);
-        counts.sessions += sessions.length; counts.ledgerRows += ledger.length; counts.operations += ops.length;
-      });
+      await this.sweep(`${base}/sessions`, batch, familyId, 'sessions'); await this.sweep(`${base}/ledger`, batch, familyId, 'ledgerRows'); await this.sweep(`${base}/operations`, batch, familyId, 'operations');
+      await this.store.transaction(async (tx) => { if (await tx.get(base)) tx.delete(base); });
+      await this.progress(familyId, `child:${childId}`);
     }
-    // 3. the family and its people: children, credentials, PIN attempts, child-creation receipts, members, login sessions, parent tombstones, family tombstone
+    // phase 3 — the family and its people
     return this.store.transaction(async (tx) => {
       const current = await tx.get(`families/${familyId}`); if (!current || current.deleted) return await tx.get(`deletions/${familyId}`);
-      const sub = (c) => tx.entries(`families/${familyId}/${c}`);
-      const members = await sub('members'), childDocs = await sub('children'), creds = await sub('credentials'), attempts = await sub('pinAttempts'), receipts = await sub('operations');
+      const now = this.now(), col = (c) => tx.entries(`families/${familyId}/${c}`);
+      const mem = await col('members'), childDocs = await col('children'), creds = await col('credentials'), attempts = await col('pinAttempts'), receipts = await col('operations');
       const config = await tx.get(`families/${familyId}/game/config`);
-      const uids = members.map(([uid]) => uid);
-      const parents = []; for (const uid of uids) parents.push([uid, await tx.get(`parents/${uid}`)]);
-      const logins = (await tx.entries('sessions')).filter(([, s]) => s.familyId === familyId || uids.includes(s.uid));
-      for (const group of [['children', childDocs], ['credentials', creds], ['pinAttempts', attempts], ['operations', receipts], ['members', members]]) for (const [id] of group[1]) tx.delete(`families/${familyId}/${group[0]}/${id}`);
+      const parents = []; for (const [uid] of mem) parents.push([uid, await tx.get(`parents/${uid}`)]);
+      for (const [name, rows] of [['children', childDocs], ['credentials', creds], ['pinAttempts', attempts], ['operations', receipts], ['members', mem]]) for (const [id] of rows) tx.delete(`families/${familyId}/${name}/${id}`);
       if (config) tx.delete(`families/${familyId}/game/config`);
-      for (const [key] of logins) tx.delete(`sessions/${key}`);
       for (const [uid, p] of parents) if (p) tx.set(`parents/${uid}`, { deleted: true, deletedAt: now, familyId: null, reauthAfter: Math.max(p.reauthAfter || 0, Math.floor(now / 1000)), phoneKey: p.phoneKey || null, createdAt: p.createdAt || null }); // seconds, like login()
-      const tombstone = { id: familyId, deleted: true, deletedAt: now, deletedBy: operator, createdAt: current.createdAt || null, phoneKey: current.phoneKey || null, billing: current.billing || null,
-        subscription: current.subscription || null, childIds: [], activeChildIds: [], deletion: { ...current.deletion, executedAt: now }, retention: Object.keys(RETENTION) };
-      tx.set(`families/${familyId}`, tombstone);
-      counts.children = childDocs.length; counts.loginSessions = logins.length;
-      const record = { familyId, requestedAt: current.deletion.requestedAt, requestedBy: current.deletion.requestedBy, executedAt: now, executedBy: operator, forced: force === true, counts, retained: RETENTION };
+      const counts = { ...(current.deletion.counts || {}), children: childDocs.length };
+      const deletion = { ...current.deletion, status: 'done', phase: 'done', executedAt: now, counts };
+      tx.set(`families/${familyId}`, { id: familyId, deleted: true, deletedAt: now, deletedBy: current.deletion.executedBy || operator, createdAt: current.createdAt || null, phoneKey: current.phoneKey || null, billing: current.billing || null,
+        subscription: current.subscription || null, childIds: [], activeChildIds: [], deletion, retention: Object.keys(RETENTION) });
+      const record = { familyId, requestedAt: current.deletion.requestedAt, requestedBy: current.deletion.requestedBy, startedAt: current.deletion.startedAt, executedAt: now, executedBy: current.deletion.executedBy || operator, executionId: current.deletion.executionId, forced: current.deletion.forced === true, counts, retained: RETENTION };
       tx.set(`deletions/${familyId}`, record);
       this.audit(tx, 'family.deleted', operator, familyId, { counts });
       return record;

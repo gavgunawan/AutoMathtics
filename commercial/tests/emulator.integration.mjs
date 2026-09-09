@@ -281,8 +281,18 @@ test('real Firestore: a requested deletion removes the people and the game and l
   const sel = await service.authenticate(await service.lock(ctx));
   const childCtx = await service.authenticate(await service.selectChild(sel, child.id, '763829'));
   const started = await learning.start(childCtx, { track: 'nav' }); assert.ok(started.session.id);
-  const record = await support.executeDeletion(fam.id, { operator: 'emulator-operator', force: true });
-  assert.equal(record.counts.children, 1); assert.equal(record.counts.sessions, 1); assert.equal(record.forced, true);
+  // a long history: 520 ledger rows, more than one Firestore transaction may write
+  for (let start = 0; start < 520; start += 400) { const b = db.batch(); for (let i = start; i < Math.min(520, start + 400); i++) b.set(db.doc(`families/${fam.id}/learning/${child.id}/ledger/row-${i}`), { id: `row-${i}`, seq: i + 1, gc: 1, rp: 0, type: 'parent.adjust', at: Date.now(), balance: { gc: i + 1, rp: 0 } }); await b.commit(); }
+  // the process dies right after the begin transaction (terminate = 1, begin = 2, the first sweep = 3)
+  const orig = store.transaction.bind(store); let k = 0; store.transaction = (fn, o) => { k++; if (k === 3) { store.transaction = orig; return Promise.reject(Error('crash')); } return orig(fn, o); };
+  await assert.rejects(support.executeDeletion(fam.id, { operator: 'emulator-operator', force: true }), /crash/);
+  const mid = (await db.doc(`families/${fam.id}`).get()).data(); assert.equal(mid.deletion.status, 'executing'); assert.equal(mid.deleted, undefined);
+  await assert.rejects(learning.start(childCtx, { track: 'engine' }), rejected('FAMILY_DELETED'), 'Blocker 1: no Stage 2 write lands while the deletion runs');
+  await assert.rejects(service.me(childCtx), rejected('FAMILY_DELETED'), 'the live child session is refused too (the parent session was retired by the handover)');
+  assert.equal((await db.doc(`families/${fam.id}/learning/${child.id}`).get()).exists, true, 'nothing destroyed before the freeze');
+  const record = await support.executeDeletion(fam.id, { operator: 'emulator-operator' }); // resumed
+  assert.equal(record.counts.children, 1); assert.equal(record.counts.sessions, 1); assert.equal(record.counts.ledgerRows, 520); assert.equal(record.forced, true); assert.equal(record.executionId, mid.deletion.executionId);
+  assert.equal((await db.collection(`families/${fam.id}/learning/${child.id}/ledger`).get()).size, 0, 'Blocker 2: 520 rows went in bounded batches');
   assert.equal((await db.doc(`families/${fam.id}/children/${child.id}`).get()).exists, false);
   assert.equal((await db.doc(`families/${fam.id}/credentials/${child.id}`).get()).exists, false);
   assert.equal((await db.doc(`families/${fam.id}/learning/${child.id}`).get()).exists, false);
@@ -294,4 +304,10 @@ test('real Firestore: a requested deletion removes the people and the game and l
   assert.equal((await db.doc(`parents/${p.uid}`).get()).data().deleted, true);
   await assert.rejects(service.me(childCtx), rejected('SIGN_IN_REQUIRED'));
   await assert.rejects(service.me(sel), rejected('SIGN_IN_REQUIRED'));
+  // Blocker 3: a valid signed renewal after the deletion is recorded and never revives the family
+  const late = { id: `evt_${randomUUID()}`, type: 'invoice.paid', at: Date.now(), customer: co.customerRef, data: { price: 'price_fake_starter', periodEnd: Date.now() + 60 * 86_400_000 } };
+  const lateRaw = Buffer.from(JSON.stringify(late));
+  assert.deepEqual(await payments.receive('fake', lateRaw, { 'x-webhook-signature': signWebhook(webhookSecret, lateRaw, Date.now()) }), { status: 'reconciliation_required', reason: 'FAMILY_DELETED' });
+  const after = (await db.doc(`families/${fam.id}`).get()).data(); assert.equal(after.deleted, true); assert.equal(after.subscription.state, 'cancelled');
+  assert.equal((await db.doc(`billingEvents/fake:${late.id}`).get()).data().outcome.reason, 'FAMILY_DELETED');
 });
