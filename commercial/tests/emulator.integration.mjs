@@ -222,5 +222,39 @@ test('real Firestore: the same signed webhook delivered three times at once is a
   assert.equal((await db.collection(`families/${fam.id}/billing`).get()).size, 1);
   assert.equal((await db.doc(`billingEvents/fake:${event.id}`).get()).data().outcome.status, 'applied');
   assert.equal((await db.doc(`checkouts/fake:${co.checkoutId}`).get()).data().status, 'completed');
-  assert.ok((await db.doc(`checkouts/fake:${co.checkoutId}`).get()).data().expireAt instanceof Timestamp, 'checkout expiry is a real Timestamp for the TTL policy');
+  assert.equal((await db.doc(`checkouts/fake:${co.checkoutId}`).get()).data().expireAt, undefined, 'a checkout is financial evidence: no TTL field');
+});
+test('real Firestore: an abandoned plan change that is taken over can never finalise, and never disturbs its successor (S3.4-F)', async () => {
+  const { Subscriptions } = await import('../server/subscription.mjs');
+  const { Payments, FakeGateway, signWebhook } = await import('../server/payments.mjs');
+  const { webhookSecret } = await import('./support.mjs');
+  const billing = new Subscriptions({ foundation: service, store });
+  const gateway = new FakeGateway({ secret: webhookSecret });
+  const payments = new Payments({ foundation: service, store, billing, provider: 'fake', gateways: { fake: gateway }, inflightMs: 1500 }); // a short window for the test
+  const p = await parent(`takeover-${randomUUID()}@example.test`, '+16505550140');
+  const l = await service.authenticate(await service.login(p.idToken));
+  const fam = await service.createFamily(l, { label: 'Takeover family', adultAttestation: true, consentVersion: 'pilot-v1' });
+  const ctx = await service.authenticate(fam.token);
+  const co = await payments.checkout(ctx, { plan: 'starter', operationId: randomUUID() });
+  const event = { id: `evt_${randomUUID()}`, type: 'checkout.completed', at: Date.now(), customer: co.customerRef, data: { price: 'price_fake_starter', periodEnd: Date.now() + 30 * 86_400_000, checkoutId: co.checkoutId } };
+  const raw = Buffer.from(JSON.stringify(event));
+  assert.equal((await payments.receive('fake', raw, { 'x-webhook-signature': signWebhook(webhookSecret, raw, Date.now()) })).status, 'applied');
+  const gates = new Map(); const real = gateway.changePlan.bind(gateway);
+  gateway.changePlan = async (args) => { const gate = gates.get(args.idempotencyKey); if (gate) await gate; return real(args); };
+  const idA = randomUUID(), idB = randomUUID(); let openA, openB;
+  gates.set(idA, new Promise((r) => { openA = r; })); gates.set(idB, new Promise((r) => { openB = r; }));
+  const pA = payments.changePlan(ctx, { plan: 'family', operationId: idA });
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal((await db.doc(`families/${fam.id}`).get()).data().billingIntent.operationId, idA);
+  await new Promise((r) => setTimeout(r, 1500)); // the in-flight window passes with A still at the provider
+  const pB = payments.changePlan(ctx, { plan: 'big', operationId: idB });
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal((await db.doc(`billingChangeIntents/fake:${idA}`).get()).data().status, 'superseded');
+  assert.equal((await db.doc(`families/${fam.id}`).get()).data().billingIntent.operationId, idB);
+  openA(); await assert.rejects(pA, rejected('SUBSCRIPTION_CHANGED'));
+  const mid = (await db.doc(`families/${fam.id}`).get()).data(); assert.equal(mid.subscription.plan, 'starter'); assert.equal(mid.billingIntent.operationId, idB, 'A did not clear B\'s marker');
+  openB(); assert.equal((await pB).entitlement.plan, 'big');
+  const after = (await db.doc(`families/${fam.id}`).get()).data(); assert.equal(after.subscription.seats, 6); assert.equal(after.billingIntent, null);
+  assert.equal((await db.doc(`billingChangeIntents/fake:${idB}`).get()).data().status, 'applied');
+  assert.equal((await db.collection(`families/${fam.id}/billing`).where('type', '==', 'plan.change').get()).size, 1);
 });

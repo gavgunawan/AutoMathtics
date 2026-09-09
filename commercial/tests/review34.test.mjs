@@ -54,7 +54,7 @@ test('an upgrade in grace is refused (the renewal comes first); a downgrade can 
 });
 test('durable change intent: one provider call in flight per family, resumed after a crash with the same key, never finalised against a subscription that moved', async () => {
   const f = fixture(); const { a } = await paidFamily(f, 'starter', ['A']);
-  const calls = []; const real = f.gateway.changePlan.bind(f.gateway); let hook = null;
+  const calls = []; const real = f.gateway.changePlan.bind(f.gateway); let hook = null; // eslint-disable-line prefer-const
   f.gateway.changePlan = async (args) => { calls.push(args.idempotencyKey); if (hook) { const h = hook; hook = null; await h(); } return real(args); };
   // two simultaneous, different upgrades: exactly one reaches the provider
   const [x, y] = await Promise.allSettled([f.payments.changePlan(a.ctx, { plan: 'family', ...op() }), f.payments.changePlan(a.ctx, { plan: 'big', ...op() })]);

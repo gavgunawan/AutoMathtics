@@ -56,11 +56,12 @@ test('checkout: a parent chooses a purchasable plan; the server mints one custom
   assert.deepEqual(await f.payments.checkout(a.ctx, { plan: 'starter', operationId: op }), co, 'the same operation id and plan is the same checkout');
   await assert.rejects(f.payments.checkout(a.ctx, { plan: 'family', operationId: op }), rejected('IDEMPOTENCY_CONFLICT')); // S3.3-A: the same id with another plan is never the first checkout
   assert.equal(co.providerCheckoutRef, `fake_cs_${op}`); assert.equal(co.idempotencyKey, op, 'the provider is handed the checkout id as its idempotency key');
+  const rec = await f.store.get(`checkouts/fake:${op}`); assert.equal(rec.status, 'pending'); assert.equal(rec.familyId, a.familyId); assert.equal(rec.expireAt, undefined, 'no TTL on financial evidence'); assert.equal(rec.providerCheckoutRef, `fake_cs_${op}`); assert.equal(typeof rec.fingerprint, 'string');
   const second = await f.payments.checkout(a.ctx, { plan: 'family', operationId: randomUUID() });
   assert.equal(second.customerRef, co.customerRef, 'one reference per family per provider');
-  const fam = await f.store.get(`families/${a.familyId}`); assert.deepEqual(fam.billing, { fake: co.customerRef });
+  assert.equal((await f.store.get(`checkouts/fake:${op}`)).status, 'superseded', 'one live checkout per family: the newer replaces the older');
+  const fam = await f.store.get(`families/${a.familyId}`); assert.deepEqual(fam.billing, { fake: co.customerRef }); assert.equal(fam.checkoutIntent.fake, second.checkoutId);
   const mapping = await f.store.get(`billingCustomers/fake:${co.customerRef}`); assert.equal(mapping.familyId, a.familyId); assert.equal(mapping.lastEventAt, 0);
-  const rec = await f.store.get(`checkouts/fake:${op}`); assert.equal(rec.status, 'pending'); assert.equal(rec.familyId, a.familyId); assert.ok(rec.expireAt > f.now()); assert.equal(rec.providerCheckoutRef, `fake_cs_${op}`); assert.equal(typeof rec.fingerprint, 'string');
   assert.equal((await f.billing.view(a.ctx)).customer.fake, co.customerRef);
   const b = await f.family('parentB', 0); const cob = await f.payments.checkout(b.ctx, { plan: 'starter', operationId: randomUUID() });
   assert.notEqual(cob.customerRef, co.customerRef);

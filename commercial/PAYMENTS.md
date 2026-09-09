@@ -127,6 +127,38 @@ hand the provider the same key, so a provider that honours idempotency keys retu
 hosted session. A `checkout.completed` for an intent still `creating` (the provider did open the
 session; the server crashed before recording it) completes it.
 
+## Checkout eligibility and the one live checkout (S3.3/3.4-E)
+
+A family may start a checkout with no subscription, on a trial, or when cancelled, expired or
+past due. A paid family in `active` or `grace` is refused (`USE_PLAN_CHANGE`): plan changes go
+through `/api/billing/plan`, so the downgrade-at-renewal rule, the proration and the change
+intent cannot be bypassed with a fresh checkout. Past-due recovery is explicit policy: pay the
+dunning invoice (a renewal on the plan on record) or start a checkout for any plan. One checkout
+is live per family and provider (`families/{f}.checkoutIntent`): a newer one supersedes the
+older in the same transaction, and the older one's later completion is refused
+(`CHECKOUT_SUPERSEDED`) — never two transitions for two paid sessions.
+
+## What the change intent does and does not give (S3.4-F, honest wording)
+
+The intent gives **idempotency and stale-state detection**, not a distributed transaction: no
+database transaction spans Firestore and the provider. A taken-over intent is marked
+`superseded` in the takeover transaction, and finalisation requires both that the subscription
+version is the one the intent saw *and* that `families/{f}.billingIntent` still names this
+operation; a stale finalisation never touches a marker that is not its own. What remains — the
+provider charged, then the subscription moved locally, so finalisation is refused as
+`SUBSCRIPTION_CHANGED` — is a **reconciliation** problem for Stage 4: the provider's operation
+reference is stored on the intent permanently; the adapter fetches the provider's subscription
+state; the signed provider state is the final authority; and 3.5's support tooling exposes the
+operator path (list stale/superseded intents and `requires_action` events, replay, reconcile).
+
+## Retention (S3.4-G)
+
+`checkouts`, `billingChangeIntents`, `billingEvents`, `billingCustomers` and `families/*/billing`
+carry no `expireAt` and are never TTL-collected: they are the idempotency and recovery evidence
+for money that may have moved. A provider's own idempotency window is not assumed to last;
+without these records a reused operation id could reach the provider again. Terminal records
+may one day be archived under a deliberate financial-retention policy, not garbage collection.
+
 ## Adapter contract for a real provider (Stage 4)
 
 An adapter implements `createCheckout`, `changePlan` and `verify`. It must:
@@ -144,7 +176,11 @@ An adapter implements `createCheckout`, `changePlan` and `verify`. It must:
 
 - `billingEvents/{provider}:{eventId}` — the global inbox; kept forever (financial record).
 - `billingCustomers/{provider}:{customerRef}` — reference → family, last applied event.
-- `checkouts/{provider}:{checkoutId}` — pending/completed, `expireAt` 30 days (TTL group `checkouts`).
+- `checkouts/{provider}:{checkoutId}` — creating/pending/completed/superseded; kept (see retention).
+- `billingChangeIntents/{provider}:{operationId}` — creating/applied/stale/superseded, with the provider's
+  operation reference; kept (see retention).
+- `families/{f}.checkoutIntent.{provider}` / `families/{f}.billingIntent` — the one live checkout, the one
+  in-flight plan change.
 - `families/{f}.billing.{provider}` — the family's reference (display only in the browser).
 
 All deny-all to browsers, like everything else.

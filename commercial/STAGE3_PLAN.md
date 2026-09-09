@@ -47,6 +47,16 @@ for development by the review team on 9 Sep 2026). Order agreed with the team:
 | 3.3 must resolve the family from the provider-customer mapping and map provider price ids to plans; never trust plan/seats/family from the payload | closed: `billingCustomers` mapping (PR #12) + price table (`FAKE_PRICES`), `UNKNOWN_PRICE`, payload naming a plan is malformed |
 | 3.3 keep `plan.change` out of webhook mapping | closed: `subscription.updated` is recorded and ignored until 3.4 |
 
+## 3.3/3.4 close-out follow-ups (9 Sep 2026, after PR #16)
+
+| Item | Status |
+|---|---|
+| **S3.3/3.4-E** a fresh checkout bypassed the plan-change lifecycle; several live checkouts per family | closed: checkout only with no subscription / trial / past_due / cancelled / expired (`USE_PLAN_CHANGE` otherwise, past-due recovery explicit); one live checkout per family and provider, the older `superseded` and its completion `CHECKOUT_SUPERSEDED` |
+| **S3.4-F** takeover race: an abandoned intent could still finalise and clear another change's marker | closed: takeover marks the abandoned intent `superseded` in the same transaction; finalisation requires the subscription version *and* `families/{f}.billingIntent` naming this operation; a stale finalisation never clears a marker that is not its own; the A-stalls → B-takes-over → A-resumes race is tested in memory and against the Firestore emulator |
+| **S3.4-G** change intents (and checkouts) had a 30-day TTL | closed: no `expireAt`; retention policy in `PAYMENTS.md`; TTL list in DEPLOY_V3 corrected |
+| Wording: "atomicity" | corrected: idempotency + stale-state detection; the provider/local disagreement is a Stage 4 reconciliation rule with the provider operation reference kept permanently; 3.5 exposes the operator path |
+| Carried to Stage 4 | real adapter supplies a total event order; refund facts from the provider's refund object; growth of `refunds[]` / `pending[]` watched |
+
 ## 3.4 review follow-ups (9 Sep 2026, after PR #15)
 
 | Item | Status |
