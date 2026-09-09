@@ -1,4 +1,4 @@
-# AutoMathtics v3.0 - secure account, learning and game foundation
+﻿# AutoMathtics v3.0 - secure account, learning and game foundation
 
 **Status: v3.0 private pilot, not a public-launch security certification.**
 
@@ -7,7 +7,7 @@ The secure v3 learning engine and the functional v2 game/economy features are no
 The old root v2 application remains separate and is not replaced or deployed by this directory.
 
 This directory never connects to the legacy Firebase project at runtime. Optional v2 history/wallet migration is
-performed only from a reviewed JSON export with the guarded `scripts/import-v2.mjs` operator tool; it never reads
+performed only from a reviewed JSON export with the guarded `scripts/migrate-v2.mjs` operator tool; it never reads
 from the old project directly. The commercial server explicitly refuses the legacy Firebase project.
 
 ## Implemented

@@ -21,6 +21,7 @@ export function assertFirestoreShape(value, path = '$', inArray = false) {
 export class MemoryStore {
   data = new Map(); tail = Promise.resolve();
   async get(path) { return structuredClone(this.data.get(path) || null); }
+  async list(collectionPath) { const prefix = `${collectionPath}/`; return [...this.data.entries()].filter(([k]) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/')).map(([, v]) => structuredClone(v)); }
   transaction(fn, { readOnly = false } = {}) {
     const run = this.tail.then(async () => {
       const working = new Map(structuredClone([...this.data])); let written = false;

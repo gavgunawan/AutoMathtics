@@ -1,4 +1,4 @@
-# AutoMathtics v3.0: GitHub and live private-pilot deployment
+﻿# AutoMathtics v3.0: GitHub and live private-pilot deployment
 
 ## What this release is
 
@@ -150,7 +150,7 @@ It never opens the legacy Realtime Database or legacy Firebase project. Prepare 
 `STAGE2_LEARNING.md`, then inspect the mapping locally:
 
 ```bash
-npm run import:v2 -- --file v2-export.json --family FAMILY_UUID
+npm run migrate -- FAMILY_UUID CHILD_UUID path/to/child-export.json "reason"   # dry run; add CONFIRM_MIGRATION=write to import
 ```
 
 The default is **dry run**: Firebase Admin is not even loaded. The report shows mapped tracks, balances,

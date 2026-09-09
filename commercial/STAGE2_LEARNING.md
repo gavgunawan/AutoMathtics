@@ -1,4 +1,4 @@
-# Stage 2 - secure learning engine and migrated game
+﻿# Stage 2 - secure learning engine and migrated game
 
 Base entering this completion pass: `release/v3.0` at `dbc189f20e74231b978c1ca447cc4c5e58af0777`.
 Working branch: `hardening/stage2-completion`.
@@ -112,40 +112,28 @@ the parent explicitly repeats the action.
 
 ## v2 data migration
 
-`server/v2-migration.mjs` maps a reviewed v2 JSON export into the v3 learning/game document model.
-`scripts/import-v2.mjs` is an operator-only importer. It **never connects to the v2 Firebase project**.
+`server/migrate.mjs` (`convertV2`, `importLearning`) maps one child's v2 progress record into the v3
+learning/game document. `scripts/migrate-v2.mjs` is the operator-only importer. It **never connects to
+the v2 Firebase project**: the record arrives as a file the operator exported.
 
-Default execution is dry-run and does not load the Firebase SDK:
+Default execution is a dry run that prints the conversion summary and does not load the Firebase SDK:
 
 ```sh
-npm run import:v2 -- --file v2-export.json --family FAMILY_UUID
+npm run migrate -- FAMILY_UUID CHILD_UUID path/to/child-export.json "reason"   # dry run; add CONFIRM_MIGRATION=write to import
 ```
 
-Only an explicit `--apply` writes to the configured v3 project. Existing target progress/config is refused
-unless `--overwrite` is also explicit. Cloud use requires the same exact-project confirmation and operator
-identity controls as other privileged scripts.
+The write requires `CONFIRM_MIGRATION=write` plus the same project guards as `grant.mjs`. The import
+refuses a child outside the family, an inactive child, and any child who already has progress
+(`ALREADY_HAS_PROGRESS`): it never merges and never overwrites. It writes an audit row.
 
-Bundle shape:
-
-```json
-{
-  "children": {
-    "OldChildName": {
-      "childId": "V3_CHILD_UUID",
-      "multiplier": 1.0,
-      "progress": { "level": 0, "paper": 1, "nav": {}, "history": [], "wallet": {} }
-    }
-  },
-  "settings": {},
-  "rocket": null
-}
-```
-
-The mapper converts v2 nested-array question logs into Firestore-safe objects, reconstructs earned currency
-from trusted historical pass rows before applying historical spend, carries recognized inventory/equipment,
-shields/egg/redemptions/System Scan state, maps reward/Rocket child names to v3 child UUIDs, and clears any
-legacy in-flight session. Unknown inventory IDs and inconsistent accounting are reported rather than treated
-as free currency.
+The input is the child's v2 record as stored (`{ level, paper, bossCleared, nav, history, wallet, … }`).
+The converter reconstructs earned currency from the historical pass rows before applying the v2 spend
+ledgers (clamped at zero), carries Engine/Navigator sector, paper and crowns, the last 60 history rows
+with per-question logs as objects, recognised inventory and equipped items, shields, purchases,
+redemptions and the System Scan week. The carried balance is the ledger's opening row
+(`migrate-opening`), so the child's ledger derives to the wallet from day one. Unknown item ids are
+dropped and reported. The v2 PIN never enters the document. An unfinished Mystery Egg and the
+family-level Reward Store / Rocket configuration are **not** carried — decide per family before cutover.
 
 ## Stage 1b follow-up closed in this pass
 

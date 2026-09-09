@@ -9,6 +9,8 @@ export class FirestoreStore {
   encode(value) { return this.timestamp && value && typeof value.expireAt === 'number' ? { ...value, expireAt: this.timestamp(value.expireAt) } : value; }
   decode(data) { return data && data.expireAt && typeof data.expireAt.toMillis === 'function' ? { ...data, expireAt: data.expireAt.toMillis() } : data; }
   async get(path) { const snap = await this.db.doc(path).get(); return snap.exists ? this.decode(snap.data()) : null; }
+  // Every document directly under a collection path (reconciliation reads a child's whole ledger).
+  async list(collectionPath) { const snap = await this.db.collection(collectionPath).get(); return snap.docs.map((d) => this.decode(d.data())); }
   // readOnly transactions take no document locks, so read-only routes never contend with writers.
   transaction(fn, { readOnly = false } = {}) {
     return this.db.runTransaction((t) => fn({

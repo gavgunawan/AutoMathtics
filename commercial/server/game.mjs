@@ -1,6 +1,7 @@
 import { randomInt, randomUUID } from 'node:crypto';
 import { fail, object, text, uuid } from './security.mjs';
 import { GC_PASS, RP_PASS, EQUIP_SLOTS, LEVELS, bonusesFor, dayISO, normalizeProgress, liveDayRun, scanState, trk, trackDone, bossDue } from './progress.mjs';
+import { entry, post } from './ledger.mjs';
 
 const MINUTE = 60_000, DAY = 24 * 60 * MINUTE;
 const OP_LIFE = DAY;
@@ -220,11 +221,13 @@ export class Game {
       } else {
         if (w.inventory.includes(it.id)) fail(409, 'ITEM_ALREADY_OWNED'); w.inventory.push(it.id); w[EQUIP_SLOTS[it.kind]] = it.id;
       }
-      w.gc -= it.cost; w.gcSpent += it.cost; w.inventory = [...new Set(w.inventory)];
+      w.gcSpent += it.cost; w.inventory = [...new Set(w.inventory)];
       w.purchases.unshift(nowRow(it.kind === 'crate' && awarded ? { ...it, name: `${it.name} -> ${awarded.emoji} ${awarded.name}` } : it, it.cost, this.now(), family.timeZone || 'Asia/Singapore'));
-      w.purchases = w.purchases.slice(0, PURCHASE_MAX); const next = { ...prog, wallet: w };
-      const response = { wallet: this.publicWallet(w), item: itemPublic(it), awarded: awarded ? itemPublic(awarded) : null };
-      tx.set(p.doc, next); tx.set(p.ledger(operationId), { id: operationId, type: 'shop.buy', currency: 'gc', amount: -it.cost, itemId: it.id, awardedId: awarded?.id || null, at: this.now() });
+      w.purchases = w.purchases.slice(0, PURCHASE_MAX);
+      // The price leaves the wallet only through the ledger (server/ledger.mjs).
+      const next = post(tx, p.doc, { ...prog, wallet: w }, entry({ id: operationId, type: 'shop.buy', gc: -it.cost, ref: it.id, note: awarded ? awarded.id : null, at: this.now() }));
+      const response = { wallet: this.publicWallet(next.wallet), item: itemPublic(it), awarded: awarded ? itemPublic(awarded) : null };
+      tx.set(p.doc, next);
       tx.set(op.path, { action: 'buy', fingerprint: it.id, response, at: this.now(), expireAt: this.now() + OP_LIFE });
       this.foundation.audit(tx, 'game.shop_buy', s.uid, s.familyId, s.childId); return response;
     });
@@ -248,8 +251,10 @@ export class Game {
       const used = w.redemptions.filter((r) => r.rewardId === reward.id && r.date === date && r.status !== 'rejected').length;
       if (reward.cap > 0 && used >= reward.cap) fail(409, 'REWARD_DAILY_LIMIT'); if (w.rp < reward.cost) fail(409, 'INSUFFICIENT_REWARD_POINTS');
       const redemption = { id: randomUUID(), rewardId: reward.id, emoji: reward.emoji, name: reward.name, cost: reward.cost, date, status: 'pending', requestedAt: this.now() };
-      w.rp -= reward.cost; w.rpSpent += reward.cost; w.redemptions = [redemption, ...w.redemptions].slice(0, REDEMPTION_MAX); const response = { redemption, wallet: this.publicWallet(w) };
-      tx.set(p.doc, { ...prog, wallet: w }); tx.set(p.ledger(operationId), { id: operationId, type: 'reward.request', currency: 'rp', amount: -reward.cost, rewardId, redemptionId: redemption.id, at: this.now() });
+      w.rpSpent += reward.cost; w.redemptions = [redemption, ...w.redemptions].slice(0, REDEMPTION_MAX);
+      const next = post(tx, p.doc, { ...prog, wallet: w }, entry({ id: operationId, type: 'reward.request', rp: -reward.cost, ref: redemption.id, note: rewardId, at: this.now() }));
+      const response = { redemption, wallet: this.publicWallet(next.wallet) };
+      tx.set(p.doc, next);
       tx.set(op.path, { action: 'redeem', fingerprint: rewardId, response, at: this.now(), expireAt: this.now() + OP_LIFE }); this.foundation.audit(tx, 'game.reward_requested', s.uid, s.familyId, s.childId); return response;
     });
   }
@@ -262,15 +267,17 @@ export class Game {
       if (!r.crewChildIds.includes(s.childId) || !ROCKET_AMOUNTS[r.currency]?.includes(body.amount)) fail(403, 'ROCKET_FUEL_DENIED');
       const w = { ...prog.wallet, purchases: [...prog.wallet.purchases], redemptions: [...prog.wallet.redemptions] };
       if (w[r.currency] < body.amount) fail(409, r.currency === 'rp' ? 'INSUFFICIENT_REWARD_POINTS' : 'INSUFFICIENT_GRID_COINS');
-      w[r.currency] -= body.amount; if (r.currency === 'gc') w.gcSpent += body.amount; else w.rpSpent += body.amount;
+      if (r.currency === 'gc') w.gcSpent += body.amount; else w.rpSpent += body.amount;
       const label = { id: 'rocket', emoji: '🚀', name: `Rocket fuel - ${r.prize.name}` };
       const timeZone = family.timeZone || 'Asia/Singapore';
       if (r.currency === 'gc') w.purchases = [nowRow(label, body.amount, this.now(), timeZone), ...w.purchases].slice(0, PURCHASE_MAX);
       else w.redemptions = [{ id: randomUUID(), rewardId: 'rocket', emoji: '🚀', name: label.name, cost: body.amount, date: dayISO(this.now(), timeZone), status: 'approved', requestedAt: this.now(), decidedAt: this.now() }, ...w.redemptions].slice(0, REDEMPTION_MAX);
       const nextRocket = { ...r, fuel: { ...r.fuel, [s.childId]: (r.fuel[s.childId] || 0) + body.amount }, lastFuel: { childId: s.childId, amount: body.amount, at: this.now() } };
       if (rocketReady(nextRocket)) { nextRocket.status = 'launched'; nextRocket.launchedAt = this.now(); }
-      const nextCfg = { ...cfg, rocket: nextRocket }, response = { rocket: childRocket(nextRocket, s.childId), wallet: this.publicWallet(w) };
-      tx.set(p.doc, { ...prog, wallet: w }); tx.set(p.config, nextCfg); tx.set(p.ledger(operationId), { id: operationId, type: 'rocket.fuel', currency: r.currency, amount: -body.amount, rocketId, at: this.now() });
+      const nextCfg = { ...cfg, rocket: nextRocket };
+      const next = post(tx, p.doc, { ...prog, wallet: w }, entry({ id: operationId, type: 'rocket.fuel', [r.currency]: -body.amount, ref: rocketId, at: this.now() }));
+      const response = { rocket: childRocket(nextRocket, s.childId), wallet: this.publicWallet(next.wallet) };
+      tx.set(p.doc, next); tx.set(p.config, nextCfg);
       tx.set(op.path, { action: 'rocket.fuel', fingerprint: `${rocketId}:${body.amount}`, response, at: this.now(), expireAt: this.now() + OP_LIFE }); this.foundation.audit(tx, 'game.rocket_fuel', s.uid, s.familyId, s.childId); return response;
     });
   }
@@ -293,9 +300,13 @@ export class Game {
     return this.store.transaction(async (tx) => { const { s, family } = await this.parent(tx, ctx, true); if (!family.childIds.includes(body.childId)) fail(404, 'CHILD_NOT_FOUND');
       const path = `families/${s.familyId}/learning/${body.childId}`, prog = normalizeProgress(await tx.get(path)); const w = { ...prog.wallet, redemptions: [...prog.wallet.redemptions] };
       const i = w.redemptions.findIndex((r) => r.id === body.redemptionId); if (i < 0) fail(404, 'REDEMPTION_NOT_FOUND'); const red = w.redemptions[i]; if (red.status !== 'pending') fail(409, 'REDEMPTION_ALREADY_DECIDED');
+      let next = { ...prog, wallet: w };
       if (body.decision === 'approve') w.redemptions[i] = { ...red, status: 'approved', decidedAt: this.now() };
-      else { w.rp += red.cost; w.rpSpent = Math.max(0, w.rpSpent - red.cost); w.redemptions[i] = { ...red, status: 'rejected', decidedAt: this.now() }; }
-      tx.set(path, { ...prog, wallet: w }); this.foundation.audit(tx, `game.reward_${body.decision}d`, s.uid, s.familyId, body.childId); return { redemption: w.redemptions[i] }; });
+      else {
+        w.rpSpent = Math.max(0, w.rpSpent - red.cost); w.redemptions[i] = { ...red, status: 'rejected', decidedAt: this.now() };
+        next = post(tx, path, next, entry({ id: `${red.id}-refund`, type: 'reward.refund', rp: red.cost, ref: red.id, at: this.now() })); // the held points come back through the ledger
+      }
+      tx.set(path, next); this.foundation.audit(tx, `game.reward_${body.decision}d`, s.uid, s.familyId, body.childId); return { redemption: w.redemptions[i] }; });
   }
   async rocket(ctx, body) {
     object(body, ['action', 'rocketId', 'prize', 'currency', 'goal', 'minEach', 'crewChildIds']);
@@ -322,8 +333,9 @@ export class Game {
     return this.store.transaction(async (tx) => { const { s, family } = await this.parent(tx, ctx, true); if (!family.childIds.includes(body.childId)) fail(404, 'CHILD_NOT_FOUND');
       const base = `families/${s.familyId}/learning/${body.childId}`, opPath = `${base}/operations/${body.operationId}`, old = await tx.get(opPath); const fp = `${body.currency}:${body.amount}:${reason}`;
       if (old) { if (old.action !== 'adjust' || old.fingerprint !== fp) fail(409, 'IDEMPOTENCY_CONFLICT'); return old.response; }
-      const prog = normalizeProgress(await tx.get(base)), w = { ...prog.wallet }; if (w[body.currency] + body.amount < 0) fail(409, 'INSUFFICIENT_BALANCE'); w[body.currency] += body.amount;
-      const response = { wallet: this.publicWallet(w) }; tx.set(base, { ...prog, wallet: w }); tx.set(`${base}/ledger/${body.operationId}`, { id: body.operationId, type: 'parent.adjust', currency: body.currency, amount: body.amount, reason, at: this.now() });
+      const prog = normalizeProgress(await tx.get(base)); if (prog.wallet[body.currency] + body.amount < 0) fail(409, 'INSUFFICIENT_BALANCE');
+      const next = post(tx, base, prog, entry({ id: body.operationId, type: 'parent.adjust', [body.currency]: body.amount, note: reason, at: this.now() }));
+      const response = { wallet: this.publicWallet(next.wallet) }; tx.set(base, next);
       tx.set(opPath, { action: 'adjust', fingerprint: fp, response, at: this.now(), expireAt: this.now() + OP_LIFE }); this.foundation.audit(tx, 'game.parent_adjust', s.uid, s.familyId, body.childId); return response; });
   }
   async settings(ctx, body) {

@@ -19,7 +19,7 @@ export const EQUIP_SLOTS = Object.freeze({
 });
 
 export const freshWallet = () => ({
-  gc: 0, rp: 0, bonuses: 0, gcSpent: 0, rpSpent: 0,
+  gc: 0, rp: 0, bonuses: 0, gcSpent: 0, rpSpent: 0, ledgerSeq: 0, ledgerLast: null, // gc/rp are the ledger's cached balance (server/ledger.mjs)
   inventory: [], activePet: null, activeFx: null, activeSnd: null, activeBg: null, ring: null,
   activeOutfit: null, activeShout: null, activeTimer: null, activeTitle: null,
   activeNameFx: null, activeMap: null, activeVehicle: null, activeBase: null,
@@ -40,6 +40,8 @@ export function normalizeWallet(value) {
     if (!Number.isSafeInteger(out[key]) || out[key] < 0) out[key] = 0;
   }
   out.shields = Math.min(2, out.shields);
+  if (!Number.isSafeInteger(out.ledgerSeq) || out.ledgerSeq < 0) out.ledgerSeq = 0;
+  if (typeof out.ledgerLast !== 'string') out.ledgerLast = null;
   out.inventory = uniqStrings(out.inventory, 200);
   out.shieldDays = uniqStrings(out.shieldDays, 400).sort();
   out.purchases = Array.isArray(out.purchases) ? out.purchases.slice(0, 120) : [];
