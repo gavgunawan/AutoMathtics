@@ -200,3 +200,27 @@ test('real Firestore: two families under one verified phone race for the single 
   assert.equal((await db.doc(`families/${winner}`).get()).data().subscription.state, 'trial');
   assert.equal((await db.doc(`families/${loser}`).get()).data().subscription, undefined);
 });
+test('real Firestore: the same signed webhook delivered three times at once is applied exactly once; the others replay the stored outcome', async () => {
+  const { Subscriptions } = await import('../server/subscription.mjs');
+  const { Payments, FakeGateway, signWebhook } = await import('../server/payments.mjs');
+  const { webhookSecret } = await import('./support.mjs');
+  const billing = new Subscriptions({ foundation: service, store });
+  const payments = new Payments({ foundation: service, store, billing, provider: 'fake', gateways: { fake: new FakeGateway({ secret: webhookSecret }) } });
+  const p = await parent(`hook-${randomUUID()}@example.test`, '+16505550130');
+  const l = await service.authenticate(await service.login(p.idToken));
+  const fam = await service.createFamily(l, { label: 'Webhook family', adultAttestation: true, consentVersion: 'pilot-v1' });
+  const ctx = await service.authenticate(fam.token);
+  const co = await payments.checkout(ctx, { plan: 'starter', operationId: randomUUID() });
+  assert.equal((await db.doc(`billingCustomers/fake:${co.customerRef}`).get()).data().familyId, fam.id);
+  const event = { id: `evt_${randomUUID()}`, type: 'checkout.completed', at: Date.now(), customer: co.customerRef, data: { plan: 'starter', periodEnd: Date.now() + 30 * 86_400_000, checkoutId: co.checkoutId } };
+  const raw = Buffer.from(JSON.stringify(event)), headers = { 'x-webhook-signature': signWebhook(webhookSecret, raw, Date.now()) };
+  const results = await Promise.all([1, 2, 3].map(() => payments.receive('fake', raw, headers)));
+  assert.equal(results.filter((r) => r.status === 'applied').length, 3, JSON.stringify(results));
+  assert.equal(results.filter((r) => r.replayed).length, 2, 'exactly one delivery did the work');
+  const family = (await db.doc(`families/${fam.id}`).get()).data();
+  assert.equal(family.subscription.state, 'active'); assert.equal(family.subscription.version, 1);
+  assert.equal((await db.collection(`families/${fam.id}/billing`).get()).size, 1);
+  assert.equal((await db.doc(`billingEvents/fake:${event.id}`).get()).data().outcome.status, 'applied');
+  assert.equal((await db.doc(`checkouts/fake:${co.checkoutId}`).get()).data().status, 'completed');
+  assert.ok((await db.doc(`checkouts/fake:${co.checkoutId}`).get()).data().expireAt instanceof Timestamp, 'checkout expiry is a real Timestamp for the TTL policy');
+});

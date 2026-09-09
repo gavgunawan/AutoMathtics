@@ -15,7 +15,7 @@ const messages = {
   CHILD_SESSION_REVOKED: 'The child PIN changed. Select the child and enter the new PIN.',
   TRIAL_ALREADY_USED: 'A free trial has already been used with this mobile number.', TRIAL_REQUIRES_VERIFIED_PHONE: 'A verified mobile number is needed for the free trial.',
   SUBSCRIPTION_EXISTS: 'This family already has a subscription.', NO_SUBSCRIPTION: 'There is no subscription to change.', INVALID_TRANSITION: 'That change is not possible in the current state.',
-  SEATS_CANNOT_REMOVE: 'Seats can be added here, not taken away.', SELECT_CHILDREN_FOR_DOWNGRADE: 'Not enough seats for that many children.', IDEMPOTENCY_CONFLICT: 'That request was already made differently. Refresh and try again.',
+  SEATS_CANNOT_REMOVE: 'Seats can be added here, not taken away.', INVALID_PLAN: 'That plan is not available.', SELECT_CHILDREN_FOR_DOWNGRADE: 'Not enough seats for that many children.', IDEMPOTENCY_CONFLICT: 'That request was already made differently. Refresh and try again.',
   INSUFFICIENT_GRID_COINS: 'Not enough Grid Coins yet.', INSUFFICIENT_REWARD_POINTS: 'Not enough Reward Points yet.',
   ITEM_ALREADY_OWNED: 'You already own that item.', SHIELD_LIMIT: 'You can hold at most two streak shields.',
   EGG_ALREADY_WARMING: 'Your Mystery Egg is already warming.', REWARD_DAILY_LIMIT: 'That reward has reached its daily limit.',
@@ -201,9 +201,26 @@ function cards(children, action) {
   }
   return grid;
 }
+// Stage 3.3: a plan choice starts a checkout on the server. With the pilot's fake provider no money
+// moves: the server returns a payment reference the operator completes; a real provider (Stage 4)
+// returns a URL to go to. Nothing about the plan or the family is decided in the browser.
+function planButtons(box, billing) {
+  if (!billing?.plans?.length) return;
+  const row = el('div', null, 'actions');
+  for (const plan of billing.plans) {
+    const op = crypto.randomUUID();
+    row.append(button(`${plan.name}: ${plan.seats} child slots`, async () => {
+      const r = await api('/billing/checkout', { plan: plan.id, operationId: op });
+      if (r.url) { location.href = r.url; return; }
+      note(`Pilot mode: no payment is taken. Reference ${r.customerRef}, checkout ${r.checkoutId}. The operator completes it.`);
+    }, 'ghost'));
+  }
+  box.append(el('p', 'Choose a plan to subscribe. Prices are shown at checkout.', 'notice'), row);
+  if (billing.customer?.fake) box.append(el('p', `Payment reference: ${billing.customer.fake}`, 'reference'));
+}
 async function parentScreen() {
   const family = model.family, e = family.entitlement || { status: 'inactive', seatLimit: 0, accessUntil: 0 };
-  const billing = e.state || e.status === 'active' ? null : await api('/billing'); // eligibility comes from the server, not guessed from /me
+  const billing = await api('/billing'); // plans, trial eligibility and the payment reference come from the server, never guessed from /me
   const active = e.status === 'active' && e.accessUntil > Date.now(); // Display only; API is authoritative.
   const box = panel('PARENT WORKSPACE', family.label, 'Manage your children here. Hand over the device to remove parent access.');
   const summary = el('div', null, 'allowance');
@@ -229,7 +246,9 @@ async function parentScreen() {
         box.append(button(`Give ${c.nickname} a seat`, async () => { await api('/billing/seats', { childIds: [...seated, c.id], operationId: seatOp }); await refresh(); }, 'ghost'));
       }
     }
+    if (!['active', 'grace'].includes(e.state)) planButtons(box, billing);
   } else if (!active) {
+    planButtons(box, billing);
     if (billing?.trial?.eligible) {
       const trialOp = crypto.randomUUID();
       box.append(el('p', 'Your parent account is ready. Start the free trial to open two child slots for seven days.', 'notice'),

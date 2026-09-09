@@ -7,8 +7,8 @@ for development by the review team on 9 Sep 2026). Order agreed with the team:
 |---|---|---|
 | 3.1 | Commercial ledger hardening — balances reconcilable and derived before money enters | merged (PR #9); hardened per audit (bootstrap, never-overwrite, safe repair) |
 | 3.2 | Subscription + entitlement state machine: trial, active, grace, past-due, cancelled, expired; seat plans; one trial per `phoneKey` — see `SUBSCRIPTIONS.md` | merged (PR #10); hardened per audit (seat reactivation, event fingerprints, retry-safe parent actions, real-Firestore trial race) |
-| 3.3 | Payment gateway abstraction + webhook security, with local/fake payment events (the $0 constraint holds); global provider-event inbox | next |
-| 3.4 | Upgrade / downgrade / cancel / refund lifecycle | |
+| 3.3 | Payment gateway abstraction + webhook security, with local/fake payment events (the $0 constraint holds); global provider-event inbox — see `PAYMENTS.md` | **this branch** |
+| 3.4 | Upgrade / downgrade / cancel / refund lifecycle (including resolving a provider downgrade that needs a seat choice — 3.3 records it as rejected) | next |
 | 3.5 | Recovery, export, deletion, commercial admin/support tooling | |
 | Stage 4 | Real provider, staging environment, private pilot | |
 

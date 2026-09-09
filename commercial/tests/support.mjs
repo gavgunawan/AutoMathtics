@@ -4,6 +4,7 @@ import { FirebaseIdentity } from '../server/firebase.mjs';
 import { Learning } from '../server/learning.mjs';
 import { Game } from '../server/game.mjs';
 import { Subscriptions } from '../server/subscription.mjs';
+import { Payments, FakeGateway } from '../server/payments.mjs';
 import { mac } from '../server/security.mjs';
 
 // Firestore rejects `undefined` values and arrays nested directly inside arrays; fail the same way
@@ -39,7 +40,7 @@ export class MemoryStore {
   }
   put(p, v) { return this.transaction(async (t) => t.set(p, v)); }
 }
-export const secret = 'a1'.repeat(32), pepper = 'b2'.repeat(32);
+export const secret = 'a1'.repeat(32), pepper = 'b2'.repeat(32), webhookSecret = 'c3'.repeat(32);
 export const fakeHasher = {
   hash: async (f, c, p) => mac(pepper, `${f}:${c}:${p}`),
   verify: async (f, c, p, h) => h === mac(pepper, `${f}:${c}:${p}`),
@@ -56,6 +57,8 @@ export function fixture() {
   const learning = new Learning({ foundation: service, store, now: () => clock });
   const game = new Game({ foundation: service, store, now: () => clock, pickIndex: () => 0 });
   const billing = new Subscriptions({ foundation: service, store, now: () => clock });
+  const gateway = new FakeGateway({ secret: webhookSecret });
+  const payments = new Payments({ foundation: service, store, billing, provider: 'fake', gateways: { fake: gateway }, now: () => clock });
   function token(uid, patch = {}) {
     if (!users.has(uid)) users.set(uid, { uid, email: `${uid}@example.test`, emailVerified: true, disabled: false,
       tokensValidAfterTime: new Date(0).toUTCString(), multiFactor: { enrolledFactors: [{ uid: `mfa-${uid}`, factorId: 'phone', phoneNumber: `+65${String(Math.abs([...uid].reduce((h, c) => (h * 31 + c.charCodeAt(0)) | 0, 7)) % 1e8).padStart(8, '0')}` }] } }); // a distinct fake number per uid
@@ -85,7 +88,7 @@ export function fixture() {
     const childCtx = await service.authenticate(await service.selectChild(selCtx, kid.id, '763829'));
     return { p, child: kid, selCtx, childCtx };
   }
-  return { service, learning, game, billing, store, identity, users, tokens, auth, token, login, family, child, childSession, now: () => clock, advance: (ms) => { clock += ms; } };
+  return { service, learning, game, billing, payments, gateway, store, identity, users, tokens, auth, token, login, family, child, childSession, now: () => clock, advance: (ms) => { clock += ms; } };
 }
 export const rejected = (code) => (err) => err.code === code;
 // the answer the server holds, in the shape the browser would send — and a nearby wrong one

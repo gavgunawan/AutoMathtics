@@ -36,8 +36,17 @@ export function config(env = process.env) {
   if (!emulator && !/^[0-5]$/.test(env.TRUSTED_PROXY_HOPS || '')) throw Error('Set TRUSTED_PROXY_HOPS (0-5) for the deployed edge; see DEPLOY_V3.md.');
   const proxyHops = emulator ? Number(env.TRUSTED_PROXY_HOPS || 0) : Number(env.TRUSTED_PROXY_HOPS);
   if (!Number.isInteger(proxyHops) || proxyHops < 0 || proxyHops > 5) throw Error('TRUSTED_PROXY_HOPS must be 0-5.');
+  // Stage 3.3: the payment provider. Only the zero-cost fake gateway exists until Stage 4; outside
+  // the emulator it must be acknowledged explicitly so nobody mistakes a pilot for a shop.
+  const provider = env.PAYMENT_PROVIDER || (emulator ? 'fake' : '');
+  if (provider !== 'fake') throw Error('PAYMENT_PROVIDER must be "fake" until Stage 4 attaches a real provider.');
+  if (!emulator && env.FAKE_PAYMENTS_ACK !== 'no-real-money') throw Error('The fake payment provider outside the emulator requires FAKE_PAYMENTS_ACK=no-real-money.');
+  const webhookSecret = env.WEBHOOK_SECRET_FAKE;
+  if (!/^[a-f0-9]{64,}$/.test(webhookSecret || '') || webhookSecret === secret || webhookSecret === pepper || previousPeppers.includes(webhookSecret)) {
+    throw Error('Set WEBHOOK_SECRET_FAKE: a random hex secret of at least 32 bytes, distinct from every other secret.');
+  }
   const port = Number(env.PORT || 8787);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw Error('Invalid PORT.');
-  return { mode, emulator, projectId, origin, secret, pepper, previousPeppers, proxyHops, port,
+  return { mode, emulator, projectId, origin, secret, pepper, previousPeppers, proxyHops, port, payments: { provider, webhookSecrets: { fake: webhookSecret } },
     web: { apiKey: env.FIREBASE_WEB_API_KEY, appId: env.FIREBASE_WEB_APP_ID, projectId, authDomain: `${projectId}.firebaseapp.com` } };
 }

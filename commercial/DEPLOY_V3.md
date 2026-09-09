@@ -102,7 +102,10 @@ node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))
   gcloud secrets create am-v3-session --data-file=- --project "$PROJECT_ID"
 node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))" | \
   gcloud secrets create am-v3-pin-pepper --data-file=- --project "$PROJECT_ID"
-for SECRET in am-v3-session am-v3-pin-pepper; do
+# Stage 3.3: signs the fake payment provider's webhooks (no real money until Stage 4; see PAYMENTS.md)
+node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))" | \
+  gcloud secrets create am-v3-webhook-fake --data-file=- --project "$PROJECT_ID"
+for SECRET in am-v3-session am-v3-pin-pepper am-v3-webhook-fake; do
   gcloud secrets add-iam-policy-binding "$SECRET" --project "$PROJECT_ID" \
     --member="serviceAccount:$RUNTIME_SA" --role=roles/secretmanager.secretAccessor
 done
@@ -112,7 +115,7 @@ Run creation commands once. If a resource already exists, inspect and reuse it;
 do NOT generate replacement PIN peppers, overwrite secrets or delete resources to
 make a command succeed. Deployment uses secret version `1`. Rotation requires an
 explicit migration/recovery plan. Secret values are piped directly to Secret Manager.
-The runtime account can access only the two individually granted secrets.
+The runtime account can access only the three individually granted secrets.
 
 ### 4b. Firestore TTL policies (once per project)
 
@@ -120,7 +123,7 @@ The server stamps short-lived records with an `expireAt` timestamp; Firestore de
 if a TTL policy names that field for the collection group. Run once, after the database exists:
 
 ```bash
-for GROUP in sessions rateLimits pinAttempts operations audit; do
+for GROUP in sessions rateLimits pinAttempts operations audit checkouts; do
   gcloud firestore fields ttls update expireAt --collection-group="$GROUP" \
     --enable-ttl --project "$PROJECT_ID"
 done
