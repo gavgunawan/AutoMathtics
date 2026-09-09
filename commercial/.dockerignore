@@ -5,3 +5,6 @@
 !server/**
 !public
 !public/**
+# the operator CLI rides in the image for the scheduled sweep job; the Cloud Shell blocks and the deploy helper do not
+!scripts
+!scripts/*.mjs
