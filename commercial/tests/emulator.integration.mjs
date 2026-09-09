@@ -408,7 +408,7 @@ test('a filtered page after a document id (queryAfter) on real Firestore: id ord
   const col = `qa-${randomUUID()}`;
   await store.transaction(async (tx) => { for (let i = 0; i < 7; i++) tx.set(`${col}/d${i}`, { familyId: i % 2 ? 'odd' : 'even', n: i }); });
   const p1 = await store.queryAfter(col, 'familyId', 'even', null, 2), p2 = await store.queryAfter(col, 'familyId', 'even', p1.at(-1)[0], 2), p3 = await store.queryAfter(col, 'familyId', 'even', p2.at(-1)[0], 2);
-  assert.deepEqual([...p1, ...p2, ...p3].map(([id]) => id), ['d0', 'd2', 'd4', 'd6']); assert.deepEqual(p3, [['d6', { familyId: 'even', n: 6 }]]);
+  assert.deepEqual([...p1, ...p2, ...p3].map(([id]) => id), ['d0', 'd2', 'd4', 'd6']); assert.deepEqual(p2, [['d4', { familyId: 'even', n: 4 }], ['d6', { familyId: 'even', n: 6 }]]); assert.deepEqual(p3, [], 'four rows in pages of two: the third page is empty');
   assert.deepEqual((await store.transaction((tx) => tx.queryAfter(col, 'familyId', 'odd', 'd1', 5), { readOnly: true })).map(([id]) => id), ['d3', 'd5']);
   assert.deepEqual(await store.queryAfter(col, 'familyId', 'none', null, 5), []);
 });
