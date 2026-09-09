@@ -313,7 +313,8 @@ export class Payments {
       }
       if (up && (proration.pending === true || proration.applied === false)) {
         // Stage 4 review: the provider accepted the change but holds it until its proration invoice is paid (pending_if_incomplete).
-        // Nothing changes here — the seats stay as they are — until invoice.paid names this family and the target plan (process()).
+        // Nothing changes here — the seats stay as they are — until the payment of the invoice recorded here (`proration.invoiceRef`)
+        // arrives as invoice.paid (process()); no other invoice completes this intent.
         // The in-flight marker stays, so no second change starts while that payment can still land.
         tx.set(path, { ...current, status: 'awaiting_payment', proration, providerOperationRef: proration?.providerOperationRef || null, awaitingSince: this.now() });
         this.audit(tx, 'billing.upgrade_awaiting_payment', s.uid, s.familyId);
@@ -378,8 +379,10 @@ export class Payments {
       const checkoutPath = ev.data.checkoutId ? `checkouts/${gw.name}:${ev.data.checkoutId}` : null;
       const checkout = checkoutPath ? await tx.get(checkoutPath) : null; // read now: commit() writes next
       const plan = ev.data.price ? gw.planFor(ev.data.price) : null; // the provider's price id through the gateway's table; the payload never names a plan
-      // Stage 4 review: an upgrade the provider held until its invoice was paid completes here, from that invoice's payment (webhook-authoritative)
-      const awaiting = familyId && internalType === 'payment.succeeded' && plan ? (await tx.query('billingChangeIntents', 'familyId', familyId, 100)).map(([, i]) => i).find((i) => i.provider === gw.name && i.status === 'awaiting_payment' && i.toPlan === plan) || null : null;
+      // Stage 4 review: an upgrade the provider held until its invoice was paid completes here — from the payment of *that* invoice,
+      // the one the intent recorded when the provider answered `pending`, never from another paid invoice that happens to name
+      // this customer (second round: bound by the invoice reference, not by family and target plan)
+      const awaiting = familyId && ev.type === 'invoice.paid' && typeof ev.data.ref === 'string' ? (await tx.query('billingChangeIntents', 'familyId', familyId, 100)).map(([, i]) => i).find((i) => i.provider === gw.name && i.status === 'awaiting_payment' && i.proration?.invoiceRef === ev.data.ref) || null : null;
       // a real provider sends one event per refund object; the same refund delivered under a second event id must not be counted twice
       const duplicateRefund = internalType === 'refund' && ev.data.ref ? (await tx.query('billingEvents', 'refundRef', ev.data.ref, 5)).some(([id, r]) => id !== `${gw.name}:${ev.id}` && r.outcome?.status === 'applied') : false;
       // S3.3-C ordering: older timestamp, or the same timestamp with a lower adapter sequence, is stale.
@@ -393,6 +396,7 @@ export class Payments {
       else if (ev.type === 'checkout.completed' && !checkout) outcome = { status: 'rejected', reason: 'UNKNOWN_CHECKOUT' };
       else if (checkout && checkout.familyId !== familyId) outcome = { status: 'rejected', reason: 'CHECKOUT_MISMATCH' };
       else if (internalType === 'payment.succeeded' && !plan) outcome = { status: 'rejected', reason: 'UNKNOWN_PRICE' };
+      else if (awaiting && plan !== awaiting.toPlan) outcome = { status: 'rejected', reason: 'UPGRADE_PLAN_MISMATCH' }; // the provider holds a price other than the plan this intent asked for: the operator decides
       else if (checkout && plan && checkout.plan !== plan) outcome = { status: 'rejected', reason: 'CHECKOUT_MISMATCH' }; // paid for a different plan than the one this checkout was opened for
       else if (ev.type === 'checkout.completed' && checkout.status === 'completed') outcome = { status: 'rejected', reason: 'CHECKOUT_ALREADY_COMPLETED' };
       else if (ev.type === 'checkout.completed' && ['superseded', 'superseded_by_deletion'].includes(checkout.status)) outcome = { status: 'rejected', reason: 'CHECKOUT_SUPERSEDED' }; // a newer checkout, or the family's deletion, replaced it: no double transition
@@ -404,10 +408,15 @@ export class Payments {
         // A deleted family (or one being deleted) is recorded for support and Stage 4 reconciliation — a refund, a cancellation at the provider — and never regains product entitlement.
         else if (family.deleted === true || family.deletion?.status === 'executing') outcome = { status: 'reconciliation_required', reason: 'FAMILY_DELETED' };
         else {
-          // Only a bound checkout carries an intent to be on a plan; a renewal invoice never does (S3.3-B).
-          const event = { id: derivedEventId(`${gw.name}:${ev.id}`), type: internalType, provider: gw.name, providerRef: ev.customer, authorized: ev.type === 'checkout.completed' || !!awaiting,
-            ...(plan ? { plan } : {}), ...(ev.data.periodEnd ? { periodEnd: ev.data.periodEnd } : {}), ...(awaiting?.seatChildIds ? { seatChildIds: awaiting.seatChildIds } : {}),
-            ...(internalType === 'refund' ? { amountCents: ev.data.amountCents ?? undefined, full: ev.data.full === true } : {}) };
+          // Only a bound checkout carries an intent to be on a plan; a renewal invoice never does (S3.3-B). The paid proration
+          // invoice of a held upgrade is that upgrade's own transition — plan.change, as when the card was charged on the spot —
+          // not a payment.succeeded: what the parent decided meanwhile (a cancellation at the period end) stands, the period is
+          // not renewed by it, and a subscription that has since ended is not revived (Stage 4 review, second round).
+          const event = awaiting
+            ? { id: derivedEventId(`${gw.name}:${ev.id}`), type: 'plan.change', plan: awaiting.toPlan, provider: gw.name, providerRef: ev.customer, proration: awaiting.proration || null, ...(awaiting.seatChildIds ? { seatChildIds: awaiting.seatChildIds } : {}) }
+            : { id: derivedEventId(`${gw.name}:${ev.id}`), type: internalType, provider: gw.name, providerRef: ev.customer, authorized: ev.type === 'checkout.completed',
+              ...(plan ? { plan } : {}), ...(ev.data.periodEnd ? { periodEnd: ev.data.periodEnd } : {}),
+              ...(internalType === 'refund' ? { amountCents: ev.data.amountCents ?? undefined, full: ev.data.full === true } : {}) };
           try {
             let done = ev.type === 'checkout.completed' && family.checkoutIntent?.[gw.name] === checkout.checkoutId ? { ...family, checkoutIntent: { ...family.checkoutIntent, [gw.name]: null } } : family;
             if (awaiting && family.billingIntent?.operationId === awaiting.operationId) done = { ...done, billingIntent: null }; // the upgrade's marker is released with its payment
@@ -429,7 +438,7 @@ export class Payments {
         if (outcome.status === 'applied' || pending.length !== before.length || outcome.status === 'requires_action') tx.set(mappingPath, next);
         if (outcome.status === 'applied' && checkout && ev.type === 'checkout.completed') tx.set(checkoutPath, { ...checkout, status: 'completed', completedAt: now, completedBy: ev.id }); // a `creating` intent whose session the provider did open is completed too
       }
-      tx.set(inboxPath, { provider: gw.name, providerEventId: ev.id, type: ev.type, at: ev.at, seq: ev.seq ?? null, receivedAt: seen?.receivedAt ?? now, lastReceivedAt: now, attempts: (seen?.attempts || 0) + 1, customer: ev.customer, familyId, data: ev.data, refundRef: ev.data.ref || null, fingerprint, outcome });
+      tx.set(inboxPath, { provider: gw.name, providerEventId: ev.id, type: ev.type, at: ev.at, seq: ev.seq ?? null, receivedAt: seen?.receivedAt ?? now, lastReceivedAt: now, attempts: (seen?.attempts || 0) + 1, customer: ev.customer, familyId, data: ev.data, refundRef: /^(refund|dispute)\./.test(ev.type) || internalType === 'refund' ? ev.data.ref || null : null, invoiceRef: ev.type.startsWith('invoice.') ? ev.data.ref || null : null, fingerprint, outcome });
       this.audit(tx, `webhook.${outcome.status}`, `webhook:${gw.name}`, familyId);
       return outcome;
     });

@@ -185,9 +185,15 @@ that is how 4.2 is exercised: `stripe listen --forward-to 127.0.0.1:8787/api/web
   `applied` and `plan.change` commits at once; a failed charge or a card that needs authentication answers
   `pending` — the intent becomes `awaiting_payment`, the plan and the seats stay as they are, the in-flight
   marker stays (a second change is `PAYMENT_PENDING` for 24 hours), the parent gets the hosted invoice to
-  finish — and the upgrade is granted **by the `invoice.paid` webhook** that names this family and the
-  target plan, exactly once (`process()` finds the awaiting intent, applies it with its seat choice, marks it
-  `applied`, releases the marker). A held update never paid lapses after a day and may be superseded.
+  finish — and the upgrade is granted **by the `invoice.paid` of that invoice**: the intent records the
+  invoice reference the provider answered with (`proration.invoiceRef`), and only that invoice's payment
+  completes it — another paid invoice for the customer is what it is (a renewal) and never satisfies the
+  intent. The completion is the upgrade's own `plan.change` transition, as when the card was charged on the
+  spot: a cancellation at the period end the parent asked for meanwhile stands, the period is not renewed by
+  it, and a subscription that has since ended is not revived (`INVALID_TRANSITION`, left for the operator);
+  a paid invoice whose subscription sits on a price other than the intent's target is `UPGRADE_PLAN_MISMATCH`
+  (`process()` finds the intent by invoice reference, applies it with its seat choice, marks it `applied`,
+  releases the marker). A held update never paid lapses after a day and may be superseded.
 - **Webhooks**: `Stripe-Signature` (t, v1…) verified over the raw bytes, five-minute window, before a byte is
   parsed. `checkout.session.completed` is resolved against the **subscription Stripe holds** (price id and
   period end fetched, never our metadata); so is `invoice.paid` — a proration invoice lists the old price
@@ -215,8 +221,8 @@ that is how 4.2 is exercised: `stripe listen --forward-to 127.0.0.1:8787/api/web
 ## Adapter contract for a real provider (Stage 4)
 
 An adapter implements `createCheckout`, `changePlan` and `verify`. `changePlan` answers `applied` or `pending`:
-a pending change is one the provider holds until its payment lands, and the matching `invoice.paid` is what
-grants it (`billingChangeIntents` status `awaiting_payment`). It must:
+a pending change is one the provider holds until its payment lands; the answer names that invoice (`invoiceRef`),
+and only that invoice's `invoice.paid` (its `data.ref`) grants it (`billingChangeIntents` status `awaiting_payment`). It must:
 
 1. pass the checkout id it is given as the provider's idempotency key, and return the provider's
    session reference and URL;

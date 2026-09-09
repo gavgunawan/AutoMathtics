@@ -38,7 +38,9 @@ completes a recovery, and no way to shorten the wait. The operator's only verb i
 4. **Complete.** After the wait the parent returns and chooses *Complete recovery*. Only now,
    with proof present, the server **claims** the request — `pending` → `completing`, in a
    transaction that re-reads it, so a sign-in that cancelled it a moment earlier wins and the
-   provider is never asked — and only then removes the enrolled phone factor at the provider, ends
+   provider is never asked, and bound to the request it verified (`requestId`): a request cancelled
+   and replaced by a newer one since is never claimed on the older one's proof and wait — and only
+   then removes the enrolled phone factor at the provider, ends
    every session of the account and invalidates older tokens. The claim is the point of no return:
    a sign-in after it cancels nothing, and its session does not survive the completion. A provider
    fault after the claim leaves `completing`; the next attempt resumes there.
@@ -69,7 +71,7 @@ completes a recovery, and no way to shorten the wait. The operator's only verb i
 ## Records
 
 `recoveries/{uid}`: `status` (`pending`, `completing`, `completed`, `cancelled_by_sign_in`, `cancelled_by_operator`,
-`expired`), `requestedAt`, `readyAt`, `snapshot` (revocation time and password-hash HMAC at the
+`expired`), `requestId` (immutable; every step of a completion is bound to the request it read), `requestedAt`, `readyAt`, `snapshot` (revocation time and password-hash HMAC at the
 request), `mfaUid` (the factor that was enrolled), `claimId` / `claimedAt` (the point of no return), `proof` (`tokens_revoked` or `password_changed`),
 `completedAt` / `cancelledAt` / `cancelledBy` / `note`, `acknowledgedAt` (the parent has seen the
 notice), `expireAt` (TTL: sixty days after `readyAt`). Audit rows: `parent.recovery_requested`,

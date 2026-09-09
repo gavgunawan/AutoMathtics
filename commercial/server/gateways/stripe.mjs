@@ -188,7 +188,8 @@ export class StripeGateway {
       let price = null, periodEnd = null;
       if (ev.type === 'invoice.paid' && subId) { const sub = await this.api('GET', `/v1/subscriptions/${subId}`); price = sub.items?.data?.[0]?.price?.id || null; periodEnd = periodEndOf(sub); }
       if (!price) { const line = bestLine(o.lines?.data); price = line ? linePrice(line) : null; periodEnd = line?.period?.end ? line.period.end * 1000 : null; }
-      return { ...base, type: ev.type, customer, data: { ...NONE, price, periodEnd, familyId: details?.metadata?.familyId || o.metadata?.familyId || null } };
+      // the invoice's own id travels as `ref`: a held upgrade is completed only by the payment of the invoice its intent recorded
+      return { ...base, type: ev.type, customer, data: { ...NONE, price, periodEnd, familyId: details?.metadata?.familyId || o.metadata?.familyId || null, ref: typeof o.id === 'string' ? o.id : null } };
     }
     if (ev.type === 'customer.subscription.deleted') return { ...base, type: 'subscription.deleted', customer, data: { ...NONE, familyId: o.metadata?.familyId || null } };
     // refunds and disputes hang off a charge: the charge names the customer (a refund object carries none) and says whether it is now refunded in full

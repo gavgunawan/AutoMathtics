@@ -10,7 +10,9 @@
 //      old phone cancels the request (Foundation.login) and a notice is shown afterwards;
 //   3. nobody cancelled it — the parent by signing in, or an operator (protective only) — and that
 //      is decided by a transactional claim: pending → completing, compare-and-set, immediately
-//      before the provider is touched. A sign-in that committed its cancellation first wins and
+//      before the provider is touched, bound by an immutable `requestId` to the very request whose
+//      proof and wait were verified: a request cancelled and replaced since is a different one.
+//      A sign-in that committed its cancellation first wins and
 //      the provider is never called; a claim that committed first is the point of no return.
 // Every unauthenticated answer is the same whether or not an account exists, has a second factor
 // or has a request under way: "accepted, come back after the wait" and "not completed (yet)".
@@ -82,7 +84,7 @@ export class Recovery {
       const current = await tx.get(path);
       if (current && (current.status === 'completing' || (current.status === 'pending' && now <= current.readyAt + RECOVERY_WINDOW_MS))) return; // the same request; the clock does not restart
       const parent = await tx.get(`parents/${user.uid}`);
-      tx.set(path, { uid: user.uid, status: 'pending', requestedAt: now, readyAt: answer.readyAt, snapshot: this.fingerprint(user), mfaUid: factor.uid, proof: null, claimId: null, claimedAt: null, completedAt: null, cancelledAt: null, cancelledBy: null, note: null, acknowledgedAt: null, expireAt: answer.readyAt + RECOVERY_WINDOW_MS + RECOVERY_NOTICE_MS });
+      tx.set(path, { uid: user.uid, requestId: randomUUID(), status: 'pending', requestedAt: now, readyAt: answer.readyAt, snapshot: this.fingerprint(user), mfaUid: factor.uid, proof: null, claimId: null, claimedAt: null, completedAt: null, cancelledAt: null, cancelledBy: null, note: null, acknowledgedAt: null, expireAt: answer.readyAt + RECOVERY_WINDOW_MS + RECOVERY_NOTICE_MS });
       this.foundation.audit(tx, 'parent.recovery_requested', user.uid, parent?.familyId || null);
     });
     return answer;
@@ -100,10 +102,14 @@ export class Recovery {
     await this.foundation.rate(`recovery-complete:${sha256(email)}`, 20, DAY);
     const user = await this.identity.lookupByEmail(email), path = user ? `recoveries/${user.uid}` : null;
     const rec = path ? await this.store.get(path) : null;
-    if (!user || !rec || (rec.status !== 'pending' && rec.status !== 'completing')) return NOT_COMPLETED;
+    if (!user || !rec || typeof rec.requestId !== 'string' || (rec.status !== 'pending' && rec.status !== 'completing')) return NOT_COMPLETED;
+    // Everything below is decided about *this* request. One cancelled and replaced by a newer request since it was read
+    // here carries a different requestId: the newer one has its own proof to show and its own wait to sit out, and
+    // nothing verified against the old one may touch it (Stage 4 review, second round).
+    const same = (current) => !!current && current.requestId === rec.requestId;
     if (rec.status === 'pending') {
       if (now > rec.readyAt + RECOVERY_WINDOW_MS) {
-        await this.store.transaction(async (tx) => { const c = await tx.get(path); if (c?.status === 'pending') tx.set(path, { ...c, status: 'expired', cancelledAt: now, cancelledBy: 'time' }); });
+        await this.store.transaction(async (tx) => { const c = await tx.get(path); if (same(c) && c.status === 'pending') tx.set(path, { ...c, status: 'expired', cancelledAt: now, cancelledBy: 'time' }); });
         return NOT_COMPLETED;
       }
       const fresh = await this.identity.lookup(user.uid, true), proof = this.proven(rec.snapshot, this.fingerprint(fresh));
@@ -112,7 +118,7 @@ export class Recovery {
       const claimId = randomUUID();
       const claimed = await this.store.transaction(async (tx) => {
         const current = await tx.get(path);
-        if (!current) return false;
+        if (!same(current)) return false;                 // gone, or replaced by a newer request whose proof and wait this attempt never checked
         if (current.status === 'completing') return true; // an earlier attempt claimed it and stopped before the provider answered: resume
         if (current.status !== 'pending') return false;   // cancelled meanwhile — by the owner's sign-in or the operator: the provider is never touched
         const parent = await tx.get(`parents/${user.uid}`);
@@ -127,7 +133,7 @@ export class Recovery {
     await this.store.transaction(async (tx) => {
       const current = await tx.get(path), parent = await tx.get(`parents/${user.uid}`);
       if (parent) tx.set(`parents/${user.uid}`, { ...parent, reauthAfter: Math.max(parent.reauthAfter || 0, Math.floor(now / 1000)) }); // seconds, like login()
-      tx.set(path, { ...(current || rec), status: 'completed', completedAt: now }); // the factor is gone: the record says so whatever else moved
+      tx.set(path, { ...(same(current) ? current : rec), status: 'completed', completedAt: now }); // the factor is gone: the record says so whatever else moved
       this.foundation.audit(tx, 'parent.recovery_completed', user.uid, parent?.familyId || null);
     });
     return { completed: true };

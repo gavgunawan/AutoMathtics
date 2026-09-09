@@ -153,3 +153,32 @@ test('the routes: recovery before any session with the pre-authentication CSRF t
   const r = await fetch(`${base}/api/auth/recovery/ack`, { method: 'POST', headers: { Cookie: session, Origin: cfg.origin, 'X-CSRF-Token': me.csrf, 'Content-Type': 'application/json' }, body: '{}' }); assert.equal(r.status, 200);
   assert.ok((await f.store.get('recoveries/parentA')).acknowledgedAt);
 });
+test('a completion is bound to the request it verified: one cancelled and replaced meanwhile — by the owner\'s sign-in, or by its own lapse — keeps its whole wait and its factor; a record without an id never completes', async () => {
+  // 1. A is mature and proven; between complete(A)'s read and its claim the owner signs in (A cancelled) and asks again (B)
+  const f = fixture(); await f.family('parentA', 0);
+  await f.recovery.start({ email: email('parentA') }); f.resetPassword('parentA'); f.advance(RECOVERY_WAIT_MS + DAY);
+  const A = await f.store.get('recoveries/parentA'); assert.match(A.requestId, /^[0-9a-f-]{36}$/);
+  let B = null;
+  f.auth.beforeGetUser = async () => { f.auth.beforeGetUser = null; await f.login('parentA'); B = await f.recovery.start({ email: email('parentA') }); }; // inside complete(A)'s fresh lookup: after it read A as pending
+  assert.deepEqual(await f.recovery.complete({ email: email('parentA') }), NO);
+  let rec = await f.store.get('recoveries/parentA'); const bId = rec.requestId;
+  assert.equal(rec.status, 'pending', 'B is untouched'); assert.notEqual(bId, A.requestId); assert.equal(rec.readyAt, B.readyAt); assert.equal(rec.readyAt, f.now() + RECOVERY_WAIT_MS, 'B has its whole wait'); assert.equal(rec.claimId, null); assert.equal(rec.proof, null);
+  assert.equal(f.auth.updates.length, 0, 'the factor was never removed'); assert.equal(f.users.get('parentA').multiFactor.enrolledFactors.length, 1); assert.equal((await audits(f, 'parent.recovery_claimed')).length, 0);
+  // B completes on its own terms only: its own wait, and a proof given after it was made
+  f.advance(RECOVERY_WAIT_MS + 1000); assert.deepEqual(await f.recovery.complete({ email: email('parentA') }), NO, 'A\'s proof is not B\'s');
+  f.resetPassword('parentA'); assert.deepEqual(await f.recovery.complete({ email: email('parentA') }), { completed: true });
+  rec = await f.store.get('recoveries/parentA'); assert.equal(rec.requestId, bId); assert.equal(rec.status, 'completed'); assert.equal(f.auth.updates.length, 1);
+  // 2. the same across a lapse: A lapses while complete(A) is between its read and its claim, and the parent asks again — B replaces the lapsed A
+  const g = fixture(); await g.family('parentA', 0);
+  await g.recovery.start({ email: email('parentA') }); g.resetPassword('parentA'); g.advance(RECOVERY_WAIT_MS + DAY);
+  const A2 = await g.store.get('recoveries/parentA');
+  g.auth.beforeGetUser = async () => { g.auth.beforeGetUser = null; g.advance(RECOVERY_WINDOW_MS); await g.recovery.start({ email: email('parentA') }); };
+  assert.deepEqual(await g.recovery.complete({ email: email('parentA') }), NO);
+  const b2 = await g.store.get('recoveries/parentA'); assert.equal(b2.status, 'pending'); assert.notEqual(b2.requestId, A2.requestId); assert.equal(b2.readyAt, g.now() + RECOVERY_WAIT_MS); assert.equal(b2.claimId, null);
+  assert.equal(g.auth.updates.length, 0); assert.equal(g.users.get('parentA').multiFactor.enrolledFactors.length, 1);
+  // 3. a record without a request id (from before this rule) never completes, and the provider is never asked
+  const h = fixture(); await h.family('parentA', 0);
+  await h.recovery.start({ email: email('parentA') }); h.resetPassword('parentA'); h.advance(RECOVERY_WAIT_MS + DAY);
+  await h.store.transaction(async (tx) => { const { requestId, ...rest } = await tx.get('recoveries/parentA'); void requestId; tx.set('recoveries/parentA', rest); });
+  assert.deepEqual(await h.recovery.complete({ email: email('parentA') }), NO); assert.equal(h.auth.updates.length, 0); assert.equal((await h.store.get('recoveries/parentA')).status, 'pending');
+});

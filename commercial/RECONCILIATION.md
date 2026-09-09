@@ -68,7 +68,9 @@ hand. A dispute lost changes nothing more.
 | `PROVIDER_UNREACHABLE` | no verdict this run | retry; if it persists, the key or the network, not the family |
 
 An intent in `awaiting_payment` is an upgrade Stripe holds until its proration invoice is paid: nothing to do
-for a day (the parent finishes the payment on the hosted invoice, `invoice.paid` grants the plan); after that
+for a day (the parent finishes the payment on the hosted invoice; the `invoice.paid` of that invoice — its id is on
+the intent as `proration.invoiceRef` — grants the plan through `plan.change`, leaving a cancellation made meanwhile in
+place; no other invoice completes the intent); after that
 it lapses, a new change supersedes it, and `reconcile-intent … no_provider_change` closes it if Stripe never
 applied anything (`reconcile-provider` shows the provider's price).
 
@@ -112,8 +114,10 @@ Card `4242 4242 4242 4242` pays, `4000 0000 0000 0341` attaches but fails on ren
    `applied` with the subscription and invoice reference; `reconcile-provider` matches. Then **upgrade with
    a card that needs authentication** (`4000 0025 0000 3155`) → the app says the payment is not complete, the
    plan and the seats are unchanged, the intent is `awaiting_payment`, a second change is refused
-   (`PAYMENT_PENDING`); complete the authentication on the hosted invoice → `invoice.paid` grants the plan
-   once (the intent `applied`, the marker released); resend that event → `replayed`. And with a card that
+   (`PAYMENT_PENDING`); choose *Cancel at period end* in the app; then complete the authentication on the
+   hosted invoice → `invoice.paid` grants the plan once (the intent `applied`, the marker released) **and the
+   cancellation still shows**, in the app and in Stripe (`reconcile-provider` → match); resend that event →
+   `replayed`. And with a card that
    fails (`4000 0000 0000 0002`) → the old plan stays; the invoice open at Stripe lapses.
 6. **Crash between provider and finalisation**: stop the server right after Stripe answers the upgrade
    (or set `INTENT_INFLIGHT_MS` low and interrupt) → the intent is `creating`, the report lists it,
