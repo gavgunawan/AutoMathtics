@@ -19,6 +19,13 @@ for tool in node npm gcloud java; do command -v "$tool" >/dev/null || { echo "In
 if [[ ! -f package-lock.json ]]; then
   echo 'Run npm install --ignore-scripts, review and commit package-lock.json first.' >&2; exit 1
 fi
+# The lockfile is the dependency tree that was reviewed, tested and audited. `npm install` rewrites it whenever the
+# registry offers something newer, so a helper that deployed whatever lockfile is on disk could deploy a tree nobody
+# looked at. Inside a git checkout, refuse one that differs from the last commit (staged or not): commit and review first.
+# (`git diff --quiet` exits 1 on a difference and above 1 on an error; either way the helper stops.)
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1 && ! git diff --quiet HEAD -- package-lock.json; then
+  echo 'package-lock.json differs from the committed one: review and commit it (npm ci installs it; never npm install), then deploy.' >&2; exit 1
+fi
 if [[ ! -x node_modules/.bin/firebase ]]; then
   echo 'Run npm ci --ignore-scripts first.' >&2; exit 1
 fi

@@ -75,17 +75,29 @@ export CONFIRM_PROJECT="$PROJECT_ID"
 export FIREBASE_WEB_API_KEY='YOUR_NEW_WEB_API_KEY'
 export FIREBASE_WEB_APP_ID='YOUR_NEW_WEB_APP_ID'
 gcloud config set project "$PROJECT_ID"
-npm install --ignore-scripts --no-fund
+npm ci --ignore-scripts --no-fund --no-audit
 npm test
 npm run test:emulator
 ```
 
-The authoring environment could not access npm. Therefore no fabricated lockfile
-is supplied. Review the installed versions and dependency audit, commit the generated
-`commercial/package-lock.json`, and keep it for later `npm ci` builds. Do not deploy
-with failing tests, unresolved security advisories or an installation error.
-The deployment helper and Dockerfile refuse to build without the lockfile.
+`npm ci`, never `npm install`. The committed `commercial/package-lock.json` (and `functions/package-lock.json`
+for the SMS ladder) is the dependency tree that was reviewed, tested and audited, and `npm ci` installs exactly
+that. `npm install` resolves afresh against the registry and rewrites the lockfile, so a deploy after it would
+ship a tree nobody looked at: the deployment helper refuses a lockfile that differs from the committed one,
+CI fails without one, and the Dockerfile builds only from it. To change a dependency: edit `package.json`, run
+`npm install --ignore-scripts` on your own machine, review the lockfile diff, run both suites and the audit
+below, commit. Do not deploy with failing tests, unaccepted security advisories or an installation error.
 If using a private repository, authenticate Git using GitHub's normal flow.
+
+CI runs `npm audit --omit=dev --audit-level=high` against the committed lockfile after the unit suite: a
+high or critical advisory in a production dependency fails the build. Accepted advisories as of 9 Sep 2026,
+to revisit at the next dependency bump:
+
+- GHSA-w5hq-g745-h8pq (moderate; `uuid` < 11.1.1, a missing buffer bounds check in v3/v5/v6 when a buffer
+  is supplied), reached only through `firebase-admin` → `@google-cloud/storage` → `teeny-request` /
+  `retry-request`, and through `gaxios`. Cloud Storage is not used anywhere in v3 and gaxios calls only
+  `uuid.v4`, so the vulnerable functions never run. `firebase-admin` 14.3.0 and `firebase-functions` 7.3.2
+  carry no upstream fix; the only "fix" npm offers is a downgrade to firebase-admin 10, which is no fix.
 
 ## 4. One-time cloud permissions and secrets
 
@@ -178,6 +190,13 @@ Learning sessions live under `families/*/learning/*/sessions`, whose collection 
 `sessions` as well, so the first line covers them. Deletion runs within about 24 hours of the
 timestamp; nothing in the code relies on it for correctness, only for bounded growth.
 
+Blocks B and F request each policy with `--async` only when none is listed, then verify every group with
+`gcloud firestore fields ttls list --collection-group=GROUP --project "$PROJECT_ID" --format 'value(ttlConfig.state)'`
+and print `TTL GROUP: STATE`: `CREATING` while Firestore applies it to existing documents, `ACTIVE` once
+done. A group that shows nothing has no policy at all — the case that used to hide behind a discarded
+stderr — so the block names it in a `WARNING` line and ends with `BLOCK B DONE WITH WARNINGS` (or
+`BLOCK F …`) instead of `DONE`: rerun the block, or look under Firestore → Time-to-live in the console.
+
 Cloud Run source builds also require `roles/run.builder` on the actual BUILD
 service account. Current defaults commonly use the Compute Engine default account;
 check Cloud Build settings first. An administrator can grant the documented build
@@ -222,6 +241,16 @@ entry survived (addresses are otherwise never returned). The value to keep is `f
 if `leading` is present, else `forwarded`: `{"forwarded":3,"leading":"203.0.113.250"}` means 2. If
 it differs from 2, redeploy with that number.
 
+The raw `*.run.app` hostname stays reachable — Hosting's rewrites need the service public — and a
+caller who goes there passes one Google hop, not two, so with the hop count measured through Hosting
+it could forge the client entry of `X-Forwarded-For` and pick its own rate-limit key. The server
+therefore spends every address budget twice: on the client's key and on the *peer's* — the last entry,
+appended by the Google frontend that accepted the connection, which nobody can forge. Through Hosting
+the peer is Hosting's egress, shared by every visitor, so that budget is twenty times the client's
+(`peerFactor` in `createApp`); straight at the run.app hostname the peer is the caller itself. The
+recovery forms have the same second wall and a cap per instance. Keep advertising only the
+`web.app` address.
+
 ```bash
 export TRUSTED_PROXY_HOPS=2
 npm run deploy:staging
@@ -239,11 +268,32 @@ factor at sign-in — and that refuses while the number is on a rung it has not 
 after the first code, then 15 minutes, 1 hour, 6 hours, 12 hours, and a day before the seventh; a day
 without a code to that number starts the ladder over (`functions/ladder.mjs`). The record
 (`smsLadder/{hmac}`) holds timestamps under an HMAC of the number (secret `AM_V3_SMS_PEPPER`), never
-the number, and expires by TTL after two days. The block creates the secret, the TTL policy and
-`functions/.env.PROJECT_ID` (the runtime account the function runs as), deploys the function with the
-Firebase CLI — which registers it under Authentication → Settings → Blocking functions → *Before SMS
-is sent* — and prints that registration. The browser shows "Try again in …" when the provider refuses.
-The provider's own SMS quota and the region policy (section 2) still apply underneath.
+the number, and expires by TTL after two days. The block creates the secret; the function's own service
+account `automathtics-v3-sms-ladder@PROJECT_ID.iam.gserviceaccount.com`, holding `roles/datastore.user` on
+the project and `roles/secretmanager.secretAccessor` on `AM_V3_SMS_PEPPER` and nothing else (the v3 runtime
+account carries `roles/firebaseauth.admin` and every server secret, far more than a function reachable through
+the identity provider should run as); the TTL policy (verified, section 4b); and `functions/.env.PROJECT_ID`
+(that account, no secrets). It deploys the function with the Firebase CLI — which registers it under
+Authentication → Settings → Blocking functions → *Before SMS is sent* — prints that registration, and only
+then takes back the pepper grant an earlier run gave the runtime account. The browser shows "Try again in …"
+when the provider refuses. The provider's own SMS quota and the region policy (section 2) still apply
+underneath.
+
+The provider gives a blocking function 7 seconds and treats silence as an error, so the function keeps its own
+clock: no record is written once 4 s have passed (a commit landing after the provider gave up would count a
+code that was never sent), and the whole transaction is raced against 6 s. On that deadline, a Firestore
+error or any other infrastructure failure the SMS is *allowed* and one log line says `allowed-on-error`
+with the reason and the milliseconds: the ladder is abuse protection, and a parent must still be able to
+sign in when a rate limiter hiccups. A deploy without the pepper is not a hiccup: every SMS then fails
+with `SMS_LADDER_MISCONFIGURED` and the log says `misconfigured`, so the missing secret is noticed at once.
+
+The block also grants `roles/cloudbuild.builds.builder` to the project's default compute account
+(`PROJECT_NUMBER-compute@developer.gserviceaccount.com`): the Firebase CLI builds the function with Cloud
+Build, which runs on that account, and since Google stopped giving it Editor by default it cannot build
+without an explicit role. The builder role is broader than the build needs. Once a deploy has succeeded,
+retry with `roles/run.builder` alone (the role block B already grants that account for Cloud Run source
+deploys): remove the builder binding, rerun the block, and if the function still deploys leave the builder
+role out for good.
 
 ```bash
 source <(curl -fsSL https://raw.githubusercontent.com/gavgunawan/AutoMathtics/release/v3.0/commercial/scripts/cloudshell/06-sms-ladder.sh)
@@ -314,4 +364,5 @@ The existing v2 site is unaffected throughout.
 - Source deploy/IAM: https://cloud.google.com/run/docs/deploying-source-code
 - SMS MFA and authorized domains: https://firebase.google.com/docs/auth/web/multi-factor
 - Blocking functions (Identity Platform), including *before SMS is sent*: https://cloud.google.com/identity-platform/docs/blocking-functions
+- Firestore TTL policies and their state (`CREATING` → `ACTIVE`): https://cloud.google.com/sdk/gcloud/reference/firestore/fields/ttls/list
 - Cookie forwarding: https://firebase.google.com/docs/hosting/manage-cache

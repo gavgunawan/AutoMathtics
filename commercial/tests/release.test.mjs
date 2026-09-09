@@ -48,3 +48,22 @@ test('the parent screens wear the game\'s own faces, served from this origin: /f
   for (const face of ['Orbitron', 'Rajdhani', 'JetBrains Mono']) assert.ok(css.includes(`font-family:"${face}"`), face);
   assert.match(css, /--cyan:#35E0FF/); assert.match(css, /--magenta:#FF2DA8/); assert.match(html, /MISSION CONTROL/); assert.match(html, /rel="preload" href="\/fonts\/Rajdhani-500\.woff2" as="font"/);
 });
+test('the image and the pipeline: the base image is pinned by digest, the shell scripts stay out of the image, the lockfile is installed with npm ci, audited in CI, and refused by the deploy helper when it differs from the commit', async () => {
+  const docker = await read('../Dockerfile');
+  assert.match(docker, /^FROM node:22-bookworm-slim@sha256:[0-9a-f]{64}$/m, 'a tag moves under you; a digest is the image that was built in CI');
+  assert.match(docker, /hub\.docker\.com\/v2\/repositories\/library\/node\/tags\/22-bookworm-slim/, 'the comment says how to bump it');
+  // .dockerignore: the last matching pattern wins and a pattern matches every parent path, so `!scripts` re-includes the whole directory; the two lines after it exclude the shell scripts again
+  const ignore = (await read('../.dockerignore')).split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+  assert.ok(ignore.includes('!scripts') && ignore.includes('!scripts/*.mjs'), 'the operator CLI still rides for the sweep job');
+  for (const again of ['scripts/cloudshell', 'scripts/*.sh']) assert.ok(ignore.indexOf(again) > ignore.indexOf('!scripts'), `${again} is excluded again after !scripts`);
+  const workflow = await read('../../.github/workflows/secure-foundation.yml');
+  assert.ok(workflow.includes('npm audit --omit=dev --audit-level=high'), 'production dependencies are audited on every push');
+  assert.ok(workflow.indexOf('run: npm test') < workflow.indexOf('npm audit --omit=dev --audit-level=high'), 'after the unit suite');
+  assert.ok(!/^\s*npm install\b/m.test(workflow), 'CI never resolves a dependency tree of its own');
+  assert.match(workflow, /package-lock\.json is missing[\s\S]*?exit 1[\s\S]*?npm ci --ignore-scripts/, 'a missing lockfile fails the emulator job instead of warning');
+  const helper = await read('../scripts/deploy-staging.sh');
+  assert.match(helper, /git rev-parse --is-inside-work-tree[^\n]*! git diff --quiet HEAD -- package-lock\.json/, 'the helper refuses a lockfile that differs from the committed one');
+  const deploy = await read('../DEPLOY_V3.md');
+  assert.match(deploy, /^npm ci --ignore-scripts --no-fund --no-audit$/m); assert.ok(!/^npm install/m.test(deploy), 'section 3 says npm ci, never npm install');
+  for (const s of ['GHSA-w5hq-g745-h8pq', 'roles/cloudbuild.builds.builder', 'roles/run.builder', 'automathtics-v3-sms-ladder@', 'allowed-on-error', 'SMS_LADDER_MISCONFIGURED', "value(ttlConfig.state)", 'BLOCK B DONE WITH WARNINGS']) assert.ok(deploy.includes(s), s);
+});

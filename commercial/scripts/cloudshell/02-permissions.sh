@@ -21,8 +21,19 @@ for NAME in am-v3-session am-v3-pin-pepper; do
   else node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))" | gcloud secrets create "$NAME" --data-file=- --project "$PROJECT_ID" >/dev/null && echo "$NAME created"; fi
   gcloud secrets add-iam-policy-binding "$NAME" --project "$PROJECT_ID" --member="serviceAccount:$RUNTIME_SA" --role=roles/secretmanager.secretAccessor --quiet >/dev/null
 done
-# short-lived records expire by TTL; financial records never do (PAYMENTS.md → retention)
+# short-lived records expire by TTL; financial records never do (PAYMENTS.md → retention). A policy is requested only when
+# none is listed (so a rerun keeps what exists), asynchronously — Firestore applies it in the background — and with its
+# stderr shown: a refusal used to vanish into /dev/null while the block still said DONE. Then every group is verified:
+# CREATING while existing documents are being processed, ACTIVE once done; nothing listed means no policy, which is a
+# WARNING here and a different last line below, not a silent success.
+TTL_WARNINGS=0
 for GROUP in sessions rateLimits pinAttempts operations audit recoveries sweeps smsLadder; do
-  gcloud firestore fields ttls update expireAt --collection-group="$GROUP" --enable-ttl --project "$PROJECT_ID" --quiet --async >/dev/null 2>&1 && echo "TTL policy requested for $GROUP"
+  STATE="$(gcloud firestore fields ttls list --collection-group="$GROUP" --project "$PROJECT_ID" --format 'value(ttlConfig.state)')"
+  if [[ -z "$STATE" ]]; then
+    gcloud firestore fields ttls update expireAt --collection-group="$GROUP" --enable-ttl --project "$PROJECT_ID" --quiet --async >/dev/null && echo "TTL policy requested for $GROUP"
+    sleep 3; STATE="$(gcloud firestore fields ttls list --collection-group="$GROUP" --project "$PROJECT_ID" --format 'value(ttlConfig.state)')" # a moment for the listing to catch up
+  fi
+  if [[ -n "$STATE" ]]; then echo "TTL $GROUP: $STATE"; else echo "WARNING: no TTL policy on $GROUP (rerun this block, or look under Firestore > Time-to-live)"; TTL_WARNINGS=$((TTL_WARNINGS + 1)); fi
 done
-echo 'BLOCK B DONE. Next: the two Stripe secrets, typed by you.'
+if (( TTL_WARNINGS > 0 )); then echo "BLOCK B DONE WITH WARNINGS ($TTL_WARNINGS TTL policies missing). Next: the two Stripe secrets, typed by you."
+else echo 'BLOCK B DONE. Next: the two Stripe secrets, typed by you.'; fi

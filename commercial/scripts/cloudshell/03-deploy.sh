@@ -13,7 +13,9 @@ export PAYMENT_PROVIDER=stripe
 export STRIPE_PRICE_STARTER='price_1UDktFEAg0w7lrNU8ixmQg6g' STRIPE_PRICE_FAMILY='price_1UDktZEAg0w7lrNU0kJdqUxK' STRIPE_PRICE_BIG='price_1UDktlEAg0w7lrNUb4AwLnP3'
 export TRUSTED_PROXY_HOPS="${TRUSTED_PROXY_HOPS:-2}"
 cd ~/AutoMathtics/commercial || { echo 'run 01-prepare.sh first'; return 1 2>/dev/null || exit 1; }
-git pull --quiet --ff-only && echo "deploying $(git log --format='%h %s' -1)"
+# a refused pull (local edits, a diverged branch) used to print nothing and deploy whatever was on disk
+git pull --quiet --ff-only || { echo 'BLOCK C FAILED: git pull was refused — the checkout in ~/AutoMathtics has local edits or has diverged; fix that before deploying'; return 1 2>/dev/null || exit 1; }
+echo "deploying $(git log --format='%h %s' -1)"
 if ! ./node_modules/.bin/firebase projects:list --project "$PROJECT_ID" >/dev/null 2>&1; then
   echo 'The Firebase CLI needs a sign-in: follow the link it prints, then paste the code back here.'
   ./node_modules/.bin/firebase login --no-localhost
