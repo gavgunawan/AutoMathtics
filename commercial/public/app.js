@@ -15,7 +15,7 @@ const messages = {
   CHILD_SESSION_REVOKED: 'The child PIN changed. Select the child and enter the new PIN.',
   TRIAL_ALREADY_USED: 'A free trial has already been used with this mobile number.', TRIAL_REQUIRES_VERIFIED_PHONE: 'A verified mobile number is needed for the free trial.',
   SUBSCRIPTION_EXISTS: 'This family already has a subscription.', NO_SUBSCRIPTION: 'There is no subscription to change.', INVALID_TRANSITION: 'That change is not possible in the current state.',
-  MANUAL_GRANT_ACTIVE: 'This family already has pilot access, so the free trial is not needed.', LEDGER_REPLAYED: 'That was already done. Refresh to see the result.',
+  MANUAL_GRANT_ACTIVE: 'This family already has pilot access, so the free trial is not needed.', CHECKOUT_REQUIRED: 'Choose a plan to subscribe first; a trial cannot be changed.', LEDGER_REPLAYED: 'That was already done. Refresh to see the result.',
   SEATS_CANNOT_REMOVE: 'Seats can be added here, not taken away.', INVALID_PLAN: 'That plan is not available.', SELECT_CHILDREN_FOR_DOWNGRADE: 'Not enough seats for that many children.', IDEMPOTENCY_CONFLICT: 'That request was already made differently. Refresh and try again.',
   INSUFFICIENT_GRID_COINS: 'Not enough Grid Coins yet.', INSUFFICIENT_REWARD_POINTS: 'Not enough Reward Points yet.',
   ITEM_ALREADY_OWNED: 'You already own that item.', SHIELD_LIMIT: 'You can hold at most two streak shields.',
@@ -219,6 +219,40 @@ function planButtons(box, billing) {
   box.append(el('p', 'Choose a plan to subscribe. Prices are shown at checkout.', 'notice'), row);
   if (billing.customer?.fake) box.append(el('p', `Payment reference: ${billing.customer.fake}`, 'reference'));
 }
+// Stage 3.4: change plan. Up: now (the provider bills the prorated difference). Down: at the next
+// renewal, with the parent choosing who keeps a seat — nobody loses one mid-cycle.
+function planChangeControls(box, billing, e, family) {
+  if (!billing?.plans?.length) return;
+  if (e.scheduled) {
+    const keepOp = crypto.randomUUID();
+    box.append(el('p', `Switching to ${e.scheduled.planName} (${e.scheduled.seats} child slots) on ${new Date(e.scheduled.at).toLocaleDateString()}.`, 'notice'),
+      button('Keep my current plan instead', async () => { await api('/billing/plan', { plan: e.plan, operationId: keepOp }); await refresh(); }, 'text-button'));
+  }
+  const row = el('div', null, 'actions');
+  for (const plan of billing.plans.filter((p) => p.id !== e.plan)) {
+    const op = crypto.randomUUID();
+    if (plan.seats > e.seatLimit) row.append(button(`Upgrade to ${plan.name} now (${plan.seats} slots)`, async () => {
+      const r = await api('/billing/plan', { plan: plan.id, operationId: op });
+      note(r.proration?.simulated ? `Upgraded. Pilot mode: the prorated difference would be ${(r.proration.chargeCents / 100).toFixed(2)}; nothing is charged.` : 'Upgraded.'); await refresh();
+    }, 'ghost'));
+    else row.append(button(`Switch to ${plan.name} at renewal (${plan.seats} slots)`, () => downgradeScreen(plan, family, op), 'ghost'));
+  }
+  box.append(row);
+}
+function downgradeScreen(plan, family, op) {
+  transientView = true;
+  const active = family.children.filter((c) => c.status === 'active'), choose = active.length > plan.seats;
+  const box = panel('CHANGE PLAN', `${plan.name}: ${plan.seats} child slots`, choose ? `Choose who keeps a seat from the next renewal (up to ${plan.seats}). The others keep all their progress and can be given a seat again later.` : 'The change takes effect at the next renewal. Nobody loses a seat before then.');
+  const picks = new Map();
+  if (choose) for (const c of active) {
+    const label = el('label', null, 'check'), input = document.createElement('input'); input.type = 'checkbox';
+    label.append(input, el('span', ` ${c.nickname}`)); picks.set(c.id, input); box.append(label);
+  }
+  box.append(button(`Switch to ${plan.name} at renewal`, async () => {
+    const seatChildIds = [...picks].filter(([, i]) => i.checked).map(([id]) => id);
+    await api('/billing/plan', { plan: plan.id, ...(choose ? { seatChildIds } : {}), operationId: op }); note('Plan change scheduled for the next renewal.'); await refresh();
+  }, 'primary'), button('Back', refresh, 'ghost'));
+}
 async function parentScreen() {
   const family = model.family, e = family.entitlement || { status: 'inactive', seatLimit: 0, accessUntil: 0 };
   const billing = await api('/billing'); // plans, trial eligibility and the payment reference come from the server, never guessed from /me
@@ -246,6 +280,7 @@ async function parentScreen() {
         const seatOp = crypto.randomUUID();
         box.append(button(`Give ${c.nickname} a seat`, async () => { await api('/billing/seats', { childIds: [...seated, c.id], operationId: seatOp }); await refresh(); }, 'ghost'));
       }
+      if (['active', 'grace'].includes(e.state)) planChangeControls(box, billing, e, family);
     }
     if (!['active', 'grace'].includes(e.state)) planButtons(box, billing);
   } else if (!active) {

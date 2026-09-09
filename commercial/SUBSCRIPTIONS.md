@@ -57,6 +57,29 @@ recorded first in the global inbox `billingEvents/{provider}:{eventId}` and then
 `commit()` under a uuid derived from the provider event id (3.2-C).
 Operator CLI: `scripts/subscription.mjs`; signed fake webhooks: `scripts/fake-webhook.mjs`.
 
+## Lifecycle (Stage 3.4): upgrade, downgrade, cancel, refund
+
+`POST /api/billing/plan { plan, seatChildIds?, operationId }` (parent, recent auth, paid subscription in
+`active` or `grace`; a trial becomes paid through a checkout, `CHECKOUT_REQUIRED`):
+
+- **Upgrade** (more seats): capacity grows at once (`plan.change`); the gateway is asked for the
+  prorated difference for the unused share of the period (`proration` on the event record; the fake
+  gateway computes it and charges nothing). Newly freed seats can be given with `seatChildIds` or later
+  with `/api/billing/seats`.
+- **Downgrade** (fewer seats): **scheduled for the period end** (`plan.schedule`, visible as
+  `entitlement.scheduled`). If more children are seated than the new plan holds, the parent chooses who
+  keeps a seat now (`seatChildIds`, else `SELECT_CHILDREN_FOR_DOWNGRADE`); nobody loses a seat before the
+  renewal (3.2-A holds). The renewal payment on the scheduled plan applies it — the provider never sends
+  seat ids; the choice is the server's. This is also how a renewal the machine refused in 3.3
+  (`rejected: SELECT_CHILDREN_FOR_DOWNGRADE`) resolves: once the choice is recorded, the provider's
+  redelivery of the same event is processed and applied (a rejected inbox event is re-processable; an
+  applied one is a replay).
+- Asking for the current plan clears a pending schedule. `plan.change` and `terminate` clear it too.
+- **Cancel** is unchanged: at period end, undoable, access never cut short.
+- **Refund** is never a parent action. The operator (`scripts/subscription.mjs … refund AMOUNT_CENTS [full]`)
+  or the provider (`charge.refunded`) records it on the subscription (`refunds[]`). A **full** refund ends
+  access now (state `cancelled`); a partial one is a record only. A refund never touches a child wallet.
+
 Parent actions (routes, recent authentication required): `POST /api/billing/trial` — the server decides
 from the verified phone: no subscription yet, a phone on record, and `phones/{phoneKey}.trialFamilyId`
 unset; it is set on success, so a second family under the same phone (new email) gets no trial. Pilot

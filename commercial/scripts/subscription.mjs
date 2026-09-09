@@ -5,6 +5,8 @@
 //   node scripts/subscription.mjs FAMILY_UUID payment.failed
 //   node scripts/subscription.mjs FAMILY_UUID plan.change PLAN [SEAT_CHILD_UUID ...]
 //   node scripts/subscription.mjs FAMILY_UUID seats.assign SEAT_CHILD_UUID ...   (who occupies the seats; can reactivate)
+//   node scripts/subscription.mjs FAMILY_UUID plan.schedule PLAN|none [SEAT_CHILD_UUID ...]   (downgrade at period end; none clears)
+//   node scripts/subscription.mjs FAMILY_UUID refund AMOUNT_CENTS [full]   (record a refund; full ends access now)
 //   node scripts/subscription.mjs FAMILY_UUID cancel.request | cancel.undo | terminate
 //
 // Trials are not started here: a trial is the parent's action and is decided by their verified phone.
@@ -32,6 +34,8 @@ const event = { id: process.env.EVENT_ID || randomUUID(), type, provider: 'manua
 if (type === 'payment.succeeded') { event.plan = rest[0]; event.periodEnd = Date.parse(rest[1]); if (rest.length > 2) event.seatChildIds = rest.slice(2); }
 else if (type === 'plan.change') { event.plan = rest[0]; if (rest.length > 1) event.seatChildIds = rest.slice(1); }
 else if (type === 'seats.assign') { event.seatChildIds = rest; }
+else if (type === 'plan.schedule') { event.plan = rest[0] === 'none' ? null : rest[0]; if (rest.length > 1) event.seatChildIds = rest.slice(1); }
+else if (type === 'refund') { event.amountCents = Number(rest[0]); event.full = rest[1] === 'full'; }
 if (event.plan && !PLANS[event.plan]) throw Error(`Unknown plan; choose one of ${Object.keys(PLANS).filter((p) => PLANS[p].purchasable).join(', ')}`);
 const { initializeApp, applicationDefault } = await import('firebase-admin/app');
 const { getFirestore, Timestamp } = await import('firebase-admin/firestore');
