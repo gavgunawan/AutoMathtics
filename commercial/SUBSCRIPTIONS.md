@@ -51,17 +51,21 @@ capacity but cannot be rotated, which closes "four kids on a one-seat plan, one 
 Recorded under `families/{f}/billing/{eventId}` with a fingerprint of its content before acting: the
 same id with the same content returns the stored result; the same id with different content is
 `IDEMPOTENCY_CONFLICT` (3.2-B). Parent actions accept a browser `operationId` for the same reason, so
-a retried click after a lost response is the same event. A global provider-event inbox
-(`billingEvents/{provider}:{eventId}`) arrives with the webhooks in 3.3 (3.2-C).
-Operator CLI: `scripts/subscription.mjs`. Verified webhooks arrive in 3.3 and call the same `apply()`.
+a retried click after a lost response is the same event. Provider webhooks (3.3, `PAYMENTS.md`) are
+recorded first in the global inbox `billingEvents/{provider}:{eventId}` and then reach the same
+`commit()` under a uuid derived from the provider event id (3.2-C).
+Operator CLI: `scripts/subscription.mjs`; signed fake webhooks: `scripts/fake-webhook.mjs`.
 
 Parent actions (routes, recent authentication required): `POST /api/billing/trial` — the server decides
 from the verified phone: no subscription yet, a phone on record, and `phones/{phoneKey}.trialFamilyId`
 unset; it is set on success, so a second family under the same phone (new email) gets no trial.
 `POST /api/billing/cancel { undo }` — cancel at period end or reverse it; access is never cut short.
-`GET /api/billing` — plans, the derived subscription, trial eligibility.
+`GET /api/billing` — plans, the derived subscription, trial eligibility, the family's payment reference.
+`POST /api/billing/checkout { plan, operationId }` — start a checkout (3.3); the plan is applied only when
+the provider's signed event arrives.
 
-Nothing else is browser-initiated. Plan changes and payments come only through events.
+Nothing else is browser-initiated. Plan changes and payments come only through events: operator CLI or
+signed webhooks.
 
 ## Rules carried into 3.3–3.5
 

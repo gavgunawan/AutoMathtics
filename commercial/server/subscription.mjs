@@ -183,7 +183,7 @@ export class Subscriptions {
       const now = this.now();
       return { plans: Object.values(PLANS).filter((p) => p.purchasable).map(publicPlan), trialDays: TRIAL_DAYS, graceDays: GRACE_DAYS,
         subscription: family.subscription ? entitlementFor(family.subscription, now) : null, manualGrant: family.subscription ? null : (family.entitlement || null),
-        trial: this.trialEligibility(family, parent, ledger), activeChildIds: family.activeChildIds || [], familyId: s.familyId };
+        trial: this.trialEligibility(family, parent, ledger), activeChildIds: family.activeChildIds || [], familyId: s.familyId, customer: family.billing || null };
     }, { readOnly: true });
   }
   /** The parent starts the free trial. The server decides eligibility from the verified phone. */

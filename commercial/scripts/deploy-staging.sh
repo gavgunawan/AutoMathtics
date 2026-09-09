@@ -28,7 +28,7 @@ RUNTIME_SA="automathtics-v3-runtime@${PROJECT_ID}.iam.gserviceaccount.com"
 ORIGIN="https://${PROJECT_ID}.web.app"
 # IAM and the exact secret versions must already exist. Do not create/rotate them here.
 gcloud iam service-accounts describe "$RUNTIME_SA" --project "$PROJECT_ID" >/dev/null
-for name in am-v3-session am-v3-pin-pepper; do
+for name in am-v3-session am-v3-pin-pepper am-v3-webhook-fake; do
   gcloud secrets versions describe 1 --secret "$name" --project "$PROJECT_ID" >/dev/null
 done
 npm ci --ignore-scripts --no-fund --no-audit
@@ -44,11 +44,11 @@ const p = process.env;
 writeFileSync(process.argv[2], JSON.stringify({ APP_MODE: 'staging',
   APP_ORIGIN: `https://${p.PROJECT_ID}.web.app`, FIREBASE_PROJECT_ID: p.PROJECT_ID,
   FIREBASE_WEB_API_KEY: p.FIREBASE_WEB_API_KEY, FIREBASE_WEB_APP_ID: p.FIREBASE_WEB_APP_ID,
-  TRUSTED_PROXY_HOPS: p.TRUSTED_PROXY_HOPS }), { mode: 0o600 });
+  TRUSTED_PROXY_HOPS: p.TRUSTED_PROXY_HOPS, PAYMENT_PROVIDER: 'fake', FAKE_PAYMENTS_ACK: 'no-real-money' }), { mode: 0o600 });
 NODE
 # Deny browser database access BEFORE publishing the new service.
 ./node_modules/.bin/firebase deploy --config firebase.staging.json --project "$PROJECT_ID" --only firestore:rules
-gcloud run deploy "$SERVICE" --project "$PROJECT_ID" --region "$REGION"   --source . --service-account "$RUNTIME_SA" --allow-unauthenticated   --port 8080 --memory 512Mi --cpu 1 --concurrency 4 --min-instances 0 --max-instances 3   --timeout 60 --env-vars-file "$ENV_FILE"   --set-secrets 'SESSION_SECRET=am-v3-session:1,PIN_PEPPER=am-v3-pin-pepper:1'
+gcloud run deploy "$SERVICE" --project "$PROJECT_ID" --region "$REGION"   --source . --service-account "$RUNTIME_SA" --allow-unauthenticated   --port 8080 --memory 512Mi --cpu 1 --concurrency 4 --min-instances 0 --max-instances 3   --timeout 60 --env-vars-file "$ENV_FILE"   --set-secrets 'SESSION_SECRET=am-v3-session:1,PIN_PEPPER=am-v3-pin-pepper:1,WEBHOOK_SECRET_FAKE=am-v3-webhook-fake:1'
 ./node_modules/.bin/firebase deploy --config firebase.staging.json --project "$PROJECT_ID" --only hosting
 node --input-type=module - "$ORIGIN" <<'NODE'
 const origin = process.argv[2];

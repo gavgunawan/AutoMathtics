@@ -2,6 +2,7 @@ import { VERSION } from './version.mjs';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { Fault, fail, equal, object, preauth, preauthCsrf, sha256 } from './security.mjs';
+import { WEBHOOK_BODY_LIMIT } from './payments.mjs';
 
 // Firebase Hosting forwards only the specially named __session cookie to Cloud Run.
 const COOKIE = '__session';
@@ -22,14 +23,18 @@ const clientAddress = (req, hops) => {
   const ip = hops > 0 && chain.length >= hops ? chain[chain.length - hops] : req.socket.remoteAddress;
   return /^[A-Za-z0-9.:]{1,64}$/.test(ip || '') ? ip : 'unknown';
 };
-async function body(req) {
+async function rawBody(req, limit) {
   if ((req.headers['content-type'] || '').split(';')[0].trim() !== 'application/json') fail(415, 'JSON_REQUIRED');
   if (req.headers['content-encoding'] && req.headers['content-encoding'] !== 'identity') fail(415, 'ENCODING_UNSUPPORTED');
   let total = 0; const parts = [];
-  for await (const chunk of req) { total += chunk.length; if (total > 16_384) fail(413, 'REQUEST_TOO_LARGE'); parts.push(chunk); }
-  try { return JSON.parse(Buffer.concat(parts).toString('utf8')); } catch { fail(400, 'INVALID_JSON'); }
+  for await (const chunk of req) { total += chunk.length; if (total > limit) fail(413, 'REQUEST_TOO_LARGE'); parts.push(chunk); }
+  return Buffer.concat(parts);
 }
-export function createApp(service, cfg, { publicDir = new URL('../public/', import.meta.url), reportError = () => {}, learning = null, game = null, billing = null } = {}) {
+async function body(req) {
+  const raw = await rawBody(req, 16_384);
+  try { return JSON.parse(raw.toString('utf8')); } catch { fail(400, 'INVALID_JSON'); }
+}
+export function createApp(service, cfg, { publicDir = new URL('../public/', import.meta.url), reportError = () => {}, learning = null, game = null, billing = null, payments = null } = {}) {
   function setCookie(res, value, maxAge) {
     res.setHeader('Set-Cookie', `${COOKIE}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${cfg.emulator ? '' : '; Secure'}`);
   }
@@ -70,6 +75,23 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
       }
       if (req.method === 'GET' && path === '/healthz') return json(200, { status: 'ok', version: VERSION });
       if (!path.startsWith('/api/')) fail(404, 'NOT_FOUND');
+      // Provider webhooks (Stage 3.3). A payment server sends no cookie, CSRF token or Origin: the
+      // signature over the raw bytes is the whole authentication, checked inside payments.receive().
+      // Signature failures are budgeted per client address, like bad logins.
+      const hook = path.match(/^\/api\/webhooks\/([^/]{1,32})$/);
+      if (hook) {
+        if (!payments) fail(404, 'NOT_FOUND');
+        if (req.method !== 'POST') fail(405, 'METHOD_NOT_ALLOWED');
+        const raw = await rawBody(req, WEBHOOK_BODY_LIMIT);
+        try { return json(200, await payments.receive(hook[1], raw, req.headers)); }
+        catch (error) {
+          if (error instanceof Fault && error.status === 401) {
+            try { await service.rate(`webhook-fail:${clientAddress(req, cfg.proxyHops)}`, 60, 10 * 60_000); }
+            catch (limit) { if (limit instanceof Fault && limit.status === 429) throw limit; }
+          }
+          throw error;
+        }
+      }
       if (req.headers['sec-fetch-site'] && !['same-origin', 'none'].includes(req.headers['sec-fetch-site'])) fail(403, 'ORIGIN_DENIED');
       let token = cookieToken(req);
       const stored = /^[A-Za-z0-9_-]{43}$/.test(token || '') ? await service.store.get(`sessions/${sha256(token)}`) : null;
@@ -137,6 +159,7 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
       if (billing && path === '/api/billing/trial') return json(200, await billing.startTrial(ctx, data));
       if (billing && path === '/api/billing/cancel') return json(200, await billing.cancel(ctx, data));
       if (billing && path === '/api/billing/seats') return json(200, await billing.seats(ctx, data));
+      if (payments && path === '/api/billing/checkout') return json(200, await payments.checkout(ctx, data));
       if (game && path === '/api/game/shop/buy') return json(200, await game.buy(ctx, data));
       if (game && path === '/api/game/shop/equip') return json(200, await game.equip(ctx, data));
       if (game && path === '/api/game/rewards/redeem') return json(200, await game.redeem(ctx, data));
