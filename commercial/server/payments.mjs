@@ -60,10 +60,16 @@ export function verifyWebhook(secret, rawBody, header, now) {
 }
 const ref = (v) => { text(v, 1, 128); if (!/^[A-Za-z0-9_.-]+$/.test(v)) fail(400, 'INVALID_REQUEST'); return v; };
 /** The one shape every gateway hands to the inbox. Keys are fixed and ordered, so its JSON is canonical for fingerprinting. */
-export function normalizeEvent(body) {
-  object(body, ['id', 'type', 'at', 'customer', 'data']);
+export function normalizeEvent(body, now) {
+  object(body, ['id', 'type', 'at', 'seq', 'customer', 'data']);
   const id = ref(body.id), customer = ref(body.customer), type = text(body.type, 1, 64);
   if (!Number.isSafeInteger(body.at) || body.at < 0) fail(400, 'INVALID_REQUEST');
+  // S3.3-C: a validly signed event dated in the future would pin `lastEventAt` there and make every
+  // real event after it "stale". The provider's clock may drift by the signature window, no more.
+  if (now !== undefined && body.at > now + SIGNATURE_TOLERANCE_MS) fail(400, 'EVENT_IN_FUTURE');
+  // `seq` is the adapter's ordering key within one timestamp (providers expose seconds); a real
+  // adapter must supply a total order — see PAYMENTS.md → Ordering.
+  if (body.seq !== undefined && (!Number.isSafeInteger(body.seq) || body.seq < 0)) fail(400, 'INVALID_REQUEST');
   const d = object(body.data ?? {}, ['price', 'periodEnd', 'familyId', 'checkoutId', 'amountCents', 'full']); // no plan, no seats: those are the server's to decide
   if (d.price !== undefined) ref(d.price);
   if (d.periodEnd !== undefined && !Number.isSafeInteger(d.periodEnd)) fail(400, 'INVALID_REQUEST');
@@ -71,7 +77,7 @@ export function normalizeEvent(body) {
   if (d.checkoutId !== undefined) ref(d.checkoutId);
   if (d.amountCents !== undefined && (!Number.isSafeInteger(d.amountCents) || d.amountCents < 0)) fail(400, 'INVALID_REQUEST');
   if (d.full !== undefined && typeof d.full !== 'boolean') fail(400, 'INVALID_REQUEST');
-  return { id, type, at: body.at, customer, data: { price: d.price ?? null, periodEnd: d.periodEnd ?? null, familyId: d.familyId ?? null, checkoutId: d.checkoutId ?? null, amountCents: d.amountCents ?? null, full: d.full ?? null } };
+  return { id, type, at: body.at, seq: body.seq ?? null, customer, data: { price: d.price ?? null, periodEnd: d.periodEnd ?? null, familyId: d.familyId ?? null, checkoutId: d.checkoutId ?? null, amountCents: d.amountCents ?? null, full: d.full ?? null } };
 }
 
 /** The zero-cost gateway: a checkout is a record, a webhook is a signed fixture. */
@@ -83,9 +89,11 @@ export class FakeGateway {
   }
   planFor(price) { return Object.hasOwn(FAKE_PRICES, price) ? FAKE_PRICES[price] : null; }
   priceFor(plan) { return Object.keys(FAKE_PRICES).find((p) => FAKE_PRICES[p] === plan) || null; }
-  // No money moves and no browser is redirected: the operator completes the checkout with a signed checkout.completed event.
-  async createCheckout({ checkoutId, customerRef, plan }) {
-    return { provider: this.name, checkoutId, customerRef, plan: plan.id, priceId: this.priceFor(plan.id), url: null, simulated: true };
+  // No money moves and no browser is redirected: the operator completes the checkout with a signed
+  // checkout.completed event. `idempotencyKey` is what a real adapter hands the provider so that a
+  // retried creation returns the same hosted session (S3.3-A); the fake one records it.
+  async createCheckout({ checkoutId, idempotencyKey, customerRef, plan }) {
+    return { provider: this.name, checkoutId, providerCheckoutRef: `fake_cs_${checkoutId}`, idempotencyKey, customerRef, plan: plan.id, priceId: this.priceFor(plan.id), url: null, simulated: true };
   }
   // Proration the way a provider would compute it: the price difference for the unused share of the period. Nothing is charged.
   async changePlan({ from, to, periodStart, periodEnd, now }) {
@@ -98,7 +106,7 @@ export class FakeGateway {
     verifyWebhook(this.secret, rawBody, headers[SIGNATURE_HEADER], now);
     let body;
     try { body = JSON.parse(rawBody.toString('utf8')); } catch { fail(400, 'INVALID_JSON'); }
-    return normalizeEvent(body);
+    return normalizeEvent(body, now);
   }
 }
 
@@ -112,33 +120,43 @@ export class Payments {
   /**
    * Parent action: start a checkout for a purchasable plan. The family's customer reference for
    * the provider is minted here once and bound to this family forever; the browser never supplies
-   * one. Idempotent by operationId. The provider call happens outside the transactions so a retry
-   * never creates a second provider-side session.
+   * one. S3.3-A: the checkout *intent* is durable before the provider is contacted —
+   *   intent (status creating, fingerprint of provider+plan) → provider call with the checkout id
+   *   as the provider-side idempotency key → intent pending with the provider's reference.
+   * The same operation id with the same plan replays; with another plan it is a conflict. A
+   * crash between the intent and the provider, or two simultaneous requests, both resume the same
+   * intent and hand the provider the same key, so it can return the same session.
    */
   async checkout(ctx, body) {
     object(body, ['plan', 'operationId']);
     const plan = typeof body.plan === 'string' ? PLANS[body.plan] : null;
     if (!plan || !plan.purchasable) fail(400, 'INVALID_PLAN');
     const gw = this.gateway(this.provider), checkoutId = this.billing.eventId(body), path = `checkouts/${gw.name}:${checkoutId}`;
+    const fingerprint = sha256(JSON.stringify({ provider: gw.name, plan: plan.id, priceId: gw.priceFor(plan.id) }));
     const prepared = await this.store.transaction(async (tx) => {
       const { s, family } = await this.billing.parent(tx, ctx, true);
       const existing = await tx.get(path);
-      if (existing) { if (existing.familyId !== s.familyId) fail(409, 'IDEMPOTENCY_CONFLICT'); return { familyId: s.familyId, uid: s.uid, existing }; }
+      if (existing) {
+        if (existing.familyId !== s.familyId || existing.fingerprint !== fingerprint) fail(409, 'IDEMPOTENCY_CONFLICT'); // same id, another plan or family: never the first checkout
+        if (existing.status !== 'creating') return { done: existing.result };
+        return { familyId: s.familyId, uid: s.uid, customerRef: existing.customerRef }; // an earlier attempt stopped between the intent and the provider: resume with the same key
+      }
       const customerRef = family.billing?.[gw.name] || `cus_${randomUUID()}`;
       const mappingPath = `billingCustomers/${gw.name}:${customerRef}`, mapping = await tx.get(mappingPath);
       if (mapping && mapping.familyId !== s.familyId) fail(403, 'ACCESS_DENIED'); // a reference belongs to exactly one family
-      if (!mapping) tx.set(mappingPath, { provider: gw.name, customerRef, familyId: s.familyId, createdAt: this.now(), lastEventAt: 0, lastEventId: null });
-      if (family.billing?.[gw.name] !== customerRef) tx.set(`families/${s.familyId}`, { ...family, billing: { ...(family.billing || {}), [gw.name]: customerRef } });
-      return { familyId: s.familyId, uid: s.uid, customerRef, existing: null };
-    });
-    if (prepared.existing) return prepared.existing.result;
-    const result = await gw.createCheckout({ checkoutId, customerRef: prepared.customerRef, plan, familyId: prepared.familyId });
-    return this.store.transaction(async (tx) => {
-      const seen = await tx.get(path);
-      if (seen) return seen.result; // the same operation raced itself
       const now = this.now();
-      tx.set(path, { provider: gw.name, checkoutId, familyId: prepared.familyId, customerRef: prepared.customerRef, plan: plan.id, status: 'pending', createdAt: now, completedAt: null, expireAt: now + CHECKOUT_TTL_MS, result });
-      this.audit(tx, 'billing.checkout', prepared.uid, prepared.familyId);
+      if (!mapping) tx.set(mappingPath, { provider: gw.name, customerRef, familyId: s.familyId, createdAt: now, lastEventAt: 0, lastEventSeq: null, lastEventId: null });
+      if (family.billing?.[gw.name] !== customerRef) tx.set(`families/${s.familyId}`, { ...family, billing: { ...(family.billing || {}), [gw.name]: customerRef } });
+      tx.set(path, { provider: gw.name, checkoutId, familyId: s.familyId, customerRef, plan: plan.id, priceId: gw.priceFor(plan.id), fingerprint, status: 'creating', providerCheckoutRef: null, createdAt: now, completedAt: null, expireAt: now + CHECKOUT_TTL_MS, result: null });
+      this.audit(tx, 'billing.checkout', s.uid, s.familyId);
+      return { familyId: s.familyId, uid: s.uid, customerRef };
+    });
+    if (prepared.done) return prepared.done;
+    const result = await gw.createCheckout({ checkoutId, idempotencyKey: checkoutId, customerRef: prepared.customerRef, plan, familyId: prepared.familyId });
+    return this.store.transaction(async (tx) => {
+      const intent = await tx.get(path);
+      if (!intent || intent.status !== 'creating') return intent?.result ?? result; // a concurrent attempt finished first; the provider deduplicated on the key
+      tx.set(path, { ...intent, status: 'pending', providerCheckoutRef: result.providerCheckoutRef || null, result });
       return result;
     });
   }
@@ -211,19 +229,26 @@ export class Payments {
       const checkoutPath = ev.data.checkoutId ? `checkouts/${gw.name}:${ev.data.checkoutId}` : null;
       const checkout = checkoutPath ? await tx.get(checkoutPath) : null; // read now: commit() writes next
       const plan = ev.data.price ? gw.planFor(ev.data.price) : null; // the provider's price id through the gateway's table; the payload never names a plan
+      // S3.3-C ordering: older timestamp, or the same timestamp with a lower adapter sequence, is stale.
+      const stale = mapping && (ev.at < mapping.lastEventAt || (ev.at === mapping.lastEventAt && ev.seq !== null && mapping.lastEventSeq != null && ev.seq < mapping.lastEventSeq));
       let outcome;
       if (!internalType) outcome = { status: 'ignored', reason: 'UNSUPPORTED_EVENT' };
       else if (!mapping) outcome = { status: 'rejected', reason: 'UNKNOWN_CUSTOMER' };
       else if (ev.data.familyId && ev.data.familyId !== familyId) outcome = { status: 'rejected', reason: 'FAMILY_MISMATCH' };
+      // checkout.completed means exactly that: the completion of a checkout this server opened
+      else if (ev.type === 'checkout.completed' && !ev.data.checkoutId) outcome = { status: 'rejected', reason: 'CHECKOUT_REQUIRED' };
+      else if (ev.type === 'checkout.completed' && !checkout) outcome = { status: 'rejected', reason: 'UNKNOWN_CHECKOUT' };
       else if (checkout && checkout.familyId !== familyId) outcome = { status: 'rejected', reason: 'CHECKOUT_MISMATCH' };
       else if (internalType === 'payment.succeeded' && !plan) outcome = { status: 'rejected', reason: 'UNKNOWN_PRICE' };
       else if (checkout && plan && checkout.plan !== plan) outcome = { status: 'rejected', reason: 'CHECKOUT_MISMATCH' }; // paid for a different plan than the one this checkout was opened for
-      else if (ev.at < mapping.lastEventAt) outcome = { status: 'ignored', reason: 'STALE_EVENT' }; // an older event arriving after a newer one never rolls the facts back
+      else if (ev.type === 'checkout.completed' && checkout.status === 'completed') outcome = { status: 'rejected', reason: 'CHECKOUT_ALREADY_COMPLETED' };
+      else if (stale) outcome = { status: 'ignored', reason: 'STALE_EVENT' }; // an older event arriving after a newer one never rolls the facts back
       else {
         const family = await tx.get(`families/${familyId}`);
         if (!family) outcome = { status: 'rejected', reason: 'FAMILY_NOT_FOUND' };
         else {
-          const event = { id: derivedEventId(`${gw.name}:${ev.id}`), type: internalType, provider: gw.name, providerRef: ev.customer,
+          // Only a bound checkout carries an intent to be on a plan; a renewal invoice never does (S3.3-B).
+          const event = { id: derivedEventId(`${gw.name}:${ev.id}`), type: internalType, provider: gw.name, providerRef: ev.customer, authorized: ev.type === 'checkout.completed',
             ...(plan ? { plan } : {}), ...(ev.data.periodEnd ? { periodEnd: ev.data.periodEnd } : {}),
             ...(internalType === 'refund' ? { amountCents: ev.data.amountCents ?? undefined, full: ev.data.full === true } : {}) };
           try {
@@ -236,8 +261,8 @@ export class Payments {
         }
       }
       if (outcome.status === 'applied') {
-        tx.set(mappingPath, { ...mapping, lastEventAt: ev.at, lastEventId: ev.id });
-        if (checkout && checkout.status === 'pending' && ev.type === 'checkout.completed') tx.set(checkoutPath, { ...checkout, status: 'completed', completedAt: now });
+        tx.set(mappingPath, { ...mapping, lastEventAt: ev.at, lastEventSeq: ev.seq, lastEventId: ev.id });
+        if (checkout && ev.type === 'checkout.completed') tx.set(checkoutPath, { ...checkout, status: 'completed', completedAt: now, completedBy: ev.id }); // a `creating` intent whose session the provider did open is completed too
       }
       tx.set(inboxPath, { provider: gw.name, providerEventId: ev.id, type: ev.type, at: ev.at, receivedAt: seen?.receivedAt ?? now, lastReceivedAt: now, attempts: (seen?.attempts || 0) + 1, customer: ev.customer, familyId, data: ev.data, fingerprint, outcome });
       this.audit(tx, `webhook.${outcome.status}`, `webhook:${gw.name}`, familyId);

@@ -47,6 +47,24 @@ for development by the review team on 9 Sep 2026). Order agreed with the team:
 | 3.3 must resolve the family from the provider-customer mapping and map provider price ids to plans; never trust plan/seats/family from the payload | closed: `billingCustomers` mapping (PR #12) + price table (`FAKE_PRICES`), `UNKNOWN_PRICE`, payload naming a plan is malformed |
 | 3.3 keep `plan.change` out of webhook mapping | closed: `subscription.updated` is recorded and ignored until 3.4 |
 
+## 3.3 re-check follow-ups (9 Sep 2026, after PR #14) — the 3.4 acceptance list
+
+| # | Criterion | Where |
+|---|---|---|
+| S3.3-A | checkout intent persisted before the provider; strict same-id/same-plan idempotency; crash and race resume with the same key | `Payments.checkout`, `tests/recheck33.test.mjs` |
+| S3.3-B / 1 | a different-plan `invoice.paid` cannot change the plan without a server-recorded intent | `transition('payment.succeeded')` → `PLAN_CHANGE_NOT_AUTHORIZED`, `CHECKOUT_REQUIRED` |
+| 2 | upgrade/downgrade is a durable operation with its own id and fingerprint | `families/{f}/billing/{operationId}` (`plan.change` / `plan.schedule`) |
+| 3 | provider price → plan stays server-owned | gateway table (`FAKE_PRICES`) |
+| 4 | a downgrade needs the explicit seat choice before it can finalize | `plan.schedule` requires `seatChildIds` when the children do not fit |
+| 5 | an upgrade preserves inactive children's progress and allows deliberate re-seating | `plan.change` with `seatChildIds`; `tests/lifecycle.test.mjs` |
+| 6 | a payment for the same plan is an ordinary renewal | `tests/recheck33.test.mjs` |
+| 7 | cancellation/renewal race is deterministic: an invoice never undoes a cancellation | `cancelAtPeriodEnd` survives a renewal; only `cancel.undo` / checkout / operator clears it |
+| 8 | checkout intent before the provider, strict idempotency | as S3.3-A |
+| 9 | real adapters use the internal checkout id as the provider-side idempotency key | `createCheckout({ idempotencyKey })`; adapter contract in `PAYMENTS.md` |
+| 10 | `checkout.completed` must correspond to a known checkout | `CHECKOUT_REQUIRED` / `UNKNOWN_CHECKOUT` / `CHECKOUT_MISMATCH` / `CHECKOUT_ALREADY_COMPLETED` |
+| 11 | refunds are provider-driven, idempotent, and never alter Grid Coin/RP ledgers | `refund` event; `tests/lifecycle.test.mjs` asserts zero ledger rows |
+| 12 / S3.3-C | equal-time and out-of-order webhook cases; future-dated events bounded | `seq` ordering key, `EVENT_IN_FUTURE`; `tests/recheck33.test.mjs` |
+
 ## Rules for 3.2 onward
 
 - Payment and entitlement events never touch a child wallet directly; if they ever grant coins, they post rows.

@@ -33,9 +33,28 @@ provider ──POST /api/webhooks/{provider}, X-Webhook-Signature──▶ verif
   and the outcome. The same event again → the stored outcome with `replayed: true`. The same id
   with different content → `409 IDEMPOTENCY_CONFLICT`. Three concurrent deliveries of one event
   against real Firestore apply it exactly once (emulator suite).
-- **Ordering.** `billingCustomers/{provider}:{ref}.lastEventAt` is the timestamp of the last
-  applied event; an older event that arrives later is recorded and **ignored** (`STALE_EVENT`),
-  so a retried old event can never roll the facts back.
+- **Ordering (S3.3-C).** `billingCustomers/{provider}:{ref}` keeps `lastEventAt` and
+  `lastEventSeq` of the last applied event. An event with an older timestamp, or the same
+  timestamp and a lower `seq`, is recorded and **ignored** (`STALE_EVENT`), so a retried old event
+  can never roll the facts back. Providers expose timestamps at second resolution, so `seq` is the
+  adapter's ordering key *within* a second; two events sharing a timestamp with no `seq` are
+  processed in delivery order — a real adapter must supply a total order (see the adapter
+  contract below). A signed event dated beyond the signature window is malformed
+  (`EVENT_IN_FUTURE`, 400, never recorded), so a provider clock error cannot pin `lastEventAt`
+  in the future and make every real event stale.
+- **A payment renews the plan on record (S3.3-B).** The invoice's price id says what was paid
+  for; it does not authorise a plan change. `payment.succeeded` on a different plan than the
+  family's current one needs an intent the server recorded — the parent's scheduled change
+  (3.4), a checkout this server opened (a bound `checkout.completed`), or an operator — else it is
+  recorded and rejected (`PLAN_CHANGE_NOT_AUTHORIZED`). The first paid plan comes from a checkout
+  (`CHECKOUT_REQUIRED` for an invoice that arrives before its checkout event; the provider's
+  retry then lands as a renewal). A cancelled or expired family comes back on its own plan by
+  invoice, on another plan only through a checkout. A renewal never clears a cancellation the
+  parent asked for (`cancelAtPeriodEnd` stays; the paid period is honoured, then it ends); only
+  `cancel.undo`, a fresh checkout or an operator clears it.
+- **`checkout.completed` means exactly that.** It must carry the id of a checkout this server
+  opened, for this family and plan, not yet completed (`CHECKOUT_REQUIRED`, `UNKNOWN_CHECKOUT`,
+  `CHECKOUT_MISMATCH`, `CHECKOUT_ALREADY_COMPLETED`). A recurring `invoice.paid` carries none.
 - **The family is found only through the customer reference the server minted at checkout.**
   A reference belongs to one family forever. An event whose `data.familyId` or `data.checkoutId`
   names a different family is recorded and rejected (`FAMILY_MISMATCH`, `CHECKOUT_MISMATCH`).
@@ -88,7 +107,37 @@ it with that command. `EVENT_ID=` re-delivers (watch the replay); `EVENT_AT=` se
 Outside the emulator the server refuses to start with the fake provider unless
 `FAKE_PAYMENTS_ACK=no-real-money` is set, so a pilot can never be mistaken for a shop.
 
-## Collections added
+## Checkout intent (S3.3-A)
+
+```
+transaction 1: authorise parent → checkouts/{provider}:{operationId} exists?
+               same family + same fingerprint(provider, plan, price) → resume (creating) or replay (pending/completed)
+               otherwise IDEMPOTENCY_CONFLICT
+               new: mint/reuse cus_… → write intent { status: creating, fingerprint, priceId, … }
+provider call: createCheckout({ idempotencyKey: operationId, … })
+transaction 2: intent still creating → pending + providerCheckoutRef + result; else the other attempt's result
+```
+
+The intent is durable before the provider is contacted. Two simultaneous requests with one
+operation id, or a crash between the intent and the provider, both resume the same intent and
+hand the provider the same key, so a provider that honours idempotency keys returns the same
+hosted session. A `checkout.completed` for an intent still `creating` (the provider did open the
+session; the server crashed before recording it) completes it.
+
+## Adapter contract for a real provider (Stage 4)
+
+An adapter implements `createCheckout`, `changePlan` and `verify`. It must:
+
+1. pass the checkout id it is given as the provider's idempotency key, and return the provider's
+   session reference and URL;
+2. verify the provider's signature over the raw bytes and map the provider's event to the
+   normalized shape — `price` is the provider's price id (the adapter's table maps it to a plan),
+   `seq` is a total ordering key (the provider's sequence number, or a monotonic key derived from
+   its event timestamp and id — if the provider offers only second-resolution timestamps, fetch the
+   object's current state rather than trusting event order);
+3. never place a plan name, seat count, state or family id in the normalized data.
+
+
 
 - `billingEvents/{provider}:{eventId}` — the global inbox; kept forever (financial record).
 - `billingCustomers/{provider}:{customerRef}` — reference → family, last applied event.

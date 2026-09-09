@@ -10,7 +10,8 @@
 //   WEBHOOK_SECRET_FAKE=... node scripts/fake-webhook.mjs ORIGIN CUSTOMER_REF charge.refunded AMOUNT_CENTS [full]
 //
 // EVENT_ID (default evt_<uuid>) lets you re-deliver the same event to see the replay; EVENT_AT
-// (unix ms, default now) lets you deliver an old event to see it ignored as stale. The customer
+// (unix ms, default now) lets you deliver an old event to see it ignored as stale; EVENT_SEQ orders
+// events that share a timestamp. The customer
 // reference is on the parent's billing view (`GET /api/billing` → customer.fake) after a checkout.
 import { randomUUID } from 'node:crypto';
 import { signWebhook, PROVIDER_EVENTS, FAKE_PRICES } from '../server/payments.mjs';
@@ -33,7 +34,7 @@ if (['checkout.completed', 'invoice.paid'].includes(type)) {
   if (!Number.isSafeInteger(data.amountCents)) throw Error('AMOUNT_CENTS is required for a refund.');
 }
 const at = Number(process.env.EVENT_AT || Date.now());
-const event = { id: process.env.EVENT_ID || `evt_${randomUUID()}`, type, at, customer, data };
+const event = { id: process.env.EVENT_ID || `evt_${randomUUID()}`, type, at, ...(process.env.EVENT_SEQ ? { seq: Number(process.env.EVENT_SEQ) } : {}), customer, data };
 const raw = Buffer.from(JSON.stringify(event));
 const response = await fetch(`${url.origin}/api/webhooks/fake`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Webhook-Signature': signWebhook(secret, raw, Date.now()) }, body: raw });
 console.log(JSON.stringify({ event: event.id, status: response.status, ...(await response.json()) }));

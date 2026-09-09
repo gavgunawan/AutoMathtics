@@ -16,7 +16,8 @@ test('the pure machine: trial → paid → grace → past due → expired, and t
   assert.equal(deriveState(trial, T0), 'trial'); assert.equal(trial.seats, 2); assert.equal(accessUntil(trial, T0), T0 + TRIAL_DAYS * DAY);
   assert.equal(deriveState(trial, T0 + TRIAL_DAYS * DAY), 'expired'); assert.equal(entitlementFor(trial, T0 + TRIAL_DAYS * DAY).status, 'inactive');
   assert.throws(() => transition(trial, { type: 'trial.start' }, T0), rejected('SUBSCRIPTION_EXISTS'));
-  const paid = transition(trial, { type: 'payment.succeeded', plan: 'family', periodEnd: T0 + 30 * DAY }, T0 + 3 * DAY);
+  assert.throws(() => transition(trial, { type: 'payment.succeeded', plan: 'family', periodEnd: T0 + 30 * DAY }, T0 + 3 * DAY), rejected('CHECKOUT_REQUIRED')); // S3.3-B: the first paid plan needs a checkout
+  const paid = transition(trial, { type: 'payment.succeeded', plan: 'family', periodEnd: T0 + 30 * DAY, authorized: true }, T0 + 3 * DAY);
   assert.equal(deriveState(paid, T0 + 10 * DAY), 'active'); assert.equal(paid.seats, 4); assert.equal(paid.version, 2); assert.equal(paid.trialEndsAt, null);
   assert.equal(entitlementFor(paid, T0 + 10 * DAY).accessUntil, T0 + 30 * DAY);
   assert.equal(deriveState(paid, T0 + 31 * DAY), 'grace'); assert.equal(entitlementFor(paid, T0 + 31 * DAY).status, 'active'); assert.equal(accessUntil(paid, T0 + 31 * DAY), T0 + (30 + GRACE_DAYS) * DAY);
@@ -35,7 +36,9 @@ test('the pure machine: trial → paid → grace → past due → expired, and t
   assert.throws(() => transition(paid, { type: 'payment.succeeded', plan: 'family', periodEnd: T0 }, T0 + 10 * DAY), rejected('INVALID_PERIOD'));
   assert.throws(() => transition(trial, { type: 'payment.failed' }, T0), rejected('INVALID_TRANSITION'));
   const ended = transition(paid, { type: 'terminate' }, T0 + 10 * DAY); assert.equal(deriveState(ended, T0 + 10 * DAY), 'cancelled');
-  assert.equal(deriveState(transition(ended, { type: 'payment.succeeded', plan: 'starter', periodEnd: T0 + 40 * DAY }, T0 + 11 * DAY), T0 + 11 * DAY), 'active', 'a subscription can come back');
+  assert.throws(() => transition(ended, { type: 'payment.succeeded', plan: 'starter', periodEnd: T0 + 40 * DAY }, T0 + 11 * DAY), rejected('PLAN_CHANGE_NOT_AUTHORIZED')); // S3.3-B: not on another plan by invoice alone
+  assert.equal(deriveState(transition(ended, { type: 'payment.succeeded', plan: 'family', periodEnd: T0 + 40 * DAY }, T0 + 11 * DAY), T0 + 11 * DAY), 'active', 'a subscription can come back on its own plan');
+  assert.equal(deriveState(transition(ended, { type: 'payment.succeeded', plan: 'starter', periodEnd: T0 + 40 * DAY, authorized: true }, T0 + 11 * DAY), T0 + 11 * DAY), 'active', 'and on another plan through a checkout');
   assert.throws(() => transition(paid, { type: 'made.up' }, T0), rejected('INVALID_EVENT'));
 });
 test('seat occupancy: an explicit list can deactivate and reactivate; without one the occupants must fit', () => {

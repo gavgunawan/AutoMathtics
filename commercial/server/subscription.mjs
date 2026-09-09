@@ -79,7 +79,16 @@ export function transition(sub, event, now) {
     case 'payment.succeeded': {
       const p = plan(event.plan);
       if (!Number.isSafeInteger(event.periodEnd) || event.periodEnd <= now || event.periodEnd > now + 400 * DAY) fail(400, 'INVALID_PERIOD');
-      return { ...(sub || {}), plan: p.id, seats: p.seats, state: 'active', trialEndsAt: null, periodEnd: event.periodEnd, cancelAtPeriodEnd: false, failedAt: null, failures: 0, scheduled: null,
+      // S3.3-B: a payment renews the plan the family is on. Any other plan needs an intent the
+      // server recorded — the parent's scheduled change (3.4), a checkout the server opened
+      // (`authorized`, set only by a bound checkout.completed or an operator) — never the invoice alone.
+      const current = sub && sub.plan !== 'trial' ? sub.plan : null;
+      if (!current && !event.authorized) fail(409, 'CHECKOUT_REQUIRED'); // the first paid plan comes from a checkout
+      if (current && current !== p.id && sub.scheduled?.plan !== p.id && !event.authorized) fail(409, 'PLAN_CHANGE_NOT_AUTHORIZED');
+      // A renewal never undoes a cancellation the parent asked for: only cancel.undo or a fresh
+      // intent (checkout / operator) clears it. The paid period is honoured; the operator refunds.
+      const cancelAtPeriodEnd = event.authorized ? false : !!sub?.cancelAtPeriodEnd;
+      return { ...(sub || {}), plan: p.id, seats: p.seats, state: 'active', trialEndsAt: null, periodEnd: event.periodEnd, cancelAtPeriodEnd, failedAt: null, failures: 0, scheduled: null,
         lastPaymentAt: now, startedAt: sub?.startedAt || now, updatedAt: now, version, provider: event.provider || sub?.provider || 'manual', providerRef: event.providerRef ?? sub?.providerRef ?? null };
     }
     case 'payment.failed':
@@ -165,7 +174,7 @@ export class Subscriptions {
     }
     const result = { state: deriveState(sub, now), entitlement: entitlementFor(sub, now), activeChildIds, activated, deactivated };
     tx.set(evPath, { id: event.id, type: event.type, plan: event.plan || null, periodEnd: event.periodEnd || null, provider: event.provider || null, providerRef: event.providerRef || null,
-      seatChildIds: event.seatChildIds ? [...new Set(event.seatChildIds)].sort() : null, amountCents: event.amountCents ?? null, full: event.full === true, proration: event.proration || null, fingerprint, actor, at: now, result });
+      seatChildIds: event.seatChildIds ? [...new Set(event.seatChildIds)].sort() : null, amountCents: event.amountCents ?? null, full: event.full === true, proration: event.proration || null, authorized: event.authorized === true, fingerprint, actor, at: now, result });
     this.audit(tx, `billing.${event.type}`, actor, familyId);
     return result;
   }
@@ -177,7 +186,7 @@ export class Subscriptions {
     return this.store.transaction(async (tx) => {
       const family = await tx.get(`families/${familyId}`);
       if (!family) fail(404, 'FAMILY_NOT_FOUND');
-      return this.commit(tx, familyId, family, event, actor, this.now());
+      return this.commit(tx, familyId, family, { ...event, authorized: true }, actor, this.now()); // an operator is an intent in person
     });
   }
   async parent(tx, ctx, recent) {
