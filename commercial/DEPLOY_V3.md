@@ -102,19 +102,26 @@ export RUNTIME_SA="automathtics-v3-runtime@${PROJECT_ID}.iam.gserviceaccount.com
 gcloud projects add-iam-policy-binding "$PROJECT_ID" \
   --member="serviceAccount:$RUNTIME_SA" --role=roles/datastore.user
 gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-  --member="serviceAccount:$RUNTIME_SA" --role=roles/firebaseauth.viewer
+  --member="serviceAccount:$RUNTIME_SA" --role=roles/firebaseauth.admin   # Stage 4: deletes sign-in accounts and removes second factors
 
 node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))" | \
   gcloud secrets create am-v3-session --data-file=- --project "$PROJECT_ID"
 node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))" | \
   gcloud secrets create am-v3-pin-pepper --data-file=- --project "$PROJECT_ID"
-# Stage 3.3: signs the fake payment provider's webhooks (no real money until Stage 4; see PAYMENTS.md)
-node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))" | \
-  gcloud secrets create am-v3-webhook-fake --data-file=- --project "$PROJECT_ID"
-for SECRET in am-v3-session am-v3-pin-pepper am-v3-webhook-fake; do
+for SECRET in am-v3-session am-v3-pin-pepper; do
   gcloud secrets add-iam-policy-binding "$SECRET" --project "$PROJECT_ID" \
     --member="serviceAccount:$RUNTIME_SA" --role=roles/secretmanager.secretAccessor
 done
+```
+
+**Only with `PAYMENT_PROVIDER=fake`** (Stage 3.3, no real money): the signing secret of the fake
+provider's webhooks (see `PAYMENTS.md`). Skip this block when deploying with Stripe.
+
+```bash
+node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))" | \
+  gcloud secrets create am-v3-webhook-fake --data-file=- --project "$PROJECT_ID"
+gcloud secrets add-iam-policy-binding am-v3-webhook-fake --project "$PROJECT_ID" \
+  --member="serviceAccount:$RUNTIME_SA" --role=roles/secretmanager.secretAccessor
 ```
 
 **Stage 4.1 — Stripe instead of the fake provider** (only when the owner has a Stripe account;
