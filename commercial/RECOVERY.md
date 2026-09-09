@@ -19,9 +19,12 @@ completes a recovery, and no way to shorten the wait. The operator's only verb i
 
 1. **Ask.** On the SMS step the parent chooses *I can't receive the code* and enters the account
    email. The server records a request (`recoveries/{uid}`) with the moment it can complete —
-   **seven days** later — and answers the same way whether or not an account exists, so the
-   form discloses nothing. One request per account is live at a time; asking again returns the
-   same date, never a shorter one.
+   **seven days** later — and answers the same way whether or not an account exists, has a second
+   factor, or already has a request: "accepted, from *now plus seven days* at the earliest". An
+   existing request keeps its own, earlier date and is not restarted; the parent learns that date
+   only by completing. Completing answers "not completed" identically for an unknown address, an
+   account without a request, missing proof and an unfinished wait — nothing about an account can be
+   learned from these two forms.
 2. **Prove the inbox.** Before anything can complete, the parent must reset the password through
    the identity provider's own emailed link (*Forgot password* / *Send password reset email*).
    The server never handles the password; it sees only that the provider revoked the account's
@@ -33,9 +36,12 @@ completes a recovery, and no way to shorten the wait. The operator's only verb i
    password"). This is the owner's protection against someone who has the email inbox and the
    password but not the phone.
 4. **Complete.** After the wait the parent returns and chooses *Complete recovery*. Only now,
-   with proof present and no cancellation, the server removes the enrolled phone factor at the
-   provider, ends every session of the account and invalidates older tokens. The request is
-   marked completed. A provider fault leaves it pending for a retry.
+   with proof present, the server **claims** the request — `pending` → `completing`, in a
+   transaction that re-reads it, so a sign-in that cancelled it a moment earlier wins and the
+   provider is never asked — and only then removes the enrolled phone factor at the provider, ends
+   every session of the account and invalidates older tokens. The claim is the point of no return:
+   a sign-in after it cancels nothing, and its session does not survive the completion. A provider
+   fault after the claim leaves `completing`; the next attempt resumes there.
 5. **Re-enrol.** The parent signs in with the password; the server refuses the session until a
    mobile is verified again (`VERIFY_MOBILE_WITH_MFA`), the normal enrolment ceremony runs, and
    the next sign-in carries the new factor. The parent record's phone key follows the new number.
@@ -62,9 +68,9 @@ completes a recovery, and no way to shorten the wait. The operator's only verb i
 
 ## Records
 
-`recoveries/{uid}`: `status` (`pending`, `completed`, `cancelled_by_sign_in`, `cancelled_by_operator`,
+`recoveries/{uid}`: `status` (`pending`, `completing`, `completed`, `cancelled_by_sign_in`, `cancelled_by_operator`,
 `expired`), `requestedAt`, `readyAt`, `snapshot` (revocation time and password-hash HMAC at the
-request), `mfaUid` (the factor that was enrolled), `proof` (`tokens_revoked` or `password_changed`),
+request), `mfaUid` (the factor that was enrolled), `claimId` / `claimedAt` (the point of no return), `proof` (`tokens_revoked` or `password_changed`),
 `completedAt` / `cancelledAt` / `cancelledBy` / `note`, `acknowledgedAt` (the parent has seen the
 notice), `expireAt` (TTL: sixty days after `readyAt`). Audit rows: `parent.recovery_requested`,
 `parent.recovery_cancelled`, `parent.recovery_completed`, `support.recovery_cancelled`. The family

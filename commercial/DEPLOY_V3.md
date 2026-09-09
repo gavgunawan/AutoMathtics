@@ -140,7 +140,7 @@ done
 The endpoint address is known before anything is deployed: it is
 `https://PROJECT_ID.web.app/api/webhooks/stripe`. In the Stripe sandbox (Developers → Webhooks →
 Add endpoint) register it for the events `checkout.session.completed`, `invoice.paid`,
-`invoice.payment_failed`, `customer.subscription.deleted`, `charge.refunded`, and copy the endpoint's
+`invoice.payment_failed`, `customer.subscription.deleted`, `refund.created`, `refund.updated`, and copy the endpoint's
 signing secret (`whsec_…`) into `am-v3-webhook-stripe` above. Deploy with
 `PAYMENT_PROVIDER=stripe STRIPE_PRICE_STARTER=price_… STRIPE_PRICE_FAMILY=price_…
 STRIPE_PRICE_BIG=price_…` in front of `scripts/deploy-staging.sh`; the helper then requires the two

@@ -61,6 +61,7 @@ export class Foundation {
     if (!roles.includes(s.role)) fail(403, 'PARENT_REQUIRED');
     const parent = await tx.get(`parents/${s.uid}`);
     if (!parent) fail(403, 'ACCESS_DENIED');
+    if (parent.identityDeletion) fail(403, 'ACCOUNT_DELETED'); // Stage 4.0: the parent asked for the sign-in account to go; whatever the provider did since, no session of it works
     // The parent record moved on (a family was created from another session), so this session
     // is superseded rather than forbidden: send the device back to sign-in instead of stranding it.
     if (parent.familyId !== s.familyId) fail(401, 'SIGN_IN_REQUIRED');
@@ -109,6 +110,9 @@ export class Foundation {
       const old = oldKey ? await tx.get(`sessions/${oldKey}`) : null;
       const family = parent?.familyId ? await tx.get(`families/${parent.familyId}`) : null;
       const recovery = await tx.get(`recoveries/${who.uid}`);
+      // Stage 4.0: the deletion of the sign-in account was asked for. If the provider failed to delete the identity the
+      // parent can still mint a token; this door stays shut until the operator's retry removes the identity for good.
+      if (parent?.identityDeletion) fail(403, 'ACCOUNT_DELETED');
       // Also blocks a copied pre-handover ID token presented with a new cookie.
       if (parent && who.authTime <= (parent.reauthAfter || 0)) fail(403, 'REAUTHENTICATE');
       // Stage 3.5: a family being deleted, or deleted, gets no new session at all — the sweep must find none (after the tombstone the parent record points at no family, so a returning parent signs in and starts fresh)

@@ -39,15 +39,25 @@ export function stripeAccount(f, { customerId = 'cus_live1' } = {}) {
     'POST /v1/subscriptions/': (body) => {
       if (!state.sub) return missing;
       if (body.cancel_at_period_end !== undefined) state.sub.cancel_at_period_end = body.cancel_at_period_end === 'true';
-      if (body['items[0][price]']) state.sub.items.data[0].price.id = body['items[0][price]'];
-      state.sub.latest_invoice = `in_${++state.invoices}`;
-      return state.sub;
+      const price = body['items[0][price]'], invoiceId = `in_${++state.invoices}`;
+      if (price && body.payment_behavior === 'pending_if_incomplete' && state.upgradePayment && state.upgradePayment !== 'paid') {
+        // Stripe holds the update: the price stays, pending_update is set, the invoice is open (a failed charge, or a card that needs authentication)
+        state.sub.pending_update = { expires_at: Math.floor(f.now() / 1000) + 82_800, subscription_items: [{ id: 'si_1', price: { id: price } }] };
+        state.pendingPrice = price; state.pendingInvoice = invoiceId;
+        return { ...state.sub, latest_invoice: { id: invoiceId, status: 'open', amount_due: 400, amount_paid: 0, hosted_invoice_url: `https://invoice.stripe.com/i/${invoiceId}` } };
+      }
+      if (price) { state.sub.items.data[0].price.id = price; state.sub.pending_update = null; }
+      state.sub.latest_invoice = invoiceId;
+      return { ...state.sub, latest_invoice: price ? { id: invoiceId, status: 'paid', amount_due: 400, amount_paid: 400, hosted_invoice_url: `https://invoice.stripe.com/i/${invoiceId}` } : invoiceId };
     },
+    'GET /v1/charges/': () => state.charge || missing,
     'DELETE /v1/subscriptions/': (body, calls) => {
       if (!state.sub || state.sub.status === 'canceled') return { status: 400, json: { error: { code: 'resource_missing', type: 'invalid_request_error' } } };
       state.sub.status = 'canceled'; state.sub.canceled_at = Math.floor(f.now() / 1000); state.deleted.push(calls.at(-1).path); return state.sub;
     },
   };
   const { gw, calls } = gateway(routes);
-  return { gw, calls, state, activate(price = PRICES.starter, periodEnd = f.now() + 30 * DAY) { state.sub = sub(price, periodEnd); return state.sub; } };
+  return { gw, calls, state, activate(price = PRICES.starter, periodEnd = f.now() + 30 * DAY) { state.sub = sub(price, periodEnd); return state.sub; },
+    /** Stripe applies the held update the moment its invoice is paid. */
+    payPending() { if (!state.pendingPrice) throw Error('nothing pending'); state.sub.items.data[0].price.id = state.pendingPrice; state.sub.pending_update = null; const id = state.pendingInvoice; state.pendingPrice = null; state.pendingInvoice = null; return id; } };
 }

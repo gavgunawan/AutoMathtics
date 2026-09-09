@@ -91,7 +91,8 @@ provider ──POST /api/webhooks/{provider}, X-Webhook-Signature──▶ verif
 | `invoice.paid` | `payment.succeeded` | `price` → plan, `periodEnd` |
 | `invoice.payment_failed` | `payment.failed` | — |
 | `subscription.deleted` | `terminate` | — |
-| `charge.refunded` | `refund` | `amountCents`, `full` (a full refund ends access now) |
+| `charge.refunded` | `refund` | `amountCents`, `full` (a full refund ends access now) — the fake provider's one-event-per-refund fixture |
+| `refund.created` | `refund` | a real provider's per-refund object: `amountCents`, `full`, `ref` (its id; a second delivery of the same refund is `DUPLICATE_REFUND`) |
 | `subscription.updated` (and anything else) | — | recorded, ignored until 3.4 |
 
 The family's own record `families/{f}/billing/{uuid}` is written by the same `commit()` as every
@@ -179,14 +180,27 @@ that is how 4.2 is exercised: `stripe listen --forward-to 127.0.0.1:8787/api/web
   `client_reference_id`, in the metadata, and as the idempotency key; the browser follows `url`. A
   superseded session is **expired at Stripe** (`cancelCheckout`) so a stale hosted page cannot be paid.
 - **Plan change**: the customer's active subscription moves to the new price with
-  `proration_behavior=always_invoice` under the operation id; the provider operation reference is the
-  subscription and its latest invoice.
+  `proration_behavior=always_invoice` **and `payment_behavior=pending_if_incomplete`** under the operation id.
+  Stripe applies the new price only once the proration invoice is paid: a card charged on the spot answers
+  `applied` and `plan.change` commits at once; a failed charge or a card that needs authentication answers
+  `pending` — the intent becomes `awaiting_payment`, the plan and the seats stay as they are, the in-flight
+  marker stays (a second change is `PAYMENT_PENDING` for 24 hours), the parent gets the hosted invoice to
+  finish — and the upgrade is granted **by the `invoice.paid` webhook** that names this family and the
+  target plan, exactly once (`process()` finds the awaiting intent, applies it with its seat choice, marks it
+  `applied`, releases the marker). A held update never paid lapses after a day and may be superseded.
 - **Webhooks**: `Stripe-Signature` (t, v1…) verified over the raw bytes, five-minute window, before a byte is
   parsed. `checkout.session.completed` is resolved against the **subscription Stripe holds** (price id and
-  period end fetched, never our metadata); `invoice.paid` / `invoice.payment_failed` take the price and
-  period from the invoice's line; `customer.subscription.deleted` → `subscription.deleted`;
-  `charge.refunded` → `amount_refunded` and `refunded`. Stripe has no sequence number and second-resolution
-  timestamps, so `seq` is null and events dated in the future are refused.
+  period end fetched, never our metadata); so is `invoice.paid` — a proration invoice lists the old price
+  (negative, unused time) and the new one (positive, remaining time) on separate lines, and the fact that
+  matters is the price the subscription is on now; without a subscription to fetch (and for
+  `invoice.payment_failed`) the best line answers: positive amount, latest period. `customer.subscription.deleted`
+  → `subscription.deleted`. **Refunds come from `refund.created` / `refund.updated`**, the per-refund object:
+  its own id (`ref`, kept on the inbox row as `refundRef`) and amount; the charge is fetched for the customer and
+  for whether it is now refunded in full; a refund not yet `succeeded` is recorded and ignored, and the same
+  refund delivered under a second event id is `DUPLICATE_REFUND`. `charge.refunded` — the charge's running
+  total — is recorded and ignored, never a refund event (two partial refunds of 200 and 300 are two records of
+  200 and 300, not 200 and 500). Stripe has no sequence number and second-resolution timestamps, so `seq` is
+  null and events dated in the future are refused.
 - **Provider effects (4.2)**: cancel-at-period-end and its undo update the live subscription's flag under the
   operation id; a scheduled downgrade moves it to the target price with `proration_behavior=none` (the next
   invoice carries it); a family's deletion deletes the subscription (`DELETE /v1/subscriptions/{id}`, already
@@ -197,7 +211,9 @@ that is how 4.2 is exercised: `stripe listen --forward-to 127.0.0.1:8787/api/web
 
 ## Adapter contract for a real provider (Stage 4)
 
-An adapter implements `createCheckout`, `changePlan` and `verify`. It must:
+An adapter implements `createCheckout`, `changePlan` and `verify`. `changePlan` answers `applied` or `pending`:
+a pending change is one the provider holds until its payment lands, and the matching `invoice.paid` is what
+grants it (`billingChangeIntents` status `awaiting_payment`). It must:
 
 1. pass the checkout id it is given as the provider's idempotency key, and return the provider's
    session reference and URL;

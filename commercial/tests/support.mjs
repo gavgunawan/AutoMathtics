@@ -55,11 +55,11 @@ export const fakeHasher = {
 export function fixture() {
   let clock = Date.parse('2026-09-06T10:00:00Z');
   const store = new MemoryStore(), users = new Map(), tokens = new Map();
-  const auth = { verifyCalls: [], getUserCalls: 0, deleted: [], failDelete: null, updates: [], failUpdate: null,
+  const auth = { verifyCalls: [], getUserCalls: 0, deleted: [], failDelete: null, updates: [], failUpdate: null, beforeGetUser: null, beforeUpdateUser: null,
     verifyIdToken: async (t, revoked) => { auth.verifyCalls.push(revoked); if (!tokens.has(t)) throw Error('invalid'); return structuredClone(tokens.get(t)); },
-    getUser: async (uid) => { auth.getUserCalls++; if (!users.has(uid)) throw Error('missing'); return structuredClone(users.get(uid)); },
+    getUser: async (uid) => { auth.getUserCalls++; if (auth.beforeGetUser) await auth.beforeGetUser(uid); if (!users.has(uid)) throw Error('missing'); return structuredClone(users.get(uid)); },
     getUserByEmail: async (email) => { const u = [...users.values()].find((x) => x.email.toLowerCase() === email.toLowerCase()); if (!u) throw Error('missing'); return structuredClone(u); },
-    updateUser: async (uid, patch) => { if (auth.failUpdate) { const e = auth.failUpdate; auth.failUpdate = null; throw e; } const u = users.get(uid); if (!u) throw Error('missing'); if (patch.multiFactor && patch.multiFactor.enrolledFactors === null) u.multiFactor = { enrolledFactors: [] }; auth.updates.push([uid, structuredClone(patch)]); return structuredClone(u); },
+    updateUser: async (uid, patch) => { if (auth.beforeUpdateUser) await auth.beforeUpdateUser(uid, patch); if (auth.failUpdate) { const e = auth.failUpdate; auth.failUpdate = null; throw e; } const u = users.get(uid); if (!u) throw Error('missing'); if (patch.multiFactor && patch.multiFactor.enrolledFactors === null) u.multiFactor = { enrolledFactors: [] }; auth.updates.push([uid, structuredClone(patch)]); return structuredClone(u); },
     deleteUser: async (uid) => { if (auth.failDelete) { const e = auth.failDelete; auth.failDelete = null; throw e; } if (!users.has(uid)) throw Error('missing'); users.delete(uid); auth.deleted.push(uid); },
   };
   const identity = new FirebaseIdentity(auth, { now: () => clock });

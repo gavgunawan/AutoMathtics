@@ -170,3 +170,57 @@ test('the fake provider simulates the same effects: the pilot sees what would be
   await f.support.requestDeletion(a.ctx, op()); const rec = await f.support.executeDeletion(a.familyId, { operator: OPERATOR, force: true });
   assert.equal(rec.providerCancellation.status, 'cancelled'); assert.equal(rec.providerCancellation.simulated, true); assert.equal(f.gateway.calls.at(-1)[0], 'cancelSubscription');
 });
+test('an upgrade is granted only when its payment is: charged on the spot → new plan now; held by Stripe (failed or needs authentication) → old plan stays, seats stay, no second change; the paid invoice applies it once', async () => {
+  const r = rig(), { f, account, payments, support } = r, a = await f.family('parentA', 0); await subscribed(r, a, 'starter');
+  // charged on the spot
+  const opA = randomUUID(); account.state.upgradePayment = 'paid';
+  const up = await payments.changePlan(a.ctx, { plan: 'family', operationId: opA }); assert.equal(up.kind, 'upgrade'); assert.equal(up.pending, undefined); assert.equal(up.entitlement.plan, 'family');
+  let fam = await family(f, a.familyId); assert.equal(fam.subscription.plan, 'family'); assert.equal(fam.subscription.seats, 4); assert.equal(fam.billingIntent, null);
+  assert.equal((await f.store.get(`billingChangeIntents/stripe:${opA}`)).status, 'applied');
+  // the card fails, or needs authentication: Stripe holds the update
+  const opB = randomUUID(); account.state.upgradePayment = 'requires_action';
+  const held = await payments.changePlan(a.ctx, { plan: 'big', operationId: opB });
+  assert.equal(held.pending, true); assert.equal(held.kind, 'upgrade'); assert.equal(held.plan, 'big'); assert.match(held.invoiceUrl, /^https:\/\/invoice\.stripe\.com\//); assert.equal(held.state, 'active');
+  fam = await family(f, a.familyId); assert.equal(fam.subscription.plan, 'family', 'the old plan stays'); assert.equal(fam.subscription.seats, 4, 'no seat is granted'); assert.equal(fam.billingIntent.operationId, opB, 'the marker stays');
+  const intent = await f.store.get(`billingChangeIntents/stripe:${opB}`); assert.equal(intent.status, 'awaiting_payment'); assert.equal(intent.proration.pending, true); assert.ok(intent.awaitingSince);
+  assert.ok((await f.store.list('audit')).some((x) => x.action === 'billing.upgrade_awaiting_payment'));
+  assert.deepEqual(await payments.changePlan(a.ctx, { plan: 'big', operationId: opB }), held, 'the same request answers the same');
+  f.advance(3 * 60_000); await assert.rejects(payments.changePlan(a.ctx, { plan: 'starter', operationId: randomUUID() }), rejected('PAYMENT_PENDING'), 'no other change while the payment can still land');
+  let report = await support.familyReport(a.familyId); assert.deepEqual(report.attention.openIntents, [opB]); assert.equal(report.attention.inFlight.operationId, opB);
+  // a failed proration invoice: recorded, the plan unchanged, the intent still waiting
+  const failed = event(f, 'invoice.payment_failed', { object: 'invoice', customer: account.state.customer.id, lines: { data: [{ amount: -300, price: { id: PRICES.family }, period: { end: account.state.sub.current_period_end } }, { amount: 700, price: { id: PRICES.big }, period: { end: account.state.sub.current_period_end } }] } });
+  let s = signed(f, failed); assert.equal((await payments.receive('stripe', s.raw, s.headers)).status, 'applied');
+  fam = await family(f, a.familyId); assert.equal(fam.subscription.plan, 'family'); assert.equal((await f.store.get(`billingChangeIntents/stripe:${opB}`)).status, 'awaiting_payment');
+  // the parent finishes the payment: Stripe applies the update and sends the paid invoice — that is what grants the plan, exactly once
+  const invoiceId = account.payPending();
+  const paid = event(f, 'invoice.paid', { object: 'invoice', id: invoiceId, customer: account.state.customer.id, parent: { subscription_details: { subscription: 'sub_1' } }, lines: { data: [{ amount: -300, price: { id: PRICES.family }, period: { end: account.state.sub.current_period_end } }, { amount: 700, price: { id: PRICES.big }, period: { end: account.state.sub.current_period_end } }] } });
+  s = signed(f, paid); const outcome = await payments.receive('stripe', s.raw, s.headers); assert.equal(outcome.status, 'applied'); assert.equal(outcome.upgrade, opB);
+  fam = await family(f, a.familyId); assert.equal(fam.subscription.plan, 'big'); assert.equal(fam.subscription.seats, 6); assert.equal(fam.billingIntent, null, 'the marker is released with the payment');
+  const applied = await f.store.get(`billingChangeIntents/stripe:${opB}`); assert.equal(applied.status, 'applied'); assert.equal(applied.appliedBy, paid.id);
+  s = signed(f, paid); assert.equal((await payments.receive('stripe', s.raw, s.headers)).replayed, true, 'a redelivery applies nothing twice');
+  report = await support.familyReport(a.familyId); assert.deepEqual(report.attention.openIntents, []); assert.equal(report.attention.inFlight, null);
+  // a held upgrade that never gets paid lapses after a day and a new change may supersede it
+  const opC = randomUUID(); account.state.upgradePayment = 'fails';
+  assert.equal((await payments.changePlan(a.ctx, { plan: 'big', operationId: opC })).kind, 'clear'); // already on big: nothing to hold
+  const g = rig(), b = await g.f.family('parentB', 0); await subscribed(g, b, 'starter'); g.account.state.upgradePayment = 'fails';
+  const opD = randomUUID(); assert.equal((await g.payments.changePlan(b.ctx, { plan: 'family', operationId: opD })).pending, true);
+  g.f.advance(25 * 60 * 60_000); g.account.state.upgradePayment = 'paid'; const b2 = await g.f.login('parentB');
+  const opE = randomUUID(); assert.equal((await g.payments.changePlan(b2.ctx, { plan: 'family', operationId: opE })).entitlement.plan, 'family');
+  assert.equal((await g.f.store.get(`billingChangeIntents/stripe:${opD}`)).status, 'superseded');
+});
+test('a proration invoice with the old and the new price on separate lines resolves to the price the subscription is on', async () => {
+  const r = rig(), { f, account, payments } = r, a = await f.family('parentA', 0); await subscribed(r, a, 'starter');
+  const end = account.state.sub.current_period_end;
+  // Stripe already moved the subscription to family; the invoice lists starter (negative) first
+  account.state.sub.items.data[0].price.id = PRICES.family;
+  const lines = { data: [{ amount: -200, price: { id: PRICES.starter }, period: { end } }, { amount: 600, price: { id: PRICES.family }, period: { end } }] };
+  const paid = event(f, 'invoice.paid', { object: 'invoice', customer: account.state.customer.id, parent: { subscription_details: { subscription: 'sub_1', metadata: { familyId: a.familyId } } }, lines });
+  const n = await account.gw.verify(...Object.values(signed(f, paid)).slice(0, 2), f.now()); assert.equal(n.data.price, PRICES.family); assert.equal(n.data.periodEnd, end * 1000);
+  const failed = event(f, 'invoice.payment_failed', { object: 'invoice', customer: account.state.customer.id, lines });
+  const nf = await account.gw.verify(...Object.values(signed(f, failed)).slice(0, 2), f.now()); assert.equal(nf.data.price, PRICES.family, 'without a fetch, the positive line wins over the negative one');
+  const { bestLine } = await import('../server/gateways/stripe.mjs');
+  assert.equal(bestLine([{ amount: -1, price: { id: 'a' }, period: { end: 9 } }, { amount: -1, price: { id: 'b' }, period: { end: 5 } }]).price.id, 'a', 'all negative: the latest period');
+  assert.equal(bestLine([{ price: { id: 'c' } }, { amount: 5, pricing: { price_details: { price: 'd' } }, period: { end: 1 } }]).pricing.price_details.price, 'd');
+  assert.equal(bestLine([]), null);
+  void payments;
+});

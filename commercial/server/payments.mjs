@@ -23,6 +23,7 @@ export const SIGNATURE_TOLERANCE_MS = 5 * MINUTE;
 export const WEBHOOK_BODY_LIMIT = 65_536;
 export const SIGNATURE_HEADER = 'x-webhook-signature';
 export const INTENT_INFLIGHT_MS = 2 * MINUTE; // an upgrade's provider call is presumed abandoned after this
+export const AWAITING_PAYMENT_MS = 24 * 60 * MINUTE; // an upgrade the provider holds until its invoice is paid blocks other changes this long (Stripe discards a pending update after about 23 hours)
 // States in which a family may start a checkout. A paid family (active/grace) changes plan through
 // /api/billing/plan, never through a fresh checkout (S3.3/3.4-E); past_due recovery is explicit policy:
 // pay the dunning invoice (a renewal on the plan on record) or start a checkout for any plan.
@@ -40,7 +41,8 @@ export const PROVIDER_EVENTS = Object.freeze({
   'invoice.paid': 'payment.succeeded',
   'invoice.payment_failed': 'payment.failed',
   'subscription.deleted': 'terminate',
-  'charge.refunded': 'refund',
+  'charge.refunded': 'refund', // the fake provider's refund fixture: one event per refund
+  'refund.created': 'refund', // a real provider's per-refund object (never the charge's running total)
 });
 // The fake provider's price ids. A payload never names a server plan; the gateway's own table
 // turns the provider's price id into one (a real provider's price ids go in its adapter's table).
@@ -76,14 +78,15 @@ export function normalizeEvent(body, now) {
   // `seq` is the adapter's ordering key within one timestamp (providers expose seconds); a real
   // adapter must supply a total order — see PAYMENTS.md → Ordering.
   if (body.seq !== undefined && (!Number.isSafeInteger(body.seq) || body.seq < 0)) fail(400, 'INVALID_REQUEST');
-  const d = object(body.data ?? {}, ['price', 'periodEnd', 'familyId', 'checkoutId', 'amountCents', 'full']); // no plan, no seats: those are the server's to decide
+  const d = object(body.data ?? {}, ['price', 'periodEnd', 'familyId', 'checkoutId', 'amountCents', 'full', 'ref']); // no plan, no seats: those are the server's to decide
+  if (d.ref !== undefined) ref(d.ref); // the provider's own id of the object (a refund): dedupe evidence
   if (d.price !== undefined) ref(d.price);
   if (d.periodEnd !== undefined && !Number.isSafeInteger(d.periodEnd)) fail(400, 'INVALID_REQUEST');
   if (d.familyId !== undefined) text(d.familyId, 1, 64);
   if (d.checkoutId !== undefined) ref(d.checkoutId);
   if (d.amountCents !== undefined && (!Number.isSafeInteger(d.amountCents) || d.amountCents < 0)) fail(400, 'INVALID_REQUEST');
   if (d.full !== undefined && typeof d.full !== 'boolean') fail(400, 'INVALID_REQUEST');
-  return { id, type, at: body.at, seq: body.seq ?? null, customer, data: { price: d.price ?? null, periodEnd: d.periodEnd ?? null, familyId: d.familyId ?? null, checkoutId: d.checkoutId ?? null, amountCents: d.amountCents ?? null, full: d.full ?? null } };
+  return { id, type, at: body.at, seq: body.seq ?? null, customer, data: { price: d.price ?? null, periodEnd: d.periodEnd ?? null, familyId: d.familyId ?? null, checkoutId: d.checkoutId ?? null, amountCents: d.amountCents ?? null, full: d.full ?? null, ref: d.ref ?? null } };
 }
 
 /** The zero-cost gateway: a checkout is a record, a webhook is a signed fixture. */
@@ -105,7 +108,7 @@ export class FakeGateway {
   async changePlan({ idempotencyKey, from, to, periodStart, periodEnd, now }) {
     const end = periodEnd || now, total = Math.max(1, end - (periodStart || now)), remaining = Math.min(total, Math.max(0, end - now));
     const diff = (PLANS[to]?.priceCents || 0) - (PLANS[from]?.priceCents || 0);
-    return { chargeCents: Math.max(0, Math.round(diff * remaining / total)), basis: 'unused share of the current period', providerOperationRef: `fake_op_${idempotencyKey}`, simulated: true };
+    return { chargeCents: Math.max(0, Math.round(diff * remaining / total)), basis: 'unused share of the current period', providerOperationRef: `fake_op_${idempotencyKey}`, applied: true, pending: false, simulated: true };
   }
   // Stage 4.2 provider effects, simulated: recorded on `calls`, nothing charged, no state held (inspect reports none).
   record(...call) { (this.calls ||= []).push(call); }
@@ -252,6 +255,7 @@ export class Payments {
       if (intent) {
         if (intent.familyId !== s.familyId || intent.fingerprint !== fingerprint) fail(409, 'IDEMPOTENCY_CONFLICT'); // S3.4-A: the seat choice is part of the request
         if (intent.status === 'applied') return { done: intent.result, customerRef: intent.customerRef };
+        if (intent.status === 'awaiting_payment') return { done: { pending: true, kind: 'upgrade', plan: intent.toPlan, invoiceUrl: intent.proration?.invoiceUrl || null, state: deriveState(family.subscription, now) }, customerRef: intent.customerRef }; // the provider holds it until its invoice is paid; the webhook finishes it
         if (intent.status !== 'creating') fail(409, 'SUBSCRIPTION_CHANGED'); // stale, superseded or reconciled: closed for good
         return { intent }; // creating: an earlier attempt stopped before finalising — resume with the same key
       }
@@ -281,7 +285,9 @@ export class Payments {
       if (inflight && inflight.operationId !== operationId && inflight.at > now - this.inflightMs) fail(409, 'CHANGE_IN_PROGRESS'); // one provider call in flight per family
       // S3.4-F: taking over an abandoned marker supersedes that intent in the same transaction, so it can never finalise later
       const abandoned = inflight && inflight.operationId !== operationId ? await tx.get(`billingChangeIntents/${gw.name}:${inflight.operationId}`) : null;
-      if (abandoned && abandoned.status === 'creating') tx.set(`billingChangeIntents/${gw.name}:${inflight.operationId}`, { ...abandoned, status: 'superseded', supersededBy: operationId, supersededAt: now });
+      // an upgrade the provider holds until its invoice is paid is not abandoned: no second change while that payment can still land
+      if (abandoned && abandoned.status === 'awaiting_payment' && abandoned.awaitingSince > now - AWAITING_PAYMENT_MS) fail(409, 'PAYMENT_PENDING');
+      if (abandoned && (abandoned.status === 'creating' || abandoned.status === 'awaiting_payment')) tx.set(`billingChangeIntents/${gw.name}:${inflight.operationId}`, { ...abandoned, status: 'superseded', supersededBy: operationId, supersededAt: now });
       tx.set(`families/${s.familyId}`, { ...family, billingIntent: { operationId, at: now } });
       tx.set(path, record);
       return { intent: record };
@@ -303,6 +309,14 @@ export class Payments {
         tx.set(path, { ...current, status: 'stale', proration: up ? proration : null, providerOperationRef: proration?.providerOperationRef || null });
         if (mine) tx.set(`families/${s.familyId}`, { ...family, billingIntent: null });
         return { stale: true };
+      }
+      if (up && (proration.pending === true || proration.applied === false)) {
+        // Stage 4 review: the provider accepted the change but holds it until its proration invoice is paid (pending_if_incomplete).
+        // Nothing changes here — the seats stay as they are — until invoice.paid names this family and the target plan (process()).
+        // The in-flight marker stays, so no second change starts while that payment can still land.
+        tx.set(path, { ...current, status: 'awaiting_payment', proration, providerOperationRef: proration?.providerOperationRef || null, awaitingSince: this.now() });
+        this.audit(tx, 'billing.upgrade_awaiting_payment', s.uid, s.familyId);
+        return { result: { pending: true, kind: 'upgrade', plan: plan.id, invoiceUrl: proration.invoiceUrl || null, state: deriveState(family.subscription, this.now()) } };
       }
       const event = up
         ? { id: operationId, type: 'plan.change', plan: plan.id, provider: gw.name, providerRef: intent.customerRef, proration, ...(intent.seatChildIds ? { seatChildIds: intent.seatChildIds } : {}) }
@@ -363,6 +377,10 @@ export class Payments {
       const checkoutPath = ev.data.checkoutId ? `checkouts/${gw.name}:${ev.data.checkoutId}` : null;
       const checkout = checkoutPath ? await tx.get(checkoutPath) : null; // read now: commit() writes next
       const plan = ev.data.price ? gw.planFor(ev.data.price) : null; // the provider's price id through the gateway's table; the payload never names a plan
+      // Stage 4 review: an upgrade the provider held until its invoice was paid completes here, from that invoice's payment (webhook-authoritative)
+      const awaiting = familyId && internalType === 'payment.succeeded' && plan ? (await tx.query('billingChangeIntents', 'familyId', familyId, 100)).map(([, i]) => i).find((i) => i.provider === gw.name && i.status === 'awaiting_payment' && i.toPlan === plan) || null : null;
+      // a real provider sends one event per refund object; the same refund delivered under a second event id must not be counted twice
+      const duplicateRefund = internalType === 'refund' && ev.data.ref ? (await tx.query('billingEvents', 'refundRef', ev.data.ref, 5)).some(([id, r]) => id !== `${gw.name}:${ev.id}` && r.outcome?.status === 'applied') : false;
       // S3.3-C ordering: older timestamp, or the same timestamp with a lower adapter sequence, is stale.
       const stale = mapping && (ev.at < mapping.lastEventAt || (ev.at === mapping.lastEventAt && ev.seq !== null && mapping.lastEventSeq != null && ev.seq < mapping.lastEventSeq));
       let outcome;
@@ -377,6 +395,7 @@ export class Payments {
       else if (checkout && plan && checkout.plan !== plan) outcome = { status: 'rejected', reason: 'CHECKOUT_MISMATCH' }; // paid for a different plan than the one this checkout was opened for
       else if (ev.type === 'checkout.completed' && checkout.status === 'completed') outcome = { status: 'rejected', reason: 'CHECKOUT_ALREADY_COMPLETED' };
       else if (ev.type === 'checkout.completed' && ['superseded', 'superseded_by_deletion'].includes(checkout.status)) outcome = { status: 'rejected', reason: 'CHECKOUT_SUPERSEDED' }; // a newer checkout, or the family's deletion, replaced it: no double transition
+      else if (duplicateRefund) outcome = { status: 'ignored', reason: 'DUPLICATE_REFUND' };
       else if (stale) outcome = { status: 'ignored', reason: 'STALE_EVENT' }; // an older event arriving after a newer one never rolls the facts back
       else {
         const family = await tx.get(`families/${familyId}`);
@@ -385,13 +404,15 @@ export class Payments {
         else if (family.deleted === true || family.deletion?.status === 'executing') outcome = { status: 'reconciliation_required', reason: 'FAMILY_DELETED' };
         else {
           // Only a bound checkout carries an intent to be on a plan; a renewal invoice never does (S3.3-B).
-          const event = { id: derivedEventId(`${gw.name}:${ev.id}`), type: internalType, provider: gw.name, providerRef: ev.customer, authorized: ev.type === 'checkout.completed',
-            ...(plan ? { plan } : {}), ...(ev.data.periodEnd ? { periodEnd: ev.data.periodEnd } : {}),
+          const event = { id: derivedEventId(`${gw.name}:${ev.id}`), type: internalType, provider: gw.name, providerRef: ev.customer, authorized: ev.type === 'checkout.completed' || !!awaiting,
+            ...(plan ? { plan } : {}), ...(ev.data.periodEnd ? { periodEnd: ev.data.periodEnd } : {}), ...(awaiting?.seatChildIds ? { seatChildIds: awaiting.seatChildIds } : {}),
             ...(internalType === 'refund' ? { amountCents: ev.data.amountCents ?? undefined, full: ev.data.full === true } : {}) };
           try {
-            const done = ev.type === 'checkout.completed' && family.checkoutIntent?.[gw.name] === checkout.checkoutId ? { ...family, checkoutIntent: { ...family.checkoutIntent, [gw.name]: null } } : family;
+            let done = ev.type === 'checkout.completed' && family.checkoutIntent?.[gw.name] === checkout.checkoutId ? { ...family, checkoutIntent: { ...family.checkoutIntent, [gw.name]: null } } : family;
+            if (awaiting && family.billingIntent?.operationId === awaiting.operationId) done = { ...done, billingIntent: null }; // the upgrade's marker is released with its payment
             const result = await this.billing.commit(tx, familyId, done, event, `webhook:${gw.name}`, now);
-            outcome = { status: 'applied', state: result.state, eventId: event.id };
+            if (awaiting) tx.set(`billingChangeIntents/${gw.name}:${awaiting.operationId}`, { ...awaiting, status: 'applied', appliedBy: ev.id, appliedAt: now, result: { ...result, kind: 'upgrade', proration: awaiting.proration || null } });
+            outcome = { status: 'applied', state: result.state, eventId: event.id, ...(awaiting ? { upgrade: awaiting.operationId } : {}) };
           } catch (error) {
             if (!(error instanceof Fault)) throw error; // infrastructure: let the provider retry
             // the machine refused it: waiting on a server-side action it can resolve later, or a hard rejection for the operator
@@ -407,7 +428,7 @@ export class Payments {
         if (outcome.status === 'applied' || pending.length !== before.length || outcome.status === 'requires_action') tx.set(mappingPath, next);
         if (outcome.status === 'applied' && checkout && ev.type === 'checkout.completed') tx.set(checkoutPath, { ...checkout, status: 'completed', completedAt: now, completedBy: ev.id }); // a `creating` intent whose session the provider did open is completed too
       }
-      tx.set(inboxPath, { provider: gw.name, providerEventId: ev.id, type: ev.type, at: ev.at, seq: ev.seq ?? null, receivedAt: seen?.receivedAt ?? now, lastReceivedAt: now, attempts: (seen?.attempts || 0) + 1, customer: ev.customer, familyId, data: ev.data, fingerprint, outcome });
+      tx.set(inboxPath, { provider: gw.name, providerEventId: ev.id, type: ev.type, at: ev.at, seq: ev.seq ?? null, receivedAt: seen?.receivedAt ?? now, lastReceivedAt: now, attempts: (seen?.attempts || 0) + 1, customer: ev.customer, familyId, data: ev.data, refundRef: ev.data.ref || null, fingerprint, outcome });
       this.audit(tx, `webhook.${outcome.status}`, `webhook:${gw.name}`, familyId);
       return outcome;
     });
