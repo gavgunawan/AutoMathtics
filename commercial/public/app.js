@@ -15,6 +15,7 @@ const messages = {
   CHILD_SESSION_REVOKED: 'The child PIN changed. Select the child and enter the new PIN.',
   TRIAL_ALREADY_USED: 'A free trial has already been used with this mobile number.', TRIAL_REQUIRES_VERIFIED_PHONE: 'A verified mobile number is needed for the free trial.',
   SUBSCRIPTION_EXISTS: 'This family already has a subscription.', NO_SUBSCRIPTION: 'There is no subscription to change.', INVALID_TRANSITION: 'That change is not possible in the current state.',
+  FAMILY_DELETED: 'This family has been deleted.', NO_DELETION_PENDING: 'No deletion is scheduled.',
   MANUAL_GRANT_ACTIVE: 'This family already has pilot access, so the free trial is not needed.', CHECKOUT_REQUIRED: 'Choose a plan to subscribe first; a trial cannot be changed.', PLAN_CHANGE_NOT_AUTHORIZED: 'That payment does not match the plan on record.', RENEWAL_REQUIRED: 'The renewal payment comes first; upgrade after it goes through.', CHANGE_IN_PROGRESS: 'A plan change is already in progress. Try again in a moment.', USE_PLAN_CHANGE: 'Your family is subscribed: change the plan from the subscription controls.', SUBSCRIPTION_CHANGED: 'The subscription changed while this was in progress. Refresh and try again.', LEDGER_REPLAYED: 'That was already done. Refresh to see the result.',
   SEATS_CANNOT_REMOVE: 'Seats can be added here, not taken away.', INVALID_PLAN: 'That plan is not available.', SELECT_CHILDREN_FOR_DOWNGRADE: 'Not enough seats for that many children.', IDEMPOTENCY_CONFLICT: 'That request was already made differently. Refresh and try again.',
   INSUFFICIENT_GRID_COINS: 'Not enough Grid Coins yet.', INSUFFICIENT_REWARD_POINTS: 'Not enough Reward Points yet.',
@@ -253,6 +254,13 @@ function downgradeScreen(plan, family, op) {
     await api('/billing/plan', { plan: plan.id, ...(choose ? { seatChildIds } : {}), operationId: op }); note('Plan change scheduled for the next renewal.'); await refresh();
   }, 'primary'), button('Back', refresh, 'ghost'));
 }
+function deletionScreen(family) {
+  transientView = true;
+  const box = panel('DELETE FAMILY', family.label, 'The children\u2019s profiles, progress, coins and this family\u2019s settings will be removed after 14 days. Payment records are kept as required. A used free trial stays used.');
+  const op = crypto.randomUUID();
+  box.append(el('p', 'You can cancel any time in the next 14 days from the parent workspace. Download your data first if you want to keep it.', 'notice'),
+    button('Delete after 14 days', async () => { await api('/family/deletion', { operationId: op }); note('Deletion scheduled.'); await refresh(); }, 'primary'), button('Back', refresh, 'ghost'));
+}
 async function parentScreen() {
   const family = model.family, e = family.entitlement || { status: 'inactive', seatLimit: 0, accessUntil: 0 };
   const billing = await api('/billing'); // plans, trial eligibility and the payment reference come from the server, never guessed from /me
@@ -301,6 +309,20 @@ async function parentScreen() {
   if (family.children.length) row.append(button('Game & progress', parentGameScreen, 'ghost'));
   row.append(button('Sign out', signOut, 'ghost')); box.append(row);
   for (const child of family.children) box.append(button(`Reset ${child.nickname}\u2019s PIN`, () => resetPinScreen(child), 'text-button'));
+  // Stage 3.5: the family's own data to keep, and the way to leave — 14 days to change your mind
+  const keep = el('div', null, 'actions');
+  keep.append(button('Download my family\u2019s data', async () => {
+    const data = await api('/family/export'); const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `automathtics-family-${family.id.slice(0, 8)}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
+  }, 'text-button'));
+  if (family.deletion) {
+    const cancelOp = crypto.randomUUID();
+    box.append(el('p', `This family is scheduled for deletion on ${new Date(family.deletion.effectiveAt).toLocaleDateString()}. Everything except the payment records will be removed.`, 'notice'));
+    keep.append(button('Keep my family', async () => { await api('/family/deletion/cancel', { operationId: cancelOp }); note('Deletion cancelled.'); await refresh(); }, 'primary'));
+  } else {
+    keep.append(button('Delete this family', () => deletionScreen(family), 'text-button'));
+  }
+  box.append(keep);
   box.append(el('p', `Family reference: ${family.id}`, 'reference'));
 }
 function pinFields() {

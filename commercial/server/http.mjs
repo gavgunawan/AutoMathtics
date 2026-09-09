@@ -34,7 +34,7 @@ async function body(req) {
   const raw = await rawBody(req, 16_384);
   try { return JSON.parse(raw.toString('utf8')); } catch { fail(400, 'INVALID_JSON'); }
 }
-export function createApp(service, cfg, { publicDir = new URL('../public/', import.meta.url), reportError = () => {}, learning = null, game = null, billing = null, payments = null } = {}) {
+export function createApp(service, cfg, { publicDir = new URL('../public/', import.meta.url), reportError = () => {}, learning = null, game = null, billing = null, payments = null, support = null } = {}) {
   function setCookie(res, value, maxAge) {
     res.setHeader('Set-Cookie', `${COOKIE}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${cfg.emulator ? '' : '; Secure'}`);
   }
@@ -152,6 +152,8 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
       if (game && req.method === 'GET' && path === '/api/game/parent') return json(200, await game.parentState(ctx));
       // Billing (parent role): plans, the derived subscription state, trial eligibility; trial start and cancel are the only browser-initiated events.
       if (billing && req.method === 'GET' && path === '/api/billing') return json(200, await billing.view(ctx));
+      // Stage 3.5: the family's own data, for the parent to keep (read-only; recent sign-in). Nothing consumes it.
+      if (support && req.method === 'GET' && path === '/api/family/export') return json(200, await support.exportFamily(ctx));
       if (req.method !== 'POST') fail(404, 'NOT_FOUND');
       if (learning && path === '/api/learn/session') return json(200, await learning.start(ctx, data));
       if (learning && path === '/api/learn/answer') return json(200, await learning.answer(ctx, data));
@@ -161,6 +163,8 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
       if (billing && path === '/api/billing/seats') return json(200, await billing.seats(ctx, data));
       if (payments && path === '/api/billing/checkout') return json(200, await payments.checkout(ctx, data));
       if (payments && path === '/api/billing/plan') return json(200, await payments.changePlan(ctx, data));
+      if (support && path === '/api/family/deletion') return json(200, await support.requestDeletion(ctx, data));
+      if (support && path === '/api/family/deletion/cancel') return json(200, await support.cancelDeletion(ctx, data));
       if (game && path === '/api/game/shop/buy') return json(200, await game.buy(ctx, data));
       if (game && path === '/api/game/shop/equip') return json(200, await game.equip(ctx, data));
       if (game && path === '/api/game/rewards/redeem') return json(200, await game.redeem(ctx, data));

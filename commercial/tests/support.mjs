@@ -5,6 +5,7 @@ import { Learning } from '../server/learning.mjs';
 import { Game } from '../server/game.mjs';
 import { Subscriptions } from '../server/subscription.mjs';
 import { Payments, FakeGateway } from '../server/payments.mjs';
+import { Support } from '../server/support.mjs';
 import { mac } from '../server/security.mjs';
 
 // Firestore rejects `undefined` values and arrays nested directly inside arrays; fail the same way
@@ -24,6 +25,7 @@ export class MemoryStore {
   data = new Map(); tail = Promise.resolve();
   async get(path) { return structuredClone(this.data.get(path) || null); }
   async list(collectionPath) { const prefix = `${collectionPath}/`; return [...this.data.entries()].filter(([k]) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/')).map(([, v]) => structuredClone(v)); }
+  async entries(collectionPath) { const prefix = `${collectionPath}/`; return [...this.data.entries()].filter(([k]) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/')).map(([k, v]) => [k.slice(prefix.length), structuredClone(v)]); }
   transaction(fn, { readOnly = false } = {}) {
     const run = this.tail.then(async () => {
       const working = new Map(structuredClone([...this.data])); let written = false;
@@ -31,6 +33,7 @@ export class MemoryStore {
       const result = await fn({
         get: async (p) => { if (written) throw Error('Read after write'); return structuredClone(working.get(p) || null); },
         list: async (c) => { if (written) throw Error('Read after write'); const prefix = `${c}/`; return [...working.entries()].filter(([k]) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/')).map(([, v]) => structuredClone(v)); },
+        entries: async (c) => { if (written) throw Error('Read after write'); const prefix = `${c}/`; return [...working.entries()].filter(([k]) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/')).map(([k, v]) => [k.slice(prefix.length), structuredClone(v)]); },
         set: (p, v) => { write(); assertFirestoreShape(v, p); working.set(p, structuredClone(v)); },
         delete: (p) => { write(); working.delete(p); },
       });
@@ -59,6 +62,7 @@ export function fixture() {
   const billing = new Subscriptions({ foundation: service, store, now: () => clock });
   const gateway = new FakeGateway({ secret: webhookSecret });
   const payments = new Payments({ foundation: service, store, billing, provider: 'fake', gateways: { fake: gateway }, now: () => clock });
+  const support = new Support({ foundation: service, store, billing, payments, now: () => clock });
   function token(uid, patch = {}) {
     if (!users.has(uid)) users.set(uid, { uid, email: `${uid}@example.test`, emailVerified: true, disabled: false,
       tokensValidAfterTime: new Date(0).toUTCString(), multiFactor: { enrolledFactors: [{ uid: `mfa-${uid}`, factorId: 'phone', phoneNumber: `+65${String(Math.abs([...uid].reduce((h, c) => (h * 31 + c.charCodeAt(0)) | 0, 7)) % 1e8).padStart(8, '0')}` }] } }); // a distinct fake number per uid
@@ -88,7 +92,7 @@ export function fixture() {
     const childCtx = await service.authenticate(await service.selectChild(selCtx, kid.id, '763829'));
     return { p, child: kid, selCtx, childCtx };
   }
-  return { service, learning, game, billing, payments, gateway, store, identity, users, tokens, auth, token, login, family, child, childSession, now: () => clock, advance: (ms) => { clock += ms; } };
+  return { service, learning, game, billing, payments, support, gateway, store, identity, users, tokens, auth, token, login, family, child, childSession, now: () => clock, advance: (ms) => { clock += ms; } };
 }
 export const rejected = (code) => (err) => err.code === code;
 // the answer the server holds, in the shape the browser would send — and a nearby wrong one

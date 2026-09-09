@@ -15,7 +15,11 @@ test('the public API has no route that transfers, imports, exports or migrates a
   const http = await readFile(new URL('../server/http.mjs', import.meta.url), 'utf8');
   const routes = [...http.matchAll(/'\/api\/[a-z/:-]+'/g)].map((m) => m[0]).concat([...http.matchAll(/\/\^\\\/api\\\/[^$]+\$\//g)].map((m) => m[0]));
   assert.ok(routes.length >= 12, `expected the route table, saw ${routes.length}`);
-  for (const r of routes) assert.doesNotMatch(r, /transfer|import|export|migrat|move|merge|clone|copy|link|invite/i, r);
+  // Stage 3.5: GET /api/family/export is the parent's own data-subject read (a download to keep); no route
+  // on this server or any other consumes it, so nothing moves — the scan admits exactly that one path.
+  const admitted = new Set(["'/api/family/export'"]);
+  for (const r of routes) if (!admitted.has(r)) assert.doesNotMatch(r, /transfer|import|export|migrat|move|merge|clone|copy|link|invite/i, r);
+  assert.ok(!routes.some((r) => /import/i.test(r)), 'there is no import counterpart to the export');
 });
 test('a child and their progress are bound to one family: another family cannot see, enter, reset or count them', async () => {
   const f = fixture(); const a = await f.childSession('parentA'), b = await f.childSession('parentB');

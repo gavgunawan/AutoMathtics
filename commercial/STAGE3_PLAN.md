@@ -8,8 +8,8 @@ for development by the review team on 9 Sep 2026). Order agreed with the team:
 | 3.1 | Commercial ledger hardening — balances reconcilable and derived before money enters | merged (PR #9); hardened per audit (bootstrap, never-overwrite, safe repair) |
 | 3.2 | Subscription + entitlement state machine: trial, active, grace, past-due, cancelled, expired; seat plans; one trial per `phoneKey` — see `SUBSCRIPTIONS.md` | merged (PR #10); hardened per audit (seat reactivation, event fingerprints, retry-safe parent actions, real-Firestore trial race) |
 | 3.3 | Payment gateway abstraction + webhook security, with local/fake payment events (the $0 constraint holds); global provider-event inbox — see `PAYMENTS.md` | merged (PR #12); hardened per the second review (price ids → plans, no `plan.change` over webhooks) |
-| 3.4 | Upgrade / downgrade / cancel / refund lifecycle (including resolving a provider downgrade that needs a seat choice — 3.3 records it as rejected) — see `SUBSCRIPTIONS.md` → Lifecycle | **this branch** |
-| 3.5 | Recovery, export, deletion, commercial admin/support tooling | next |
+| 3.4 | Upgrade / downgrade / cancel / refund lifecycle — see `SUBSCRIPTIONS.md` → Lifecycle | merged (PR #14); hardened per review (PR #16) and close-out (PR #17); closed for development |
+| 3.5 | Recovery, export, deletion, commercial admin/support tooling — see `SUPPORT.md` | **this branch** |
 | Stage 4 | Real provider, staging environment, private pilot | |
 
 ## 3.1 — what this branch delivers
@@ -93,7 +93,7 @@ for development by the review team on 9 Sep 2026). Order agreed with the team:
 - Entitlement state lives on the family (`families/{f}.entitlement`) and changes only through the state
   machine in 3.2, driven by verified webhook events (3.3) or operator tools — never by a browser route.
 - Every webhook is idempotent by provider event id, verified by signature, and recorded before it is acted on.
-- Trials: one per `phoneKey`; a family with `phones/{key}.count > 1` gets no trial.
+- Trials: one winning trial per verified phone (`phones/{key}.trialFamilyId`), however many families or emails sit under it; a family on an active manual grant is not offered one.
 - Keep the emulator as the only environment until Stage 4; fake payment events are fixtures, not a sandbox account.
 
 ## Open decisions before the family cutover (from the team's Stage 2 review)
