@@ -16,7 +16,7 @@
 // webhook never touches a child wallet.
 import { randomUUID, createHmac } from 'node:crypto';
 import { Fault, fail, equal, object, text, uuid, sha256 } from './security.mjs';
-import { PLANS, deriveState, assignSeats } from './subscription.mjs';
+import { PLANS, deriveState, assignSeats, transition } from './subscription.mjs';
 
 const MINUTE = 60_000, DAY = 86_400_000;
 export const SIGNATURE_TOLERANCE_MS = 5 * MINUTE;
@@ -107,6 +107,12 @@ export class FakeGateway {
     const diff = (PLANS[to]?.priceCents || 0) - (PLANS[from]?.priceCents || 0);
     return { chargeCents: Math.max(0, Math.round(diff * remaining / total)), basis: 'unused share of the current period', providerOperationRef: `fake_op_${idempotencyKey}`, simulated: true };
   }
+  // Stage 4.2 provider effects, simulated: recorded on `calls`, nothing charged, no state held (inspect reports none).
+  record(...call) { (this.calls ||= []).push(call); }
+  async schedulePlan({ idempotencyKey, customerRef, to }) { this.record('schedulePlan', customerRef, to); return { providerOperationRef: `fake_op_${idempotencyKey}`, effectiveAt: null, simulated: true }; }
+  async setCancelAtPeriodEnd({ idempotencyKey, customerRef, cancel }) { this.record('setCancelAtPeriodEnd', customerRef, cancel); return { providerOperationRef: `fake_op_${idempotencyKey}`, cancelAtPeriodEnd: cancel === true, simulated: true }; }
+  async cancelSubscription({ idempotencyKey, customerRef }) { this.record('cancelSubscription', customerRef); return { cancelled: true, providerOperationRef: `fake_op_${idempotencyKey}`, simulated: true }; }
+  async inspect(customerRef) { this.record('inspect', customerRef); return { provider: this.name, customer: { id: customerRef }, subscription: null, simulated: true }; }
   sign(rawBody, at) { return signWebhook(this.secret, rawBody, at); }
   verify(rawBody, headers, now) {
     verifyWebhook(this.secret, rawBody, headers[SIGNATURE_HEADER], now);
@@ -182,6 +188,40 @@ export class Payments {
     });
   }
   /**
+   * Parent action: cancel at the period end, or undo it — at the provider first (Stage 4.2), so
+   * its next invoice agrees with the family's record, then in the machine. The machine must accept
+   * the transition before the provider is told; a replayed operation tells the provider nothing; a
+   * provider failure changes nothing here. A trial, or a subscription the operator granted, has no
+   * provider side.
+   */
+  async cancel(ctx, body) {
+    object(body, ['undo', 'operationId']); const eventId = this.billing.eventId(body), undo = body.undo === true;
+    const prepared = await this.store.transaction(async (tx) => {
+      const { s, family } = await this.billing.parent(tx, ctx, true), now = this.now();
+      const sub = family.subscription; if (!sub) fail(409, 'NO_SUBSCRIPTION');
+      if (await tx.get(`families/${s.familyId}/billing/${eventId}`)) return { replay: true }; // commit() answers a replay (or a conflict) itself
+      transition(sub, { type: undo ? 'cancel.undo' : 'cancel.request' }, now); // refused here, the provider is never asked
+      const gw = Object.hasOwn(this.gateways, sub.provider || '') ? this.gateways[sub.provider] : null, customerRef = family.billing?.[sub.provider] || null;
+      return { provider: gw && typeof gw.setCancelAtPeriodEnd === 'function' && sub.plan !== 'trial' && customerRef ? sub.provider : null, customerRef };
+    }, { readOnly: true });
+    if (prepared.provider) await this.gateways[prepared.provider].setCancelAtPeriodEnd({ idempotencyKey: eventId, customerRef: prepared.customerRef, cancel: !undo });
+    return this.billing.cancel(ctx, body);
+  }
+  /** A family's deletion ends the provider's subscription. Best effort, never throws for a provider fault: the outcome is recorded and the report flags a subscription left live. */
+  async cancelAtProvider(family, idempotencyKey) {
+    const name = family.subscription?.provider || null, gw = name && Object.hasOwn(this.gateways, name) ? this.gateways[name] : null, customerRef = name ? family.billing?.[name] || null : null;
+    if (!gw || typeof gw.cancelSubscription !== 'function' || family.subscription.plan === 'trial' || !customerRef) return { provider: name, status: 'not_applicable', at: this.now() };
+    try { const r = await gw.cancelSubscription({ idempotencyKey, customerRef }); return { provider: name, status: r.cancelled ? 'cancelled' : 'none', already: r.already === true, providerOperationRef: r.providerOperationRef || null, reason: r.reason || null, simulated: r.simulated === true, at: this.now() }; }
+    catch (error) { if (!(error instanceof Fault)) throw error; return { provider: name, status: 'failed', reason: error.code, at: this.now() }; }
+  }
+  /** What the provider holds for a customer reference (Stage 4.2 reconciliation). A provider fault is a value, not an exception. */
+  async providerState(provider, customerRef) {
+    const gw = Object.hasOwn(this.gateways, provider) ? this.gateways[provider] : null;
+    if (!gw || typeof gw.inspect !== 'function') return { provider, available: false };
+    try { return { provider, available: true, ...(await gw.inspect(customerRef)) }; }
+    catch (error) { if (!(error instanceof Fault)) throw error; return { provider, available: true, error: error.code, detail: error.provider || null }; }
+  }
+  /**
    * Parent action (3.4): change plan, through a durable change intent
    * billingChangeIntents/{provider}:{operationId} (review S3.4, the S3.3-A pattern generalised):
    *   intent { family, subscription version, from, to, seat choice, kind, fingerprint, status }
@@ -223,15 +263,20 @@ export class Payments {
       const record = { provider: gw.name, operationId, familyId: s.familyId, uid: s.uid, customerRef: family.billing?.[gw.name] || null, subscriptionVersion: sub.version, fromPlan: sub.plan, toPlan: plan.id,
         seatChildIds: seatIds, kind, fingerprint, periodStart: sub.lastPaymentAt || sub.startedAt || now, periodEnd: sub.periodEnd || null, status: 'creating', proration: null, providerOperationRef: null, result: null, createdAt: now }; // no expireAt: financial recovery evidence (S3.4-G)
       if (kind === 'downgrade') assignSeats(family, plan.seats, seatIds ?? undefined); // the choice must be complete now, although it applies at renewal
-      if (kind !== 'upgrade') { // no provider involved: schedule (or clear) and record the intent in this one transaction
+      // Stage 4.2: a scheduled change reaches the provider too — its next invoice must carry the new price, or a
+      // renewal on the old one would silently drop the schedule. Nothing to tell it when nothing is scheduled.
+      const providerCall = kind === 'upgrade' || (typeof gw.schedulePlan === 'function' && sub.provider === gw.name && !!record.customerRef && (kind === 'downgrade' || !!sub.scheduled));
+      if (!providerCall) { // no provider involved: schedule (or clear) and record the intent in this one transaction
         const event = { id: operationId, type: 'plan.schedule', plan: plan.id, ...(seatIds ? { seatChildIds: seatIds } : {}) };
         const result = { ...(await this.billing.commit(tx, s.familyId, family, event, s.uid, now)), kind, proration: null };
         tx.set(path, { ...record, status: 'applied', result });
         return { done: result, customerRef: record.customerRef };
       }
-      if (state !== 'active') fail(409, 'RENEWAL_REQUIRED'); // in grace the renewal comes first; the larger plan can be scheduled into it, not granted for free
-      if (seatIds && (family.activeChildIds || []).some((id) => !seatIds.includes(id))) fail(409, 'SEATS_CANNOT_REMOVE'); // S3.4-B: an upgrade may add, never drop a seated child
-      if (seatIds) assignSeats(family, plan.seats, seatIds); // members and capacity checked now
+      if (kind === 'upgrade') {
+        if (state !== 'active') fail(409, 'RENEWAL_REQUIRED'); // in grace the renewal comes first; the larger plan can be scheduled into it, not granted for free
+        if (seatIds && (family.activeChildIds || []).some((id) => !seatIds.includes(id))) fail(409, 'SEATS_CANNOT_REMOVE'); // S3.4-B: an upgrade may add, never drop a seated child
+        if (seatIds) assignSeats(family, plan.seats, seatIds); // members and capacity checked now
+      }
       const inflight = family.billingIntent;
       if (inflight && inflight.operationId !== operationId && inflight.at > now - this.inflightMs) fail(409, 'CHANGE_IN_PROGRESS'); // one provider call in flight per family
       // S3.4-F: taking over an abandoned marker supersedes that intent in the same transaction, so it can never finalise later
@@ -242,8 +287,10 @@ export class Payments {
       return { intent: record };
     });
     if (prepared.done) { if (prepared.customerRef) await this.reprocess(gw.name, prepared.customerRef); return prepared.done; }
-    const intent = prepared.intent;
-    const proration = await gw.changePlan({ idempotencyKey: operationId, customerRef: intent.customerRef, from: intent.fromPlan, to: intent.toPlan, periodStart: intent.periodStart, periodEnd: intent.periodEnd, now: this.now() });
+    const intent = prepared.intent, up = intent.kind === 'upgrade';
+    const proration = up
+      ? await gw.changePlan({ idempotencyKey: operationId, customerRef: intent.customerRef, from: intent.fromPlan, to: intent.toPlan, periodStart: intent.periodStart, periodEnd: intent.periodEnd, now: this.now() })
+      : await gw.schedulePlan({ idempotencyKey: operationId, customerRef: intent.customerRef, to: intent.kind === 'clear' ? intent.fromPlan : intent.toPlan }); // the price the next invoice must carry
     const finished = await this.store.transaction(async (tx) => {
       const { s, family } = await this.billing.parent(tx, ctx, true);
       const current = await tx.get(path);
@@ -253,13 +300,15 @@ export class Payments {
       if (!mine || (family.subscription?.version ?? null) !== current.subscriptionVersion) {
         // the subscription moved, or another change took this one over, while the provider was being asked:
         // never finalise against old facts, and never touch a marker that is not ours (S3.4-F)
-        tx.set(path, { ...current, status: 'stale', proration, providerOperationRef: proration?.providerOperationRef || null });
+        tx.set(path, { ...current, status: 'stale', proration: up ? proration : null, providerOperationRef: proration?.providerOperationRef || null });
         if (mine) tx.set(`families/${s.familyId}`, { ...family, billingIntent: null });
         return { stale: true };
       }
-      const event = { id: operationId, type: 'plan.change', plan: plan.id, provider: gw.name, providerRef: intent.customerRef, proration, ...(intent.seatChildIds ? { seatChildIds: intent.seatChildIds } : {}) };
-      const result = { ...(await this.billing.commit(tx, s.familyId, { ...family, billingIntent: null }, event, s.uid, this.now())), kind: 'upgrade', proration };
-      tx.set(path, { ...current, status: 'applied', proration, providerOperationRef: proration?.providerOperationRef || null, result }); // the provider's reference is kept for reconciliation (Stage 4)
+      const event = up
+        ? { id: operationId, type: 'plan.change', plan: plan.id, provider: gw.name, providerRef: intent.customerRef, proration, ...(intent.seatChildIds ? { seatChildIds: intent.seatChildIds } : {}) }
+        : { id: operationId, type: 'plan.schedule', plan: plan.id, ...(intent.seatChildIds ? { seatChildIds: intent.seatChildIds } : {}) };
+      const result = { ...(await this.billing.commit(tx, s.familyId, { ...family, billingIntent: null }, event, s.uid, this.now())), kind: intent.kind, proration: up ? proration : null };
+      tx.set(path, { ...current, status: 'applied', proration: up ? proration : null, providerOperationRef: proration?.providerOperationRef || null, result }); // the provider's reference is kept for reconciliation (Stage 4)
       return { result };
     });
     if (finished.stale) fail(409, 'SUBSCRIPTION_CHANGED');

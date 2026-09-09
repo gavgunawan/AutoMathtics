@@ -159,7 +159,7 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
       if (learning && path === '/api/learn/answer') return json(200, await learning.answer(ctx, data));
       if (learning && path === '/api/learn/quit') return json(200, await learning.quit(ctx, data));
       if (billing && path === '/api/billing/trial') return json(200, await billing.startTrial(ctx, data));
-      if (billing && path === '/api/billing/cancel') return json(200, await billing.cancel(ctx, data));
+      if (billing && path === '/api/billing/cancel') return json(200, await (payments ? payments.cancel(ctx, data) : billing.cancel(ctx, data))); // Stage 4.2: the provider hears it first
       if (billing && path === '/api/billing/seats') return json(200, await billing.seats(ctx, data));
       if (payments && path === '/api/billing/checkout') return json(200, await payments.checkout(ctx, data));
       if (payments && path === '/api/billing/plan') return json(200, await payments.changePlan(ctx, data));

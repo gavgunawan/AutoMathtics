@@ -37,6 +37,9 @@ export const RETENTION = Object.freeze({
 export const DELETION_BATCH = 300; // comfortably under Firestore's 500 writes per transaction
 const ACCESS = new Set(['trial', 'active', 'grace']);
 const flagged = (docs, key, values) => docs.filter((d) => values.includes(d[key]));
+// What an operator can establish about an inbox row the server could not apply (Stage 4.2), after acting at the provider.
+export const EVENT_OUTCOMES = Object.freeze(['refunded_at_provider', 'cancelled_at_provider', 'applied_by_operator', 'no_action_needed']);
+const OPEN_EVENT = new Set(['reconciliation_required', 'rejected']);
 
 export class Support {
   constructor({ foundation, store, billing = null, payments = null, now = Date.now }) {
@@ -177,11 +180,13 @@ export class Support {
     const billing = (await this.store.list(`families/${familyId}/billing`)).sort((a, b) => a.at - b.at).map((e) => ({ id: e.id, type: e.type, plan: e.plan, at: e.at, actor: e.actor, state: e.result?.state || null }));
     const audit = (await this.store.list('audit')).filter((a) => a.familyId === familyId).sort((a, b) => a.at - b.at).map((a) => ({ action: a.action, uid: a.uid, at: a.at, childId: a.childId || null }));
     const reconciliations = (await this.store.list('billingReconciliations')).filter((r) => r.familyId === familyId);
+    const providerChecks = reconciliations.filter((r) => r.kind === 'provider_state').sort((a, b) => b.at - a.at);
     const sub = family.subscription || null;
     const attention = {
       requiresAction: inbox.filter((e) => e.outcome?.status === 'requires_action').length,
-      reconciliationRequired: inbox.filter((e) => e.outcome?.status === 'reconciliation_required').length, // late provider events on a deleted family: Stage 4 refunds/cancels at the provider
-      rejected: inbox.filter((e) => e.outcome?.status === 'rejected').length,
+      reconciliationRequired: inbox.filter((e) => e.outcome?.status === 'reconciliation_required' && !e.outcome.resolution).length, // late provider events on a deleted family, until resolve-event
+      rejected: inbox.filter((e) => e.outcome?.status === 'rejected' && !e.outcome.resolution).length,
+      providerCheck: providerChecks[0] ? { at: providerChecks[0].at, match: providerChecks[0].match, findings: providerChecks[0].findings.map((x) => x.code) } : null, // the latest reconcile-provider run
       openIntents: flagged(intents, 'status', ['creating', 'stale', 'superseded', 'frozen_by_deletion']).map((i) => i.operationId),
       openCheckouts: flagged(checkouts, 'status', ['creating', 'superseded', 'superseded_by_deletion']).map((c) => c.checkoutId),
       inFlight: family.billingIntent || null, liveCheckout: family.checkoutIntent || null,
@@ -224,6 +229,67 @@ export class Support {
     return results;
   }
   /**
+   * Stage 4.2: the provider's truth against the family's record, read-only at the provider, one
+   * reconciliation record per run (`kind: provider_state`) with the findings an operator acts on
+   * (RECONCILIATION.md). A simulated provider holds no state, so it yields no findings and no verdict.
+   */
+  async reconcileProvider(familyId, operator) {
+    uuid(familyId); this.operator(operator);
+    const family = await this.store.get(`families/${familyId}`); if (!family) fail(404, 'FAMILY_NOT_FOUND');
+    const now = this.now(), sub = family.subscription || null, state = sub ? deriveState(sub, now) : 'none', gone = family.deleted === true || family.deletion?.status === 'executing';
+    const local = { state, plan: sub?.plan || null, scheduledPlan: sub?.scheduled?.plan || null, periodEnd: sub?.periodEnd || null, cancelAtPeriodEnd: !!sub?.cancelAtPeriodEnd, provider: sub?.provider || null, providerRef: sub?.providerRef || null, version: sub?.version ?? null };
+    const wantsProvider = !!sub && sub.plan !== 'trial' && ['active', 'grace', 'past_due'].includes(state) && !gone; // the family's record says a provider subscription should be live
+    const providers = [];
+    for (const [provider, ref] of Object.entries(family.billing || {})) {
+      const st = this.payments ? await this.payments.providerState(provider, ref) : { provider, available: false };
+      const findings = [], add = (code, detail) => findings.push({ code, detail }), relevant = local.provider === provider, ps = st.subscription || null, live = ps?.live === true;
+      if (!st.available) add('PROVIDER_STATE_UNAVAILABLE', 'this adapter cannot report provider state');
+      else if (st.error) add('PROVIDER_UNREACHABLE', st.error);
+      else if (st.simulated) { /* the fake provider holds nothing to compare */ }
+      else if (!st.customer) { if (wantsProvider && relevant) add('NO_PROVIDER_CUSTOMER', `the family is ${state} on ${local.plan}; the provider knows no customer for its reference`); }
+      else if (!live) { if (wantsProvider && relevant) add('NO_PROVIDER_SUBSCRIPTION', `the family is ${state} on ${local.plan}; the provider has ${ps ? `a ${ps.status}` : 'no'} subscription`); }
+      else if (gone) add('DELETED_FAMILY_PROVIDER_LIVE', `the family is deleted; the provider's subscription ${ps.ref} is ${ps.status} — cancel it there, then resolve-event its late notice`);
+      else if (!wantsProvider) add('PROVIDER_SUBSCRIPTION_LIVE', `the family is ${state}; the provider's subscription ${ps.ref} is ${ps.status}`);
+      else {
+        if (!ps.plan) add('UNKNOWN_PROVIDER_PRICE', `${ps.price} is not one of the adapter's prices`);
+        else if (ps.plan !== local.plan && ps.plan !== local.scheduledPlan) add('PLAN_MISMATCH', `provider ${ps.plan}; family ${local.plan}${local.scheduledPlan ? ` (scheduled ${local.scheduledPlan})` : ''}`);
+        if (ps.periodEnd && local.periodEnd && Math.abs(ps.periodEnd - local.periodEnd) > 60_000) add('PERIOD_END_MISMATCH', `provider ${new Date(ps.periodEnd).toISOString()}; family ${new Date(local.periodEnd).toISOString()}`);
+        if (ps.cancelAtPeriodEnd !== local.cancelAtPeriodEnd) add('CANCEL_FLAG_MISMATCH', `provider cancel at period end ${ps.cancelAtPeriodEnd}; family ${local.cancelAtPeriodEnd}`);
+      }
+      providers.push({ provider, ref, available: st.available, simulated: st.simulated === true, error: st.error || null, customer: st.customer || null, subscription: ps, findings });
+    }
+    const target = (i) => (i.kind === 'clear' ? i.fromPlan : i.toPlan);
+    const intents = (await this.store.query('billingChangeIntents', 'familyId', familyId, 100)).map(([, i]) => i).filter((i) => ['creating', 'stale', 'superseded', 'frozen_by_deletion'].includes(i.status)).sort((a, b) => a.createdAt - b.createdAt)
+      .map((i) => { const p = providers.find((x) => x.provider === i.provider), ps = p?.subscription; return { operationId: i.operationId, provider: i.provider, kind: i.kind, fromPlan: i.fromPlan, toPlan: i.toPlan, status: i.status, providerOperationRef: i.providerOperationRef || null,
+        providerEvidence: !p || !p.available || p.simulated || p.error ? 'unknown' : !ps?.live ? 'no_live_provider_subscription' : ps.plan === target(i) ? 'provider_on_target_plan' : 'provider_on_other_plan' }; });
+    const findings = providers.flatMap((p) => p.findings.map((x) => ({ provider: p.provider, ...x }))), compared = providers.some((p) => p.available && !p.simulated && !p.error);
+    const id = randomUUID(), record = { id, kind: 'provider_state', familyId, deleted: family.deleted === true, operator, at: now, local, providers, intents, findings, match: compared ? findings.length === 0 : null };
+    await this.store.transaction(async (tx) => { tx.set(`billingReconciliations/${id}`, record); this.audit(tx, 'support.provider_reconciled', operator, familyId, { reconciliationId: id, findings: findings.map((x) => x.code), match: record.match }); });
+    return record;
+  }
+  /**
+   * Stage 4.2: close an inbox row the server could not apply — a late event on a deleted family
+   * (`reconciliation_required`) or a `rejected` one — after acting at the provider. The row keeps
+   * its outcome; the resolution sits beside it, and the family report stops counting it.
+   */
+  async resolveEvent(provider, eventId, { operator, outcome, note }) {
+    text(provider, 1, 16); text(eventId, 1, 128); this.operator(operator);
+    if (!EVENT_OUTCOMES.includes(outcome)) fail(400, 'INVALID_REQUEST');
+    text(note, 1, 500);
+    const path = `billingEvents/${provider}:${eventId}`;
+    return this.store.transaction(async (tx) => {
+      const r = await tx.get(path); if (!r) fail(404, 'EVENT_NOT_FOUND');
+      if (!OPEN_EVENT.has(r.outcome?.status)) fail(409, 'EVENT_NOT_OPEN');
+      if (r.outcome.resolution) fail(409, 'EVENT_ALREADY_RESOLVED');
+      const id = randomUUID(), now = this.now();
+      const record = { id, kind: 'event', provider, eventId, familyId: r.familyId || null, eventType: r.type, previousOutcome: r.outcome.status, reason: r.outcome.reason || null, outcome, note, operator, at: now };
+      tx.set(`billingReconciliations/${id}`, record);
+      tx.set(path, { ...r, outcome: { ...r.outcome, resolution: { id, outcome, operator, at: now } } });
+      this.audit(tx, 'support.event_resolved', operator, r.familyId || null, { eventId, outcome });
+      return record;
+    });
+  }
+  /**
    * Record what the operator established about a plan-change intent the server could not
    * finalise (creating / stale / superseded): the provider's side was checked and either nothing
    * changed there, it was reverted, the change was applied by the operator through an event, or
@@ -239,7 +305,7 @@ export class Support {
       if (!intent) fail(404, 'INTENT_NOT_FOUND');
       if (!['creating', 'stale', 'superseded', 'frozen_by_deletion'].includes(intent.status)) fail(409, 'INTENT_NOT_OPEN');
       const id = randomUUID(), now = this.now();
-      const record = { id, provider, operationId, familyId: intent.familyId, previousStatus: intent.status, providerOperationRef: intent.providerOperationRef || null, outcome, note, operator, at: now };
+      const record = { id, kind: 'intent', provider, operationId, familyId: intent.familyId, previousStatus: intent.status, providerOperationRef: intent.providerOperationRef || null, outcome, note, operator, at: now };
       tx.set(`billingReconciliations/${id}`, record);
       tx.set(path, { ...intent, status: 'reconciled', reconciliation: { id, outcome, at: now } });
       this.audit(tx, 'support.intent_reconciled', operator, intent.familyId, { operationId, outcome });
@@ -306,7 +372,12 @@ export class Support {
     });
     if (family.deleted) return await this.store.get(`deletions/${familyId}`);
     // phase 0b — the subscription ends as a recorded financial event, now that nothing can revive it (a rerun finds it ended)
-    if (family.subscription && ACCESS.has(deriveState(family.subscription, this.now()))) await this.billing.apply(familyId, { id: randomUUID(), type: 'terminate' }, operator);
+    if (family.subscription && ACCESS.has(deriveState(family.subscription, this.now()))) {
+      // Stage 4.2: the provider stops billing first (idempotent under the execution id; a fault is recorded, never fatal — RECONCILIATION.md), then the machine records the end
+      const providerCancellation = this.payments ? await this.payments.cancelAtProvider(family, `deletion:${family.deletion.executionId}`) : { provider: null, status: 'not_applicable' };
+      await this.billing.apply(familyId, { id: randomUUID(), type: 'terminate' }, operator);
+      await this.store.transaction(async (tx) => { const f = await tx.get(`families/${familyId}`); if (f && !f.deleted) tx.set(`families/${familyId}`, { ...f, deletion: { ...f.deletion, providerCancellation } }); });
+    }
     // phase 1 — login sessions of the family and of its parents (nobody could use them: authorize and login refuse an executing family)
     const members = await this.store.entries(`families/${familyId}/members`), uids = members.map(([uid]) => uid);
     await this.sweepWhere('sessions', 'familyId', familyId, batch, familyId, 'loginSessions');
@@ -331,9 +402,9 @@ export class Support {
       for (const [uid, p] of parents) if (p) tx.set(`parents/${uid}`, { deleted: true, deletedAt: now, familyId: null, reauthAfter: Math.max(p.reauthAfter || 0, Math.floor(now / 1000)), phoneKey: p.phoneKey || null, createdAt: p.createdAt || null }); // seconds, like login()
       const counts = { ...(current.deletion.counts || {}), children: childDocs.length };
       const deletion = { ...current.deletion, status: 'done', phase: 'done', executedAt: now, counts };
-      tx.set(`families/${familyId}`, { id: familyId, deleted: true, deletedAt: now, deletedBy: current.deletion.executedBy || operator, createdAt: current.createdAt || null, phoneKey: current.phoneKey || null, billing: current.billing || null,
+      tx.set(`families/${familyId}`, { id: familyId, deleted: true, deletedAt: now, deletedBy: current.deletion.executedBy || operator, createdAt: current.createdAt || null, phoneKey: current.phoneKey || null, billing: current.billing || null, providerCustomer: current.providerCustomer || null,
         subscription: current.subscription || null, childIds: [], activeChildIds: [], deletion, retention: Object.keys(RETENTION) });
-      const record = { familyId, requestedAt: current.deletion.requestedAt, requestedBy: current.deletion.requestedBy, startedAt: current.deletion.startedAt, executedAt: now, executedBy: current.deletion.executedBy || operator, executionId: current.deletion.executionId, forced: current.deletion.forced === true, counts, retained: RETENTION };
+      const record = { familyId, requestedAt: current.deletion.requestedAt, requestedBy: current.deletion.requestedBy, startedAt: current.deletion.startedAt, executedAt: now, executedBy: current.deletion.executedBy || operator, executionId: current.deletion.executionId, forced: current.deletion.forced === true, counts, providerCancellation: current.deletion.providerCancellation || null, retained: RETENTION };
       tx.set(`deletions/${familyId}`, record);
       this.audit(tx, 'family.deleted', operator, familyId, { counts });
       return record;

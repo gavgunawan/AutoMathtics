@@ -187,6 +187,11 @@ that is how 4.2 is exercised: `stripe listen --forward-to 127.0.0.1:8787/api/web
   period from the invoice's line; `customer.subscription.deleted` → `subscription.deleted`;
   `charge.refunded` → `amount_refunded` and `refunded`. Stripe has no sequence number and second-resolution
   timestamps, so `seq` is null and events dated in the future are refused.
+- **Provider effects (4.2)**: cancel-at-period-end and its undo update the live subscription's flag under the
+  operation id; a scheduled downgrade moves it to the target price with `proration_behavior=none` (the next
+  invoice carries it); a family's deletion deletes the subscription (`DELETE /v1/subscriptions/{id}`, already
+  ended = nothing to do); `inspect` reads the customer and its live-or-latest subscription. None of these
+  creates a customer: a family without one at Stripe gets `NO_PROVIDER_SUBSCRIPTION`.
 - **Errors**: Stripe's error code and status only (`PROVIDER_ERROR`, `PROVIDER_UNREACHABLE`); the key never
   appears in a message or a record.
 
@@ -202,6 +207,23 @@ An adapter implements `createCheckout`, `changePlan` and `verify`. It must:
    its event timestamp and id — if the provider offers only second-resolution timestamps, fetch the
    object's current state rather than trusting event order);
 3. never place a plan name, seat count, state or family id in the normalized data.
+
+A real provider must also carry the family's decisions and answer for its state (Stage 4.2; the
+fake provider simulates all four, records the calls and holds no state):
+
+4. `setCancelAtPeriodEnd({ idempotencyKey, customerRef, cancel })` — the parent's cancel-at-period-end
+   and its undo reach the provider **before** the machine records them, keyed by the operation id,
+   so the provider's next invoice agrees with the family's record; a replayed operation tells the
+   provider nothing; a provider fault changes nothing locally (`Payments.cancel`);
+5. `schedulePlan({ idempotencyKey, customerRef, to })` — a scheduled downgrade (and the clearing of
+   one) moves the provider's subscription to the target price **without proration**, so the next
+   invoice carries it — otherwise a renewal on the old price would silently drop the schedule; it
+   runs through the same durable change intent, in-flight marker and version re-check as an upgrade;
+6. `cancelSubscription({ idempotencyKey, customerRef })` — a family's deletion ends the provider's
+   subscription now, before `terminate` is recorded; the outcome sits on
+   `deletions/{f}.providerCancellation`, and a fault there is a report finding, never a stopped deletion;
+7. `inspect(customerRef)` — the provider's customer and subscription (status, price, period end,
+   cancel flag) for `scripts/support.mjs reconcile-provider` (RECONCILIATION.md). Read-only.
 
 
 

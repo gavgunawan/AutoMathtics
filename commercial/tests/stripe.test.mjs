@@ -8,26 +8,8 @@ import { fixture, rejected } from './support.mjs';
 import { StripeGateway, form, signStripe, verifyStripeSignature, STRIPE_TOLERANCE_MS } from '../server/gateways/stripe.mjs';
 import { Payments } from '../server/payments.mjs';
 
-const KEY = 'sk_test_' + 'a1b2c3d4'.repeat(3), WHSEC = 'whsec_' + 'z9y8x7w6'.repeat(3);
-const PRICES = { starter: 'price_1Starter00', family: 'price_1Family000', big: 'price_1BigFam000' };
-const DAY = 86_400_000, op = () => ({ operationId: randomUUID() });
-/** A recorded Stripe: answers by method+path prefix, remembers every call. */
-function stripeServer(routes = {}) {
-  const calls = [];
-  const fetch = async (url, init = {}) => {
-    const u = new URL(url), method = init.method || 'GET', body = init.body ? Object.fromEntries(new URLSearchParams(init.body)) : null;
-    calls.push({ method, path: u.pathname + (u.search || ''), headers: init.headers || {}, body });
-    const key = Object.keys(routes).filter((k) => { const [m, p] = k.split(' '); return m === method && (u.pathname + u.search).startsWith(p); }).sort((x, y) => y.length - x.length)[0];
-    const answer = key ? (typeof routes[key] === 'function' ? routes[key](body, calls) : routes[key]) : { status: 404, json: { error: { code: 'resource_missing', type: 'invalid_request_error' } } };
-    const envelope = typeof answer.status === 'number' && 'json' in answer ? answer : { status: 200, json: answer };
-    return { ok: envelope.status < 400, status: envelope.status, json: async () => envelope.json };
-  };
-  return { fetch, calls };
-}
-const gateway = (routes, extra = {}) => { const srv = stripeServer(routes); return { gw: new StripeGateway({ secretKey: KEY, webhookSecret: WHSEC, prices: PRICES, origin: 'https://pilot.example.test', fetch: srv.fetch, ...extra }), calls: srv.calls }; };
-const sub = (price, end) => ({ id: 'sub_1', object: 'subscription', status: 'active', current_period_end: Math.floor(end / 1000), items: { data: [{ id: 'si_1', price: { id: price } }] }, latest_invoice: 'in_1' });
-const event = (f, type, object, more = {}) => ({ id: `evt_${randomUUID().replace(/-/g, '')}`, object: 'event', type, created: Math.floor(f.now() / 1000), data: { object }, ...more });
-const signed = (f, ev, at = f.now()) => { const raw = Buffer.from(JSON.stringify(ev)); return { raw, headers: { 'stripe-signature': signStripe(WHSEC, raw, at) } }; };
+import { KEY, WHSEC, PRICES, DAY, op, stripeServer, gateway, sub, event, signed } from './stripe-support.mjs';
+void stripeServer;
 
 test('the wire: nested form encoding, the signature scheme Stripe documents, and construction that refuses bad keys', () => {
   assert.equal(form({ mode: 'subscription', line_items: [{ price: 'price_x', quantity: 1 }], metadata: { a: 'b c' } }), 'mode=subscription&line_items%5B0%5D%5Bprice%5D=price_x&line_items%5B0%5D%5Bquantity%5D=1&metadata%5Ba%5D=b%20c');

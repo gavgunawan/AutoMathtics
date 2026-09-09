@@ -59,6 +59,8 @@ switch (command) {
   case 'inbox': out(await support.inbox(rest[0] || 'requires_action')); break;
   case 'reprocess': out(await support.reprocess(rest[0], actor)); break;
   case 'reconcile-intent': out(await support.reconcileIntent(rest[0], rest[1], { operator: actor, outcome: rest[2], note: rest.slice(3).join(' ') })); break;
+  case 'reconcile-provider': out(await support.reconcileProvider(rest[0], actor)); break;
+  case 'resolve-event': out(await support.resolveEvent(rest[0], rest[1], { operator: actor, outcome: rest[2], note: rest.slice(3).join(' ') })); break;
   case 'export': { const family = await store.get(`families/${rest[0]}`); if (!family) throw Error('FAMILY_NOT_FOUND'); out(await store.transaction((tx) => support.collect(tx, family, actor), { readOnly: true })); break; }
   case 'delete': {
     if (process.env.CONFIRM_DELETION !== rest[0]) throw Error('Set CONFIRM_DELETION to the exact family id to execute a deletion.');
@@ -68,5 +70,5 @@ switch (command) {
     if (process.env.CONFIRM_DELETION !== rest[0]) throw Error('Set CONFIRM_DELETION to the exact parent uid to delete a sign-in account.');
     out(await support.deleteAccountFor(rest[0], actor)); break;
   }
-  default: console.error('Usage: node scripts/support.mjs family|customer|inbox|reprocess|reconcile-intent|export|delete|delete-account ...'); process.exit(1);
+  default: console.error('Usage: node scripts/support.mjs family|customer|inbox|reprocess|reconcile-intent|reconcile-provider|resolve-event|export|delete|delete-account ...'); process.exit(1);
 }
