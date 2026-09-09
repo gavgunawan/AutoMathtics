@@ -75,7 +75,7 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--amber);outline-offs
 .actions{display:flex;flex-wrap:wrap;gap:4px;margin:8px 0}
 .message{max-width:850px;margin:18px auto;padding:0 26px;color:#ffd1ec;font:600 16px var(--ui);min-height:24px;overflow-wrap:anywhere}
 .message:not(:empty){animation:screenIn .3s ease-out}
-.captcha{max-width:860px;margin:auto;padding:0 26px}.captcha:empty{display:none}
+.captcha{margin:10px 0 4px;min-height:0}.captcha:empty{display:none}
 footer{max-width:1000px;margin:34px auto;padding:0 28px 30px;display:flex;justify-content:space-between;gap:20px;color:var(--dim);font:600 9px var(--mono);letter-spacing:.12em}
 [aria-busy=true]{cursor:progress}[aria-busy=true] button{opacity:.65;pointer-events:none}
 @keyframes orbit{to{transform:rotate(360deg)}}
