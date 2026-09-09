@@ -74,6 +74,13 @@ Operator CLI: `scripts/subscription.mjs`; signed fake webhooks: `scripts/fake-we
   (`rejected: SELECT_CHILDREN_FOR_DOWNGRADE`) resolves: once the choice is recorded, the provider's
   redelivery of the same event is processed and applied (a rejected inbox event is re-processable; an
   applied one is a replay).
+- **The invoice never changes the plan on its own (S3.3-B).** A renewal at the current price is a
+  renewal; a payment at another price needs one of the intents above (the scheduled change, a checkout
+  for that plan, an operator) or it is recorded and rejected (`PLAN_CHANGE_NOT_AUTHORIZED`). So the
+  lifecycle cannot be bypassed through the payment-success path.
+- A renewal never undoes a cancellation the parent asked for: `cancelAtPeriodEnd` survives it, the
+  paid period is honoured, then access ends; the operator refunds. `cancel.undo`, a fresh checkout or an
+  operator event clears it.
 - Asking for the current plan clears a pending schedule. `plan.change` and `terminate` clear it too.
 - **Cancel** is unchanged: at period end, undoable, access never cut short.
 - **Refund** is never a parent action. The operator (`scripts/subscription.mjs … refund AMOUNT_CENTS [full]`)

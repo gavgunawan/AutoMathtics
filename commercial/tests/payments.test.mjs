@@ -17,11 +17,12 @@ function signed(f, event, { secret: s = webhookSecret, at = f.now() } = {}) {
   return { raw, headers: { 'x-webhook-signature': signWebhook(s, raw, at), 'content-type': 'application/json' } };
 }
 const deliver = (f, event, opts) => { const { raw, headers } = signed(f, event, opts); return f.payments.receive('fake', raw, headers); };
-const evt = (customer, type, data = {}, more = {}) => ({ id: `evt_${randomUUID()}`, type, at: Date.now(), customer, data, ...more });
+// events carry the fixture's clock: a real provider's timestamp must sit inside the signature window
+const evt = (f, customer, type, data = {}, more = {}) => ({ id: `evt_${randomUUID()}`, type, at: f.now(), customer, data, ...more });
 async function subscribed(f, plan = 'family') {
   const a = await f.family('parentA', 0);
   const co = await f.payments.checkout(a.ctx, { plan, operationId: randomUUID() });
-  const paid = await deliver(f, evt(co.customerRef, 'checkout.completed', { price: `price_fake_${plan}`, periodEnd: f.now() + 30 * DAY, checkoutId: co.checkoutId }));
+  const paid = await deliver(f, evt(f, co.customerRef, 'checkout.completed', { price: `price_fake_${plan}`, periodEnd: f.now() + 30 * DAY, checkoutId: co.checkoutId }));
   assert.equal(paid.status, 'applied');
   return { a, co };
 }
@@ -41,7 +42,7 @@ test('the signature covers the raw bytes and the timestamp, in constant time, in
 test('a derived event id is uuid-shaped and stable; the normalized event has a fixed shape', () => {
   const id = derivedEventId('fake:evt_1'); assert.equal(uuid(id), id); assert.equal(derivedEventId('fake:evt_1'), id); assert.notEqual(derivedEventId('fake:evt_2'), id);
   const n = normalizeEvent({ id: 'evt_1', type: 'invoice.paid', at: 5, customer: 'cus_1', data: { price: 'price_fake_starter', periodEnd: 9 } });
-  assert.deepEqual(Object.keys(n), ['id', 'type', 'at', 'customer', 'data']); assert.deepEqual(n.data, { price: 'price_fake_starter', periodEnd: 9, familyId: null, checkoutId: null, amountCents: null, full: null });
+  assert.deepEqual(Object.keys(n), ['id', 'type', 'at', 'seq', 'customer', 'data']); assert.equal(n.seq, null); assert.deepEqual(n.data, { price: 'price_fake_starter', periodEnd: 9, familyId: null, checkoutId: null, amountCents: null, full: null });
   for (const bad of [{ id: 'evt 1', type: 'x', at: 1, customer: 'c', data: {} }, { id: 'evt_1', type: 'x', at: -1, customer: 'c', data: {} }, { id: 'evt_1', type: 'x', at: 1, customer: 'c', data: { amount: 5 } },
     { id: 'evt_1', type: 'x', at: 1, customer: 'c', data: { plan: 'gold' } }, { id: 'evt_1', type: 'x', at: 1, customer: 'c', data: [] }, 'nope', null]) assert.throws(() => normalizeEvent(bad));
   assert.deepEqual(normalizeEvent({ id: 'evt_1', type: 'x', at: 1, customer: 'c' }).data, { price: null, periodEnd: null, familyId: null, checkoutId: null, amountCents: null, full: null }); // data is optional
@@ -52,12 +53,14 @@ test('checkout: a parent chooses a purchasable plan; the server mints one custom
   await assert.rejects(f.payments.checkout(a.ctx, { plan: 'starter', customerRef: 'cus_x' }), rejected('INVALID_REQUEST'));
   const op = randomUUID(); const co = await f.payments.checkout(a.ctx, { plan: 'starter', operationId: op });
   assert.equal(co.simulated, true); assert.equal(co.url, null); assert.equal(co.plan, 'starter'); assert.equal(co.checkoutId, op); assert.match(co.customerRef, /^cus_[0-9a-f-]{36}$/);
-  assert.deepEqual(await f.payments.checkout(a.ctx, { plan: 'family', operationId: op }), co, 'a retried operation id is the same checkout, whatever the browser says now');
+  assert.deepEqual(await f.payments.checkout(a.ctx, { plan: 'starter', operationId: op }), co, 'the same operation id and plan is the same checkout');
+  await assert.rejects(f.payments.checkout(a.ctx, { plan: 'family', operationId: op }), rejected('IDEMPOTENCY_CONFLICT')); // S3.3-A: the same id with another plan is never the first checkout
+  assert.equal(co.providerCheckoutRef, `fake_cs_${op}`); assert.equal(co.idempotencyKey, op, 'the provider is handed the checkout id as its idempotency key');
   const second = await f.payments.checkout(a.ctx, { plan: 'family', operationId: randomUUID() });
   assert.equal(second.customerRef, co.customerRef, 'one reference per family per provider');
   const fam = await f.store.get(`families/${a.familyId}`); assert.deepEqual(fam.billing, { fake: co.customerRef });
   const mapping = await f.store.get(`billingCustomers/fake:${co.customerRef}`); assert.equal(mapping.familyId, a.familyId); assert.equal(mapping.lastEventAt, 0);
-  const rec = await f.store.get(`checkouts/fake:${op}`); assert.equal(rec.status, 'pending'); assert.equal(rec.familyId, a.familyId); assert.ok(rec.expireAt > f.now());
+  const rec = await f.store.get(`checkouts/fake:${op}`); assert.equal(rec.status, 'pending'); assert.equal(rec.familyId, a.familyId); assert.ok(rec.expireAt > f.now()); assert.equal(rec.providerCheckoutRef, `fake_cs_${op}`); assert.equal(typeof rec.fingerprint, 'string');
   assert.equal((await f.billing.view(a.ctx)).customer.fake, co.customerRef);
   const b = await f.family('parentB', 0); const cob = await f.payments.checkout(b.ctx, { plan: 'starter', operationId: randomUUID() });
   assert.notEqual(cob.customerRef, co.customerRef);
@@ -70,7 +73,7 @@ test('the whole life of a subscription through signed webhooks: checkout → pai
   const f = fixture(); const a = await f.family('parentA', 0);
   const co = await f.payments.checkout(a.ctx, { plan: 'family', operationId: randomUUID() });
   const kids = []; await assert.rejects(f.child(a.ctx, 'One'), rejected('SUBSCRIPTION_INACTIVE'));
-  const paidEvent = evt(co.customerRef, 'checkout.completed', { price: 'price_fake_family', periodEnd: f.now() + 30 * DAY, checkoutId: co.checkoutId });
+  const paidEvent = evt(f, co.customerRef, 'checkout.completed', { price: 'price_fake_family', periodEnd: f.now() + 30 * DAY, checkoutId: co.checkoutId });
   const paid = await deliver(f, paidEvent);
   assert.deepEqual(paid, { status: 'applied', state: 'active', eventId: derivedEventId(`fake:${paidEvent.id}`) });
   assert.equal((await f.service.me(a.ctx)).family.entitlement.state, 'active'); assert.equal((await f.service.me(a.ctx)).family.entitlement.seatLimit, 4);
@@ -82,31 +85,31 @@ test('the whole life of a subscription through signed webhooks: checkout → pai
   assert.equal((await f.store.get(`checkouts/fake:${co.checkoutId}`)).status, 'completed');
   assert.equal((await f.store.get(`billingCustomers/fake:${co.customerRef}`)).lastEventId, paidEvent.id);
   // renewal failure: access runs on; the facts record it
-  const failed = await deliver(f, evt(co.customerRef, 'invoice.payment_failed'));
+  const failed = await deliver(f, evt(f, co.customerRef, 'invoice.payment_failed'));
   assert.equal(failed.status, 'applied'); assert.equal(failed.state, 'active'); assert.equal((await f.store.get(`families/${a.familyId}`)).subscription.failures, 1);
   // a plan change the provider announces is not mapped in 3.3 (paid up/downgrade and the seat choice are 3.4): recorded, ignored, capacity untouched
-  const changed = await deliver(f, evt(co.customerRef, 'subscription.updated', { price: 'price_fake_big' }));
+  const changed = await deliver(f, evt(f, co.customerRef, 'subscription.updated', { price: 'price_fake_big' }));
   assert.deepEqual(changed, { status: 'ignored', reason: 'UNSUPPORTED_EVENT' });
   assert.equal((await f.store.get(`families/${a.familyId}`)).subscription.seats, 4);
   // a payment whose price the gateway does not know: recorded, rejected, nothing applied
-  const odd = evt(co.customerRef, 'invoice.paid', { price: 'price_fake_platinum', periodEnd: f.now() + 30 * DAY });
+  const odd = evt(f, co.customerRef, 'invoice.paid', { price: 'price_fake_platinum', periodEnd: f.now() + 30 * DAY });
   assert.deepEqual(await deliver(f, odd), { status: 'rejected', reason: 'UNKNOWN_PRICE' });
   assert.equal((await f.store.get(`billingEvents/fake:${odd.id}`)).outcome.reason, 'UNKNOWN_PRICE');
   assert.equal((await f.store.get(`families/${a.familyId}`)).subscription.version, 2);
   // the provider ends it: cancelled now, children out
-  const gone = await deliver(f, evt(co.customerRef, 'subscription.deleted')); assert.equal(gone.state, 'cancelled');
+  const gone = await deliver(f, evt(f, co.customerRef, 'subscription.deleted')); assert.equal(gone.state, 'cancelled');
   assert.equal((await f.service.me(a.ctx)).family.entitlement.status, 'inactive');
   const sel = await f.service.authenticate(await f.service.lock(a.ctx)); await assert.rejects(f.service.selectChild(sel, kids[0].id, '763829'), rejected('SUBSCRIPTION_INACTIVE'));
   // and a new payment brings it back
-  const small = await deliver(f, evt(co.customerRef, 'invoice.paid', { price: 'price_fake_starter', periodEnd: f.now() + 30 * DAY }));
-  assert.deepEqual(small, { status: 'rejected', reason: 'SELECT_CHILDREN_FOR_DOWNGRADE' }, 'three seated children do not fit a two-seat comeback without a choice');
-  const back = await deliver(f, evt(co.customerRef, 'invoice.paid', { price: 'price_fake_family', periodEnd: f.now() + 30 * DAY })); assert.equal(back.state, 'active');
+  const small = await deliver(f, evt(f, co.customerRef, 'invoice.paid', { price: 'price_fake_starter', periodEnd: f.now() + 30 * DAY }));
+  assert.deepEqual(small, { status: 'rejected', reason: 'PLAN_CHANGE_NOT_AUTHORIZED' }, 'S3.3-B: an invoice cannot bring the family back on a plan nobody chose');
+  const back = await deliver(f, evt(f, co.customerRef, 'invoice.paid', { price: 'price_fake_family', periodEnd: f.now() + 30 * DAY })); assert.equal(back.state, 'active');
   // nothing in any of that touched a wallet or wrote a ledger row
   for (const k of kids) assert.equal((await f.store.list(`families/${a.familyId}/learning/${k.id}/ledger`)).length, 0);
 });
 test('3.2-C: the inbox records before it acts — replay returns the stored outcome, a different payload under the same id is a conflict, an older event is ignored', async () => {
   const f = fixture(); const { a, co } = await subscribed(f, 'starter');
-  const e = evt(co.customerRef, 'invoice.paid', { price: 'price_fake_starter', periodEnd: f.now() + 60 * DAY });
+  const e = evt(f, co.customerRef, 'invoice.paid', { price: 'price_fake_starter', periodEnd: f.now() + 60 * DAY });
   const first = await deliver(f, e); assert.equal(first.status, 'applied');
   const version = (await f.store.get(`families/${a.familyId}`)).subscription.version;
   const again = await deliver(f, e); assert.deepEqual(again, { ...first, replayed: true });
@@ -117,12 +120,12 @@ test('3.2-C: the inbox records before it acts — replay returns the stored outc
   await assert.rejects(deliver(f, { ...e, type: 'subscription.deleted', data: {} }), rejected('IDEMPOTENCY_CONFLICT'));
   assert.equal((await f.store.get(`families/${a.familyId}`)).subscription.plan, 'starter');
   // an event dated before the last applied one arrives late (provider retry after an outage): recorded, ignored
-  const late = evt(co.customerRef, 'subscription.deleted', {}, { at: e.at - 1 });
+  const late = evt(f, co.customerRef, 'subscription.deleted', {}, { at: e.at - 1 });
   assert.deepEqual(await deliver(f, late), { status: 'ignored', reason: 'STALE_EVENT' });
   assert.equal((await f.store.get(`billingEvents/fake:${late.id}`)).outcome.reason, 'STALE_EVENT');
   assert.equal((await f.store.get(`families/${a.familyId}`)).subscription.state, 'active');
   // a provider event type the machine does not model is acknowledged, recorded and ignored
-  const other = evt(co.customerRef, 'customer.updated');
+  const other = evt(f, co.customerRef, 'customer.updated');
   assert.deepEqual(await deliver(f, other), { status: 'ignored', reason: 'UNSUPPORTED_EVENT' });
   assert.equal((await f.store.get(`billingEvents/fake:${other.id}`)).type, 'customer.updated');
 });
@@ -130,13 +133,13 @@ test('a webhook reaches a family only through the reference minted at checkout: 
   const f = fixture(); const { a, co } = await subscribed(f, 'starter');
   const b = await f.family('parentB', 0); const cob = await f.payments.checkout(b.ctx, { plan: 'starter', operationId: randomUUID() });
   const before = await f.store.get(`families/${a.familyId}`);
-  assert.deepEqual(await deliver(f, evt('cus_nobody', 'invoice.paid', { price: 'price_fake_big', periodEnd: f.now() + 30 * DAY })), { status: 'rejected', reason: 'UNKNOWN_CUSTOMER' });
+  assert.deepEqual(await deliver(f, evt(f, 'cus_nobody', 'invoice.paid', { price: 'price_fake_big', periodEnd: f.now() + 30 * DAY })), { status: 'rejected', reason: 'UNKNOWN_CUSTOMER' });
   // B's reference naming A's family: refused, and B's own family is not subscribed either
-  assert.deepEqual(await deliver(f, evt(cob.customerRef, 'invoice.paid', { price: 'price_fake_big', periodEnd: f.now() + 30 * DAY, familyId: a.familyId })), { status: 'rejected', reason: 'FAMILY_MISMATCH' });
+  assert.deepEqual(await deliver(f, evt(f, cob.customerRef, 'invoice.paid', { price: 'price_fake_big', periodEnd: f.now() + 30 * DAY, familyId: a.familyId })), { status: 'rejected', reason: 'FAMILY_MISMATCH' });
   // B's reference naming A's checkout
-  assert.deepEqual(await deliver(f, evt(cob.customerRef, 'checkout.completed', { price: 'price_fake_big', periodEnd: f.now() + 30 * DAY, checkoutId: co.checkoutId })), { status: 'rejected', reason: 'CHECKOUT_MISMATCH' });
+  assert.deepEqual(await deliver(f, evt(f, cob.customerRef, 'checkout.completed', { price: 'price_fake_big', periodEnd: f.now() + 30 * DAY, checkoutId: co.checkoutId })), { status: 'rejected', reason: 'CHECKOUT_MISMATCH' });
   // A's own reference, but paid for a plan other than the one this checkout was opened for
-  assert.deepEqual(await deliver(f, evt(co.customerRef, 'checkout.completed', { price: 'price_fake_big', periodEnd: f.now() + 30 * DAY, checkoutId: co.checkoutId })), { status: 'rejected', reason: 'CHECKOUT_MISMATCH' });
+  assert.deepEqual(await deliver(f, evt(f, co.customerRef, 'checkout.completed', { price: 'price_fake_big', periodEnd: f.now() + 30 * DAY, checkoutId: co.checkoutId })), { status: 'rejected', reason: 'CHECKOUT_MISMATCH' });
   assert.deepEqual(await f.store.get(`families/${a.familyId}`), before);
   assert.equal((await f.store.get(`families/${b.familyId}`)).subscription, undefined);
   assert.equal((await f.store.get(`checkouts/fake:${co.checkoutId}`)).status, 'completed');
@@ -176,11 +179,11 @@ async function serverTest(t) {
   return { f, base, hook };
 }
 test('HTTP: the webhook route needs no cookie, CSRF token or Origin, only a valid signature; everything else about it fails closed', async (t) => {
-  const s = await serverTest(t); const { a, co } = await subscribed(s.f, 'starter');
-  const ok = await s.hook(evt(co.customerRef, 'invoice.paid', { price: 'price_fake_family', periodEnd: s.f.now() + 30 * DAY }));
-  assert.equal(ok.status, 200); assert.equal((await ok.json()).status, 'applied'); assert.equal((await s.f.store.get(`families/${a.familyId}`)).subscription.plan, 'family');
+  const s = await serverTest(t), f = s.f; const { a, co } = await subscribed(f, 'starter');
+  const renewTo = s.f.now() + 45 * DAY, ok = await s.hook(evt(f, co.customerRef, 'invoice.paid', { price: 'price_fake_starter', periodEnd: renewTo }));
+  assert.equal(ok.status, 200); assert.equal((await ok.json()).status, 'applied'); assert.equal((await s.f.store.get(`families/${a.familyId}`)).subscription.periodEnd, renewTo);
   assert.equal(ok.headers.get('set-cookie'), null);
-  const e = evt(co.customerRef, 'invoice.payment_failed');
+  const e = evt(f, co.customerRef, 'invoice.payment_failed');
   assert.equal((await s.hook(e, { sign: false })).status, 401);
   assert.equal((await s.hook(e, { headers: { 'X-Webhook-Signature': signWebhook(secret, Buffer.from(JSON.stringify(e)), s.f.now()) } })).status, 401);
   assert.equal((await s.hook(e, { headers: { 'Content-Type': 'text/plain' } })).status, 415);
@@ -195,8 +198,8 @@ test('HTTP: the webhook route needs no cookie, CSRF token or Origin, only a vali
   assert.equal((await s.hook({ ...e, type: 'subscription.deleted' })).status, 409);
 });
 test('HTTP: bad signatures from one address are budgeted; a checkout still needs the browser session, CSRF and a parent', async (t) => {
-  const s = await serverTest(t); const { co } = await subscribed(s.f, 'starter');
-  const e = evt(co.customerRef, 'invoice.payment_failed');
+  const s = await serverTest(t), f = s.f; const { co } = await subscribed(f, 'starter');
+  const e = evt(f, co.customerRef, 'invoice.payment_failed');
   let status; for (let i = 0; i < 61; i++) status = (await s.hook(e, { sign: false })).status;
   assert.equal(status, 429);
   assert.equal((await s.hook(e)).status, 200, 'a valid signature still lands: like login, the budget counts failures only, so a shared address cannot lock the provider out');

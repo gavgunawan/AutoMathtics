@@ -10,11 +10,12 @@ import { signWebhook } from '../server/payments.mjs';
 const DAY = 86_400_000, T0 = Date.parse('2026-09-10T00:00:00Z');
 const op = () => ({ operationId: randomUUID() });
 const deliver = (f, event) => { const raw = Buffer.from(JSON.stringify(event)); return f.payments.receive('fake', raw, { 'x-webhook-signature': signWebhook(webhookSecret, raw, f.now()) }); };
-const evt = (customer, type, data = {}) => ({ id: `evt_${randomUUID()}`, type, at: Date.now(), customer, data });
+// events carry the fixture's clock: a real provider's timestamp must sit inside the signature window
+const evt = (f, customer, type, data = {}, more = {}) => ({ id: `evt_${randomUUID()}`, type, at: f.now(), customer, data, ...more });
 async function paidFamily(f, plan = 'family', kids = ['A', 'B', 'C']) {
   const a = await f.family('parentA', 0);
   const co = await f.payments.checkout(a.ctx, { plan, ...op() });
-  const paid = await deliver(f, evt(co.customerRef, 'checkout.completed', { price: `price_fake_${plan}`, periodEnd: f.now() + 30 * DAY, checkoutId: co.checkoutId }));
+  const paid = await deliver(f, evt(f, co.customerRef, 'checkout.completed', { price: `price_fake_${plan}`, periodEnd: f.now() + 30 * DAY, checkoutId: co.checkoutId }));
   assert.equal(paid.status, 'applied');
   const children = []; for (const n of kids) children.push((await f.child(a.ctx, n)).child);
   return { a, co, children, ids: children.map((c) => c.id) };
@@ -22,7 +23,7 @@ async function paidFamily(f, plan = 'family', kids = ['A', 'B', 'C']) {
 async function parentAgain(f) { f.advance(2000); return f.login('parentA'); }
 
 test('the machine: a scheduled downgrade waits for the renewal; a refund is a record, a full refund ends access now', () => {
-  const paid = transition(null, { type: 'payment.succeeded', plan: 'family', periodEnd: T0 + 30 * DAY }, T0);
+  const paid = transition(null, { type: 'payment.succeeded', plan: 'family', periodEnd: T0 + 30 * DAY, authorized: true }, T0);
   const sched = transition(paid, { type: 'plan.schedule', plan: 'starter', seatChildIds: ['a'] }, T0 + DAY);
   assert.deepEqual(sched.scheduled, { plan: 'starter', seats: 2, seatChildIds: ['a'], at: T0 + 30 * DAY, requestedAt: T0 + DAY }); assert.equal(sched.seats, 4, 'capacity untouched until then');
   assert.equal(transition(sched, { type: 'plan.schedule', plan: 'family' }, T0 + DAY).scheduled, null, 'asking for the current plan clears it');
@@ -69,7 +70,7 @@ test('a parent downgrades: the seat choice is recorded now, nobody loses a seat 
   assert.equal((await f.store.get(`families/${a.familyId}/children/${C}`)).status, 'active');
   assert.equal((await f.billing.view(a.ctx)).subscription.scheduled.planName, 'Starter');
   // the provider renews at the smaller price: the recorded choice applies
-  const renewal = evt(co.customerRef, 'invoice.paid', { price: 'price_fake_starter', periodEnd: f.now() + 60 * DAY });
+  const renewal = evt(f, co.customerRef, 'invoice.paid', { price: 'price_fake_starter', periodEnd: f.now() + 60 * DAY });
   assert.equal((await deliver(f, renewal)).status, 'applied');
   const fam = await f.store.get(`families/${a.familyId}`);
   assert.deepEqual(fam.activeChildIds, [A, B]); assert.equal(fam.subscription.seats, 2); assert.equal(fam.subscription.scheduled, null);
@@ -82,17 +83,18 @@ test('a parent downgrades: the seat choice is recorded now, nobody loses a seat 
   await f.payments.changePlan(p.ctx, { plan: 'starter', seatChildIds: [A, B], ...op() });
   assert.equal((await f.payments.changePlan(p.ctx, { plan: 'family', ...op() })).kind, 'clear');
   assert.equal((await f.store.get(`families/${a.familyId}`)).subscription.scheduled, null);
-  // a renewal on a different plan than the scheduled one is the provider's truth: applied if the children fit, refused if not
+  // S3.3-B: a renewal on a plan nobody asked for is refused and recorded; the schedule and the seats stay as they were
   await f.payments.changePlan(p.ctx, { plan: 'starter', seatChildIds: [A, B], ...op() });
-  assert.equal((await deliver(f, evt(co.customerRef, 'invoice.paid', { price: 'price_fake_big', periodEnd: f.now() + 90 * DAY }))).state, 'active');
-  const after = await f.store.get(`families/${a.familyId}`); assert.equal(after.subscription.seats, 6); assert.equal(after.subscription.scheduled, null); assert.deepEqual(after.activeChildIds, [A, B, C]);
+  assert.deepEqual(await deliver(f, evt(f, co.customerRef, 'invoice.paid', { price: 'price_fake_big', periodEnd: f.now() + 90 * DAY })), { status: 'rejected', reason: 'PLAN_CHANGE_NOT_AUTHORIZED' });
+  const after = await f.store.get(`families/${a.familyId}`); assert.equal(after.subscription.seats, 4); assert.equal(after.subscription.scheduled.plan, 'starter'); assert.deepEqual(after.activeChildIds, [A, B, C]);
 });
 test('a renewal the machine refused is recorded as rejected; once the parent has chosen seats, the provider\'s redelivery of the same event is applied', async () => {
   const f = fixture(); const { a, co, ids: [A, B] } = await paidFamily(f, 'family', ['A', 'B', 'C']);
-  const renewal = evt(co.customerRef, 'invoice.paid', { price: 'price_fake_starter', periodEnd: f.now() + 60 * DAY });
-  assert.deepEqual(await deliver(f, renewal), { status: 'rejected', reason: 'SELECT_CHILDREN_FOR_DOWNGRADE' });
+  const renewal = evt(f, co.customerRef, 'invoice.paid', { price: 'price_fake_starter', periodEnd: f.now() + 60 * DAY });
+  // S3.3-B: with no intent on record the invoice is refused outright — the seat question never even arises
+  assert.deepEqual(await deliver(f, renewal), { status: 'rejected', reason: 'PLAN_CHANGE_NOT_AUTHORIZED' });
   assert.equal((await f.store.get(`billingEvents/fake:${renewal.id}`)).attempts, 1);
-  assert.deepEqual(await deliver(f, renewal), { status: 'rejected', reason: 'SELECT_CHILDREN_FOR_DOWNGRADE' }, 'still refused while nobody has chosen');
+  assert.deepEqual(await deliver(f, renewal), { status: 'rejected', reason: 'PLAN_CHANGE_NOT_AUTHORIZED' }, 'still refused while nobody has chosen');
   await f.payments.changePlan(a.ctx, { plan: 'starter', seatChildIds: [A, B], ...op() });
   const again = await deliver(f, renewal); assert.equal(again.status, 'applied'); assert.equal(again.replayed, undefined);
   const rec = await f.store.get(`billingEvents/fake:${renewal.id}`); assert.equal(rec.outcome.status, 'applied'); assert.equal(rec.attempts, 3);
@@ -107,13 +109,13 @@ test('refunds: a partial refund is a record and access continues; a full refund 
   assert.equal(r1.state, 'active'); assert.equal((await f.store.get(`families/${a.familyId}`)).subscription.refunds.length, 1);
   await assert.rejects(f.billing.apply(a.familyId, { id: randomUUID(), type: 'refund' }, 'test-operator'), rejected('INVALID_REQUEST'));
   await assert.rejects(f.billing.apply(a.familyId, { id: randomUUID(), type: 'refund', amountCents: 5, full: 'yes' }, 'test-operator'), rejected('INVALID_REQUEST'));
-  const gone = await deliver(f, evt(co.customerRef, 'charge.refunded', { amountCents: 300, full: true }));
+  const gone = await deliver(f, evt(f, co.customerRef, 'charge.refunded', { amountCents: 300, full: true }));
   assert.equal(gone.status, 'applied'); assert.equal(gone.state, 'cancelled');
   assert.equal((await f.service.me(a.ctx)).family.entitlement.status, 'inactive');
   const sub = (await f.store.get(`families/${a.familyId}`)).subscription; assert.equal(sub.refunds.length, 2); assert.equal(sub.refunds[1].providerRef, co.customerRef); assert.equal(sub.refunds[1].full, true);
   assert.equal((await f.billing.view(a.ctx)).subscription.refunds, 2);
   assert.equal((await f.store.list(`families/${a.familyId}/learning/${A}/ledger`)).length, 0, 'money back through the provider never becomes coins');
-  const odd = evt(co.customerRef, 'charge.refunded', {}); // a refund without an amount: recorded, refused
+  const odd = evt(f, co.customerRef, 'charge.refunded', {}); // a refund without an amount: recorded, refused
   assert.deepEqual(await deliver(f, odd), { status: 'rejected', reason: 'INVALID_REQUEST' });
   const sel = await f.service.authenticate(await f.service.lock(a.ctx)); await assert.rejects(f.service.selectChild(sel, A, '763829'), rejected('SUBSCRIPTION_INACTIVE'));
 });
