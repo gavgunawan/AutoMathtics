@@ -5,9 +5,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { fixture, rejected, canonical, wrong } from './support.mjs';
+import { grantEntitlement } from '../server/service.mjs';
 import { placeTrack, placementFromResults, initialProgress, buildPlacementQuestions, yearToLevel, PLACEMENT, LEVELS } from '../server/progress.mjs';
 
 const progPath = (k) => `families/${k.p.familyId}/learning/${k.child.id}`;
+// a 25-question test at a slow pace runs past the fixture's 15-minute pilot grant: give these families room to finish
+const roomToWork = (f, familyId) => grantEntitlement(f.store, { familyId, seatLimit: 2, accessUntil: f.now() + 3 * 3_600_000, reason: 'placement bench', actor: 'test-operator' }, f.now());
 const parentAgain = async (f) => { f.advance(2000); return f.login('parentA'); };
 const create = (f, ctx, extra) => f.service.createChild(ctx, { nickname: 'Kid', icon: 'fox', pin: '763829', ...extra }, randomUUID());
 async function enter(f, p, childId) { const sel = await f.service.authenticate(await f.service.lock(p.ctx)); return f.service.authenticate(await f.service.selectChild(sel, childId, '763829')); }
@@ -47,7 +50,7 @@ test('the matrix: where a track starts from accuracy and time, tested at the mid
   const results = [...Array(10)].map((_, i) => ({ track: 'engine', r: i < 9 ? 'correct' : 'incorrect', secs: 10, allowed: 40 })).concat([...Array(6)].map((_, i) => ({ track: 'nav', r: i < 3 ? 'correct' : 'timeout', secs: 65, allowed: 65 })));
   const placed = placementFromResults(results, 1);
   assert.equal(placed.engine.band, 'ahead'); assert.equal(placed.engine.timeRatio, 0.25); assert.equal(placed.nav.band, 'foundations'); assert.equal(placed.nav.correct, 3); assert.equal(placed.nav.secs, 390);
-  const qs = buildPlacementQuestions(1); assert.equal(qs.length, 16); assert.equal(qs.filter((q) => q.track === 'engine').length, 10); assert.ok(qs.every((q) => q.tier === 3 && q.paper >= 41 && q.paper <= 60 && q.level === 1 && q.seconds > 0));
+  const qs = buildPlacementQuestions(1); assert.equal(qs.length, 25); assert.equal(qs.filter((q) => q.track === 'engine').length, 15); assert.equal(qs.filter((q) => q.track === 'nav').length, 10); assert.ok(qs.every((q) => q.tier === 3 && q.paper >= 41 && q.paper <= 60 && q.level === 1 && q.seconds > 0));
   assert.equal(initialProgress({ start: 'year', yearLevel: 3 }, 0).engine.level, 2); assert.equal(initialProgress({ start: 'test', yearLevel: 2 }, 5).placement.level, 1); assert.equal(initialProgress({ start: 'a1', yearLevel: 4 }, 0).placement, null);
 });
 test('creating a child records age and year level for the business backend, and the start option decides the first papers', async () => {
@@ -67,15 +70,15 @@ test('creating a child records age and year level for the business backend, and 
   const x = await f.support.exportFamily(a.ctx); assert.deepEqual(x.children.find((c) => c.id === testKid.id).demographics, { age: 7, yearLevel: 2, recordedAt: f.now() });
 });
 test('the placement test comes first, is timed and mixed, pays nothing, and places each track; then normal play resumes there', async () => {
-  const f = fixture(); const p = await f.family('parentA', 2);
+  const f = fixture(); const p = await f.family('parentA', 2); await roomToWork(f, p.familyId);
   const kid = (await create(f, p.ctx, { age: 7, yearLevel: 2 })).child; const childCtx = await enter(f, p, kid.id); const k = { p, child: kid, childCtx };
   await assert.rejects(f.learning.start(childCtx, { track: 'engine' }), rejected('PLACEMENT_PENDING'));
   await assert.rejects(f.learning.start(childCtx, { track: 'nav' }), rejected('PLACEMENT_PENDING'));
   await assert.rejects(f.learning.start(childCtx, { track: 'engine', mode: 'scan' }), rejected('PLACEMENT_PENDING'));
   const st0 = await f.learning.state(childCtx); assert.equal(st0.placement.status, 'pending'); assert.equal(st0.placement.level, 1);
   const { started, last, stored } = await takeTest(f, k, { right: 1, speed: 0.3 }); // everything right, quickly: ahead on both tracks
-  assert.equal(started.session.mode, 'placement'); assert.equal(started.session.count, 16); assert.equal(started.question.track, 'engine');
-  assert.ok(stored.questions.slice(0, 10).every((q) => q.track === 'engine' && q.level === 1 && q.tier === 3) && stored.questions.slice(10).every((q) => q.track === 'nav'));
+  assert.equal(started.session.mode, 'placement'); assert.equal(started.session.count, 25); assert.equal(started.question.track, 'engine');
+  assert.ok(stored.questions.slice(0, 15).every((q) => q.track === 'engine' && q.level === 1 && q.tier === 3) && stored.questions.slice(15).every((q) => q.track === 'nav'));
   assert.equal(last.summary.mode, 'placement'); assert.equal(last.summary.rewarded, false); assert.equal(last.summary.gcEarned, 0); assert.equal(last.summary.rpEarned, 0);
   assert.equal(last.summary.placement.engine.band, 'ahead'); assert.equal(last.summary.placement.engine.levelId, 'C'); assert.equal(last.summary.placement.nav.levelId, 'C'); assert.equal(last.summary.placement.engine.paper, 1);
   const st = await f.learning.state(childCtx);
@@ -94,7 +97,7 @@ test('slower or weaker results place lower: on-level, building, foundations, a s
     [{ right: 0.1, speed: 0.3 }, { engine: 'A1', nav: 'A1' }],
   ];
   for (const [how, want] of cases) {
-    const f = fixture(); const p = await f.family('parentA', 2);
+    const f = fixture(); const p = await f.family('parentA', 2); await roomToWork(f, p.familyId);
     const kid = (await create(f, p.ctx, { age: 7, yearLevel: 2 })).child; const childCtx = await enter(f, p, kid.id); const k = { p, child: kid, childCtx };
     const { last } = await takeTest(f, k, how);
     const got = { engine: `${last.summary.placement.engine.levelId}${last.summary.placement.engine.paper}`, nav: `${last.summary.placement.nav.levelId}${last.summary.placement.nav.paper}` };
@@ -104,7 +107,7 @@ test('slower or weaker results place lower: on-level, building, foundations, a s
   }
 });
 test('the parent can change the starting point before the child has played, not after; a Year 1 child who tests weakly still starts at A1', async () => {
-  const f = fixture(); const p = await f.family('parentA', 2);
+  const f = fixture(); const p = await f.family('parentA', 2); await roomToWork(f, p.familyId);
   const kid = (await create(f, p.ctx, { age: 6, yearLevel: 1 })).child;
   const r = await f.service.setChildStart(p.ctx, kid.id, { start: 'year', yearLevel: 3 }); assert.equal(r.child.start, 'year'); assert.equal(r.child.yearLevel, 3); assert.equal(r.placement, null);
   let prog = await f.store.get(`families/${p.familyId}/learning/${kid.id}`); assert.equal(prog.engine.level, 2); assert.equal(prog.placement, null);
