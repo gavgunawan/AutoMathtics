@@ -29,7 +29,7 @@ async function body(req) {
   for await (const chunk of req) { total += chunk.length; if (total > 16_384) fail(413, 'REQUEST_TOO_LARGE'); parts.push(chunk); }
   try { return JSON.parse(Buffer.concat(parts).toString('utf8')); } catch { fail(400, 'INVALID_JSON'); }
 }
-export function createApp(service, cfg, { publicDir = new URL('../public/', import.meta.url), reportError = () => {}, learning = null } = {}) {
+export function createApp(service, cfg, { publicDir = new URL('../public/', import.meta.url), reportError = () => {}, learning = null, game = null } = {}) {
   function setCookie(res, value, maxAge) {
     res.setHeader('Set-Cookie', `${COOKIE}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${cfg.emulator ? '' : '; Secure'}`);
   }
@@ -97,11 +97,15 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
         // and are limited per account inside login(), so a flood of bad tokens from one address —
         // or from everyone behind a mis-measured proxy — cannot lock honest parents out.
         const address = `login-fail:${clientAddress(req, cfg.proxyHops)}`;
-        await service.peek(address, 30);
         let next;
         try { next = await service.login(data.idToken, token); }
         catch (error) {
-          if (error instanceof Fault && error.status !== 429) await service.rate(address, 30, 10 * 60_000).catch(() => {});
+          // Address budgets count failed credentials only. A saturated shared IP must not block a
+          // subsequently valid signed login (office Wi-Fi / carrier NAT); bad attempts stay 429.
+          if (error instanceof Fault && error.status !== 429) {
+            try { await service.rate(address, 30, 10 * 60_000); }
+            catch (limit) { if (limit instanceof Fault && limit.status === 429) throw limit; }
+          }
           throw error;
         }
         setCookie(res, next, PARENT_COOKIE_S); return json(200, { ok: true });
@@ -119,12 +123,24 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
         if (me.role !== 'child') fail(403, 'CHILD_MODE_REQUIRED');
         return json(200, { child: me.child });
       }
-      // Learning engine (child role only; authorization is re-read inside each call's transaction).
+      // Learning + game surfaces. Every service re-reads role/family/child authorization inside
+      // its own transaction; routes never accept authoritative family/role fields from the browser.
       if (learning && req.method === 'GET' && path === '/api/learn/state') return json(200, await learning.state(ctx));
+      if (game && req.method === 'GET' && path === '/api/game/state') return json(200, await game.state(ctx));
+      if (game && req.method === 'GET' && path === '/api/game/parent') return json(200, await game.parentState(ctx));
       if (req.method !== 'POST') fail(404, 'NOT_FOUND');
       if (learning && path === '/api/learn/session') return json(200, await learning.start(ctx, data));
       if (learning && path === '/api/learn/answer') return json(200, await learning.answer(ctx, data));
       if (learning && path === '/api/learn/quit') return json(200, await learning.quit(ctx, data));
+      if (game && path === '/api/game/shop/buy') return json(200, await game.buy(ctx, data));
+      if (game && path === '/api/game/shop/equip') return json(200, await game.equip(ctx, data));
+      if (game && path === '/api/game/rewards/redeem') return json(200, await game.redeem(ctx, data));
+      if (game && path === '/api/game/rocket/fuel') return json(200, await game.fuel(ctx, data));
+      if (game && path === '/api/game/parent/rewards') return json(200, await game.setRewards(ctx, data));
+      if (game && path === '/api/game/parent/redemption') return json(200, await game.decideRedemption(ctx, data));
+      if (game && path === '/api/game/parent/rocket') return json(200, await game.rocket(ctx, data));
+      if (game && path === '/api/game/parent/adjust') return json(200, await game.adjust(ctx, data));
+      if (game && path === '/api/game/parent/settings') return json(200, await game.settings(ctx, data));
       if (path === '/api/family') {
         const { token: next, ...result } = await service.createFamily(ctx, data);
         if (next) setCookie(res, next, PARENT_COOKIE_S);

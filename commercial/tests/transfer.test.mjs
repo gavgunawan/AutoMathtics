@@ -44,7 +44,7 @@ test('a parent who signs up again starts from nothing: new family, new child, pa
   assert.equal(last.summary.passed, true);
   const again = await f.childSession('parentA2'); // same phone, new email
   const st = await f.learning.state(again.childCtx);
-  assert.equal(st.nav.paper, 1); assert.equal(st.engine.paper, 1); assert.deepEqual(st.wallet, { gc: 0, rp: 0, bonuses: 0 }); assert.equal(st.history.length, 0);
+  assert.equal(st.nav.paper, 1); assert.equal(st.engine.paper, 1); assert.equal(st.wallet.gc, 0); assert.equal(st.wallet.rp, 0); assert.deepEqual(st.wallet.inventory, []); assert.equal(st.history.length, 0);
   assert.notEqual(again.p.familyId, first.p.familyId); assert.notEqual(again.child.id, first.child.id);
 });
 test('the verified phone is one key across accounts; the ledger lists every family made under it', async () => {

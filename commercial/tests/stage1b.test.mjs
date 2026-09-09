@@ -41,7 +41,7 @@ test('F1: login failures are counted per forwarded client address, not per proxy
   for (let i = 0; i < 30; i++) last = (await attacker.call('/api/auth/session', garbage)).status;
   assert.equal(last, 401);
   assert.equal((await attacker.call('/api/auth/session', garbage)).status, 429);
-  assert.equal((await attacker.call('/api/auth/session', { idToken: s.f.token('victimBehindAttackerIp') })).status, 429);
+  assert.equal((await attacker.call('/api/auth/session', { idToken: s.f.token('victimBehindAttackerIp') })).status, 200); // a valid signed login is not collateral damage
   const honest = await s.client({ 'X-Forwarded-For': '198.51.100.7' });
   assert.equal((await honest.call('/api/auth/session', { idToken: s.f.token('honestParent') })).status, 200);
 });
@@ -106,6 +106,14 @@ test('F3: the identity recheck reuses one lookup per minute and still honours re
 test('F3: a login always looks the account up afresh', async () => {
   const f = fixture(); await f.login('parentA'); const n = f.identity.lookups;
   await f.login('parentA'); assert.equal(f.identity.lookups, n + 1);
+});
+test('S1B-A: account throttle runs after local token proof but before an 11th Auth user lookup', async () => {
+  const f = fixture();
+  for (let i = 0; i < 10; i++) await f.service.login(f.token('parentA'));
+  const lookups = f.auth.getUserCalls;
+  await assert.rejects(f.service.login(f.token('parentA')), rejected('TOO_MANY_ATTEMPTS'));
+  assert.equal(f.auth.getUserCalls, lookups, 'rate-limited login must not call accounts:lookup');
+  assert.ok(f.auth.verifyCalls.every((v) => v === false), 'login token verification must not request a second revocation lookup');
 });
 test('F3: one session cannot make more than 120 authenticated requests a minute', async (t) => {
   const s = await serverTest(t); const c = await s.client();

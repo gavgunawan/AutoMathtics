@@ -4,7 +4,11 @@
 // to touch a child who already has any.
 import { randomUUID } from 'node:crypto';
 import { fail, uuid, text } from './security.mjs';
-import { GC_PASS, RP_PASS, LEVELS, PAPERS_PER_LEVEL, Q_PER_PAPER, freshProgress, bonusesFor } from './progress.mjs';
+import { GC_PASS, RP_PASS, LEVELS, PAPERS_PER_LEVEL, Q_PER_PAPER, EQUIP_SLOTS, freshProgress, normalizeWallet, bonusesFor } from './progress.mjs';
+import { SHOP_ITEMS } from './game.mjs';
+
+const KNOWN_ITEMS = new Set(SHOP_ITEMS.map((x) => x.id));
+const str = (v, max = 80) => (typeof v === 'string' ? v.slice(0, max) : '');
 
 const HISTORY_MAX = 60, PASS_DAYS_MAX = 400, DAY = 24 * 60 * 60_000;
 const int = (v, lo, hi, name) => { if (!Number.isInteger(v) || v < lo || v > hi) fail(400, `V2_RECORD_INVALID:${name}`); return v; };
@@ -42,20 +46,31 @@ export function convertV2(record, { now }) {
   const bonuses = bonusesFor(days);
   earnedGc += bonuses * GC_PASS; earnedRp += bonuses * RP_PASS;
   const gcSpent = Math.max(0, Number(wallet.gcSpent) || 0), rpSpent = Math.max(0, Number(wallet.rpSpent) || 0);
+  // The v2 wallet becomes the v3 game wallet: only items the v3 catalog knows are carried
+  // (an unknown id is dropped and reported), equipped slots are kept when the item is owned,
+  // and purchase / redemption rows take the shapes the game service writes.
+  const inventory = (Array.isArray(wallet.inventory) ? wallet.inventory : []).filter((x) => typeof x === 'string');
+  const carried = [...new Set(inventory.filter((id) => KNOWN_ITEMS.has(id)))], dropped = [...new Set(inventory.filter((id) => !KNOWN_ITEMS.has(id)))];
+  const slots = {};
+  for (const [kind, slot] of Object.entries(EQUIP_SLOTS)) { const v = wallet[slot]; slots[slot] = typeof v === 'string' && carried.includes(v) && SHOP_ITEMS.some((x) => x.id === v && x.kind === kind) ? v : null; }
+  const purchases = (Array.isArray(wallet.purchases) ? wallet.purchases : []).filter((p) => p && typeof p === 'object')
+    .map((p) => ({ id: str(p.id, 64), emoji: str(p.emoji, 12), name: str(p.name, 80), cost: Math.max(0, Number(p.cost) || 0), date: str(p.date, 10), at: null })).slice(0, 120);
+  const redemptions = (Array.isArray(wallet.redemptions) ? wallet.redemptions : []).filter((p) => p && typeof p === 'object')
+    .map((p) => ({ id: str(p.id, 64) || randomUUID(), rewardId: str(p.rewardId, 64), emoji: str(p.emoji, 12), name: str(p.name, 80), cost: Math.max(0, Number(p.cost) || 0), date: str(p.date, 10),
+      status: ['pending', 'approved', 'rejected'].includes(p.status) ? p.status : 'approved', requestedAt: null, decidedAt: null })).slice(0, 50);
+  const shieldDays = [...passDays].filter((d) => Array.isArray(wallet.shieldDays) && wallet.shieldDays.includes(d));
   const doc = {
     ...freshProgress(), engine, nav,
-    wallet: { gc: Math.max(0, earnedGc - gcSpent), rp: Math.max(0, earnedRp - rpSpent), bonuses },
+    wallet: normalizeWallet({ gc: Math.max(0, earnedGc - gcSpent), rp: Math.max(0, earnedRp - rpSpent), bonuses, gcSpent, rpSpent,
+      inventory: carried, ...slots, shields: Math.min(2, Math.max(0, Number(wallet.shields) || 0)), shieldDays, egg: null, purchases, redemptions,
+      lastScanWeek: typeof wallet.lastScanWeek === 'string' ? wallet.lastScanWeek : null }),
     passDays: days, stats: { sessions, passes },
     history: history.sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, HISTORY_MAX), activeSession: null,
-    // What the shop slice will need to honour: things already bought or redeemed under v2.
-    legacy: { from: 'v2', at: now, gcSpent, rpSpent, earnedGc, earnedRp,
-      inventory: Array.isArray(wallet.inventory) ? wallet.inventory.filter((x) => typeof x === 'string').slice(0, 200) : [],
-      active: Object.fromEntries(Object.entries(wallet).filter(([k, v]) => /^active[A-Z]/.test(k) && (typeof v === 'string' || v === null))),
-      purchases: Array.isArray(wallet.purchases) ? wallet.purchases.filter((p) => p && typeof p === 'object').map((p) => ({ id: String(p.id || ''), cost: Number(p.cost) || 0, date: String(p.date || ''), name: String(p.name || '') })).slice(0, 200) : [],
-      redemptions: Array.isArray(wallet.redemptions) ? wallet.redemptions.filter((p) => p && typeof p === 'object').map((p) => ({ id: String(p.id || ''), rewardId: String(p.rewardId || ''), cost: Number(p.cost) || 0, date: String(p.date || ''), status: String(p.status || ''), name: String(p.name || '') })).slice(0, 200) : [],
-      shields: Number(wallet.shields) || 0, lastScanWeek: typeof wallet.lastScanWeek === 'string' ? wallet.lastScanWeek : null, savedAt: Number.isFinite(record.savedAt) ? record.savedAt : null },
+    legacy: { from: 'v2', at: now, earnedGc, earnedRp, gcSpent, rpSpent, droppedItems: dropped, savedAt: Number.isFinite(record.savedAt) ? record.savedAt : null },
   };
-  return { doc, summary: { engine, nav, rows: rows.length, kept: doc.history.length, sessions, passes, bonuses, earnedGc, earnedRp, gcSpent, rpSpent, gc: doc.wallet.gc, rp: doc.wallet.rp, passDays: days.length } };
+  // A pending v2 redemption still needs the parent's decision in v3; its points were already held.
+  return { doc, summary: { engine, nav, rows: rows.length, kept: doc.history.length, sessions, passes, bonuses, earnedGc, earnedRp, gcSpent, rpSpent, gc: doc.wallet.gc, rp: doc.wallet.rp, passDays: days.length,
+    inventory: carried.length, droppedItems: dropped, purchases: purchases.length, redemptions: redemptions.length, pendingRedemptions: redemptions.filter((r) => r.status === 'pending').length } };
 }
 
 /** Transactional: refuses unless the child exists, is active, belongs to the family, and has no progress yet. */
