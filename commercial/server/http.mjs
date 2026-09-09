@@ -134,8 +134,9 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
       if (learning && path === '/api/learn/session') return json(200, await learning.start(ctx, data));
       if (learning && path === '/api/learn/answer') return json(200, await learning.answer(ctx, data));
       if (learning && path === '/api/learn/quit') return json(200, await learning.quit(ctx, data));
-      if (billing && path === '/api/billing/trial') { object(data, []); return json(200, await billing.startTrial(ctx)); }
+      if (billing && path === '/api/billing/trial') return json(200, await billing.startTrial(ctx, data));
       if (billing && path === '/api/billing/cancel') return json(200, await billing.cancel(ctx, data));
+      if (billing && path === '/api/billing/seats') return json(200, await billing.seats(ctx, data));
       if (game && path === '/api/game/shop/buy') return json(200, await game.buy(ctx, data));
       if (game && path === '/api/game/shop/equip') return json(200, await game.equip(ctx, data));
       if (game && path === '/api/game/rewards/redeem') return json(200, await game.redeem(ctx, data));

@@ -7,11 +7,17 @@
 // entitlement, which is how every child and parent route inherits it without change.
 //
 // Events reach the machine through Subscriptions.apply() (operator CLI now, verified webhooks in
-// 3.3) or the two parent actions (start a trial, cancel at period end). Never through a browser
-// field. Every event is recorded under families/{f}/billing/{eventId} before it acts, so a
-// replayed event returns the stored result and money-like state changes at most once.
+// 3.3) or the parent actions (start a trial, cancel at period end, give a free seat to a child).
+// Every event is recorded under families/{f}/billing/{eventId} with a fingerprint of its content
+// before it acts: the same id with the same content is a replay and returns the stored result;
+// the same id with different content is IDEMPOTENCY_CONFLICT.
+//
+// Seats: a plan gives capacity; `seatChildIds` on an event says which existing children occupy
+// it for the cycle, so a downgrade deactivates and a later upgrade can reactivate a child with
+// all their progress intact. A parent may only *add* a child to a free seat between events —
+// never swap children within a paid cycle.
 import { randomUUID } from 'node:crypto';
-import { fail, object, uuid } from './security.mjs';
+import { fail, object, uuid, sha256 } from './security.mjs';
 
 const DAY = 86_400_000;
 export const TRIAL_DAYS = 7, GRACE_DAYS = 7, DUNNING_DAYS = 30, MAX_SEATS = 20;
@@ -23,7 +29,7 @@ export const PLANS = Object.freeze({
   big: { id: 'big', name: 'Big family', seats: 6, priceCents: 1400, purchasable: true },
 });
 export const STATES = Object.freeze(['none', 'trial', 'active', 'grace', 'past_due', 'cancelled', 'expired']);
-export const EVENTS = Object.freeze(['trial.start', 'payment.succeeded', 'payment.failed', 'plan.change', 'cancel.request', 'cancel.undo', 'terminate']);
+export const EVENTS = Object.freeze(['trial.start', 'payment.succeeded', 'payment.failed', 'plan.change', 'cancel.request', 'cancel.undo', 'terminate', 'seats.assign']);
 const ACCESS = new Set(['trial', 'active', 'grace']);
 export const publicPlan = (p) => ({ id: p.id, name: p.name, seats: p.seats, priceCents: p.priceCents, purchasable: p.purchasable });
 
@@ -92,43 +98,63 @@ export function transition(sub, event, now) {
     case 'terminate':
       if (state === 'none') fail(409, 'INVALID_TRANSITION');
       return { ...sub, state: 'cancelled', endedAt: now, updatedAt: now, version };
+    case 'seats.assign':
+      if (!ACCESS.has(state)) fail(409, 'INVALID_TRANSITION');
+      return { ...sub, updatedAt: now, version }; // capacity unchanged; the occupants change in assignSeats()
     default: fail(400, 'INVALID_EVENT');
   }
 }
-/** Fewer seats than active children: the event must say who keeps a seat; the others go inactive. */
-export function fitSeats(family, seats, keepChildIds) {
-  const active = family.activeChildIds || [];
-  if (active.length <= seats) return { activeChildIds: active, deactivated: [] };
-  if (!Array.isArray(keepChildIds)) fail(409, 'SELECT_CHILDREN_FOR_DOWNGRADE');
-  const keep = [...new Set(keepChildIds)];
-  if (keep.length > seats || keep.some((id) => !(family.childIds || []).includes(id))) fail(409, 'SELECT_CHILDREN_FOR_DOWNGRADE');
-  return { activeChildIds: keep, deactivated: active.filter((id) => !keep.includes(id)) };
+/**
+ * Who occupies the seats after an event. With `seatChildIds` the list is the new occupancy
+ * (children not on it go inactive, children on it come back — progress untouched). Without it,
+ * the current occupants stay if they fit, else the event must say who keeps a seat.
+ */
+export function assignSeats(family, seats, seatChildIds) {
+  const all = family.childIds || [], active = family.activeChildIds || [];
+  if (seatChildIds === undefined || seatChildIds === null) {
+    if (active.length <= seats) return { activeChildIds: active, activated: [], deactivated: [] };
+    fail(409, 'SELECT_CHILDREN_FOR_DOWNGRADE');
+  }
+  if (!Array.isArray(seatChildIds)) fail(400, 'INVALID_SEAT_SELECTION');
+  const next = [...new Set(seatChildIds)];
+  for (const id of next) uuid(id);
+  if (next.length > seats || next.some((id) => !all.includes(id))) fail(409, 'SELECT_CHILDREN_FOR_DOWNGRADE');
+  return { activeChildIds: next, activated: next.filter((id) => !active.includes(id)), deactivated: active.filter((id) => !next.includes(id)) };
 }
+const fingerprintOf = (event) => sha256(JSON.stringify({ type: event.type, provider: event.provider || null, providerRef: event.providerRef || null, plan: event.plan || null, periodEnd: event.periodEnd || null, seatChildIds: event.seatChildIds ? [...new Set(event.seatChildIds)].sort() : null }));
 
 export class Subscriptions {
   constructor({ foundation = null, store, now = Date.now, audit = null }) {
     this.foundation = foundation; this.store = store; this.now = now;
     this.audit = audit || ((tx, action, actor, familyId) => foundation.audit(tx, action, actor, familyId));
   }
-  // Shared commit: reads are done by the caller; this validates, records the event, and writes.
+  // Shared commit: reads first (event record, children), then the transition, then writes.
   async commit(tx, familyId, family, event, actor, now) {
-    const path = `families/${familyId}`, evPath = `${path}/billing/${event.id}`;
+    const path = `families/${familyId}`, evPath = `${path}/billing/${event.id}`, fingerprint = fingerprintOf(event);
     const seen = await tx.get(evPath);
-    if (seen) return seen.result; // a replayed event acts once
+    if (seen) {
+      if (seen.fingerprint !== fingerprint) fail(409, 'IDEMPOTENCY_CONFLICT'); // same id, different event: never silently the first result
+      return seen.result;
+    }
     const children = [];
     for (const id of family.childIds || []) children.push([id, await tx.get(`${path}/children/${id}`)]);
     const sub = transition(family.subscription || null, event, now);
-    const { activeChildIds, deactivated } = fitSeats(family, sub.seats, event.keepChildIds);
+    const { activeChildIds, activated, deactivated } = assignSeats(family, sub.seats, event.seatChildIds);
     tx.set(path, { ...family, subscription: sub, activeChildIds });
-    for (const [id, c] of children) if (c && deactivated.includes(id)) tx.set(`${path}/children/${id}`, { ...c, status: 'inactive' });
-    const result = { state: deriveState(sub, now), entitlement: entitlementFor(sub, now), deactivated };
-    tx.set(evPath, { id: event.id, type: event.type, plan: event.plan || null, periodEnd: event.periodEnd || null, provider: event.provider || null, providerRef: event.providerRef || null, actor, at: now, result });
+    for (const [id, c] of children) {
+      if (!c) continue;
+      if (deactivated.includes(id)) tx.set(`${path}/children/${id}`, { ...c, status: 'inactive' });
+      else if (activated.includes(id)) tx.set(`${path}/children/${id}`, { ...c, status: 'active' });
+    }
+    const result = { state: deriveState(sub, now), entitlement: entitlementFor(sub, now), activeChildIds, activated, deactivated };
+    tx.set(evPath, { id: event.id, type: event.type, plan: event.plan || null, periodEnd: event.periodEnd || null, provider: event.provider || null, providerRef: event.providerRef || null,
+      seatChildIds: event.seatChildIds ? [...new Set(event.seatChildIds)].sort() : null, fingerprint, actor, at: now, result });
     this.audit(tx, `billing.${event.type}`, actor, familyId);
     return result;
   }
-  /** Operator / webhook path (no browser session). Idempotent by event id. */
+  /** Operator / webhook path (no browser session). Idempotent by event id + content. */
   async apply(familyId, event, actor = 'system') {
-    uuid(familyId); object(event, ['id', 'type', 'plan', 'periodEnd', 'keepChildIds', 'provider', 'providerRef']); uuid(event.id);
+    uuid(familyId); object(event, ['id', 'type', 'plan', 'periodEnd', 'seatChildIds', 'provider', 'providerRef']); uuid(event.id);
     if (!EVENTS.includes(event.type)) fail(400, 'INVALID_EVENT');
     if (event.type === 'trial.start') fail(400, 'TRIAL_IS_PARENT_ACTION'); // eligibility lives with the parent's verified phone
     return this.store.transaction(async (tx) => {
@@ -149,20 +175,24 @@ export class Subscriptions {
     if (ledger?.trialFamilyId) return { eligible: false, reason: 'TRIAL_ALREADY_USED' }; // one trial per verified phone, however many emails
     return { eligible: true, reason: null };
   }
+  // A browser-supplied operation id makes a lost response retry-safe; without one the server mints an id.
+  eventId(body) { return body && typeof body.operationId === 'string' ? uuid(body.operationId) : randomUUID(); }
   async view(ctx) {
     return this.store.transaction(async (tx) => {
       const { s, family, parent, ledger } = await this.parent(tx, ctx, false);
       const now = this.now();
       return { plans: Object.values(PLANS).filter((p) => p.purchasable).map(publicPlan), trialDays: TRIAL_DAYS, graceDays: GRACE_DAYS,
         subscription: family.subscription ? entitlementFor(family.subscription, now) : null, manualGrant: family.subscription ? null : (family.entitlement || null),
-        trial: this.trialEligibility(family, parent, ledger), activeCount: (family.activeChildIds || []).length, familyId: s.familyId };
+        trial: this.trialEligibility(family, parent, ledger), activeChildIds: family.activeChildIds || [], familyId: s.familyId };
     }, { readOnly: true });
   }
   /** The parent starts the free trial. The server decides eligibility from the verified phone. */
-  async startTrial(ctx) {
-    const eventId = randomUUID();
+  async startTrial(ctx, body = {}) {
+    object(body, ['operationId']); const eventId = this.eventId(body);
     return this.store.transaction(async (tx) => {
       const { s, family, parent, ledger } = await this.parent(tx, ctx, true);
+      const replay = await tx.get(`families/${s.familyId}/billing/${eventId}`);
+      if (replay && replay.type === 'trial.start') return replay.result; // a retried click after a lost response
       const e = this.trialEligibility(family, parent, ledger);
       if (!e.eligible) fail(e.reason === 'TRIAL_REQUIRES_VERIFIED_PHONE' ? 403 : 409, e.reason);
       const now = this.now();
@@ -173,12 +203,23 @@ export class Subscriptions {
   }
   /** Cancel at the end of the current period, or undo that. Access is never cut short by this. */
   async cancel(ctx, body) {
-    object(body, ['undo']);
-    const eventId = randomUUID();
+    object(body, ['undo', 'operationId']); const eventId = this.eventId(body);
     return this.store.transaction(async (tx) => {
       const { s, family } = await this.parent(tx, ctx, true);
       if (!family.subscription) fail(409, 'NO_SUBSCRIPTION');
       return this.commit(tx, s.familyId, family, { id: eventId, type: body.undo === true ? 'cancel.undo' : 'cancel.request' }, s.uid, this.now());
+    });
+  }
+  /** Give free seats to existing children. Adding only: swapping children within a paid cycle is not a parent action. */
+  async seats(ctx, body) {
+    object(body, ['childIds', 'operationId']); const eventId = this.eventId(body);
+    if (!Array.isArray(body.childIds)) fail(400, 'INVALID_SEAT_SELECTION');
+    return this.store.transaction(async (tx) => {
+      const { s, family } = await this.parent(tx, ctx, true);
+      if (!family.subscription) fail(409, 'NO_SUBSCRIPTION');
+      const current = family.activeChildIds || [];
+      if (current.some((id) => !body.childIds.includes(id))) fail(409, 'SEATS_CANNOT_REMOVE'); // only a downgrade event removes; the parent may only add
+      return this.commit(tx, s.familyId, family, { id: eventId, type: 'seats.assign', seatChildIds: body.childIds }, s.uid, this.now());
     });
   }
 }

@@ -15,6 +15,8 @@ export class FirestoreStore {
   transaction(fn, { readOnly = false } = {}) {
     return this.db.runTransaction((t) => fn({
       get: async (path) => { const s = await t.get(this.db.doc(path)); return s.exists ? this.decode(s.data()) : null; },
+      // A whole collection read under the transaction (Firestore locks the documents it returns).
+      list: async (collectionPath) => { const s = await t.get(this.db.collection(collectionPath)); return s.docs.map((d) => this.decode(d.data())); },
       set: (path, value) => t.set(this.db.doc(path), this.encode(value)),
       delete: (path) => t.delete(this.db.doc(path)),
     }), readOnly ? { readOnly: true } : undefined);

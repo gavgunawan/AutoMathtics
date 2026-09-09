@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { fixture, rejected } from './support.mjs';
-import { transition, deriveState, entitlementFor, accessUntil, fitSeats, PLANS, TRIAL_DAYS, GRACE_DAYS, DUNNING_DAYS } from '../server/subscription.mjs';
+import { transition, deriveState, entitlementFor, accessUntil, assignSeats, PLANS, TRIAL_DAYS, GRACE_DAYS, DUNNING_DAYS } from '../server/subscription.mjs';
 import { grantEntitlement } from '../server/service.mjs';
 
 const DAY = 86_400_000, T0 = Date.parse('2026-09-10T00:00:00Z');
@@ -38,13 +38,17 @@ test('the pure machine: trial → paid → grace → past due → expired, and t
   assert.equal(deriveState(transition(ended, { type: 'payment.succeeded', plan: 'starter', periodEnd: T0 + 40 * DAY }, T0 + 11 * DAY), T0 + 11 * DAY), 'active', 'a subscription can come back');
   assert.throws(() => transition(paid, { type: 'made.up' }, T0), rejected('INVALID_EVENT'));
 });
-test('fewer seats than active children needs a keep list; the others go inactive', () => {
-  const family = { childIds: ['a', 'b', 'c'], activeChildIds: ['a', 'b', 'c'] };
-  assert.deepEqual(fitSeats(family, 4), { activeChildIds: ['a', 'b', 'c'], deactivated: [] });
-  assert.throws(() => fitSeats(family, 2), rejected('SELECT_CHILDREN_FOR_DOWNGRADE'));
-  assert.throws(() => fitSeats(family, 2, ['a', 'b', 'c']), rejected('SELECT_CHILDREN_FOR_DOWNGRADE'));
-  assert.throws(() => fitSeats(family, 2, ['a', 'zzz']), rejected('SELECT_CHILDREN_FOR_DOWNGRADE'));
-  assert.deepEqual(fitSeats(family, 2, ['a', 'c']), { activeChildIds: ['a', 'c'], deactivated: ['b'] });
+test('seat occupancy: an explicit list can deactivate and reactivate; without one the occupants must fit', () => {
+  const A = randomUUID(), B = randomUUID(), C = randomUUID();
+  const family = { childIds: [A, B, C], activeChildIds: [A, B, C] };
+  assert.deepEqual(assignSeats(family, 4), { activeChildIds: [A, B, C], activated: [], deactivated: [] });
+  assert.throws(() => assignSeats(family, 2), rejected('SELECT_CHILDREN_FOR_DOWNGRADE'));
+  assert.throws(() => assignSeats(family, 2, [A, B, C]), rejected('SELECT_CHILDREN_FOR_DOWNGRADE'));
+  assert.throws(() => assignSeats(family, 2, [A, randomUUID()]), rejected('SELECT_CHILDREN_FOR_DOWNGRADE'));
+  assert.throws(() => assignSeats(family, 2, 'A,B'), rejected('INVALID_SEAT_SELECTION'));
+  assert.deepEqual(assignSeats(family, 2, [A, C]), { activeChildIds: [A, C], activated: [], deactivated: [B] });
+  const after = { childIds: [A, B, C], activeChildIds: [A, C] };
+  assert.deepEqual(assignSeats(after, 4, [A, B, C]), { activeChildIds: [A, B, C], activated: [B], deactivated: [] }); // 3.2-A: an upgrade brings B back
 });
 test('a parent starts the trial; the server decides from the verified phone; one trial per phone across accounts', async () => {
   const f = fixture(); samePhone(f, 'parentA', 'parentA2');
@@ -90,18 +94,45 @@ test('a downgrade with too many active children needs a keep list, and deactivat
   await f.billing.apply(a.familyId, { id: randomUUID(), type: 'payment.succeeded', plan: 'family', periodEnd: f.now() + 30 * DAY }, 'test-operator');
   const kids = []; for (const n of ['One', 'Two', 'Three']) kids.push((await f.child(a.ctx, n)).child);
   await assert.rejects(f.billing.apply(a.familyId, { id: randomUUID(), type: 'plan.change', plan: 'starter' }, 'test-operator'), rejected('SELECT_CHILDREN_FOR_DOWNGRADE'));
-  const r = await f.billing.apply(a.familyId, { id: randomUUID(), type: 'plan.change', plan: 'starter', keepChildIds: [kids[0].id, kids[2].id] }, 'test-operator');
+  const r = await f.billing.apply(a.familyId, { id: randomUUID(), type: 'plan.change', plan: 'starter', seatChildIds: [kids[0].id, kids[2].id] }, 'test-operator');
   assert.deepEqual(r.deactivated, [kids[1].id]); assert.equal(r.entitlement.seatLimit, 2);
   const fam = await f.store.get(`families/${a.familyId}`); assert.deepEqual(fam.activeChildIds, [kids[0].id, kids[2].id]);
   assert.equal((await f.store.get(`families/${a.familyId}/children/${kids[1].id}`)).status, 'inactive');
   await assert.rejects(f.child(a.ctx, 'Four'), rejected('CHILD_LIMIT_REACHED'));
+});
+test('3.2-A: a child dropped by a downgrade comes back on an upgrade with all their progress, and the seat list agrees with child status', async () => {
+  const f = fixture(); const a = await f.family('parentA', 0);
+  await f.billing.apply(a.familyId, { id: randomUUID(), type: 'payment.succeeded', plan: 'family', periodEnd: f.now() + 30 * DAY }, 'test-operator');
+  const kids = []; for (const n of ['A', 'B', 'C']) kids.push((await f.child(a.ctx, n)).child);
+  // C earns progress before the downgrade
+  const selCtx = await f.service.authenticate(await f.service.lock(a.ctx));
+  const cCtx = await f.service.authenticate(await f.service.selectChild(selCtx, kids[2].id, '763829'));
+  await f.game.equip(cCtx, { kind: 'pet', itemId: null }); const before = await f.store.get(`families/${a.familyId}/learning/${kids[2].id}`);
+  await f.billing.apply(a.familyId, { id: randomUUID(), type: 'plan.change', plan: 'starter', seatChildIds: [kids[0].id, kids[1].id] }, 'test-operator');
+  await assert.rejects(f.service.me(cCtx), rejected('CHILD_INACTIVE'));
+  const up = await f.billing.apply(a.familyId, { id: randomUUID(), type: 'payment.succeeded', plan: 'family', periodEnd: f.now() + 60 * DAY }, 'test-operator');
+  assert.deepEqual(up.activeChildIds, [kids[0].id, kids[1].id], 'capacity grew but nobody was seated automatically');
+  f.advance(2000); const p = await f.login('parentA');
+  await assert.rejects(f.billing.seats(p.ctx, { childIds: [kids[0].id, kids[2].id] }), rejected('SEATS_CANNOT_REMOVE')); // a parent may add, never swap
+  const seated = await f.billing.seats(p.ctx, { childIds: [kids[0].id, kids[1].id, kids[2].id], operationId: randomUUID() });
+  assert.deepEqual(seated.activated, [kids[2].id]); assert.deepEqual(seated.activeChildIds, [kids[0].id, kids[1].id, kids[2].id]);
+  const fam = await f.store.get(`families/${a.familyId}`);
+  for (const k of kids) assert.equal((await f.store.get(`families/${a.familyId}/children/${k.id}`)).status, fam.activeChildIds.includes(k.id) ? 'active' : 'inactive');
+  assert.deepEqual(await f.store.get(`families/${a.familyId}/learning/${kids[2].id}`), before, 'C\'s progress is exactly what it was');
+  await assert.rejects(f.billing.seats(p.ctx, { childIds: [kids[0].id, kids[1].id, kids[2].id, randomUUID()] }), rejected('SELECT_CHILDREN_FOR_DOWNGRADE'));
+  const sel2 = await f.service.authenticate(await f.service.lock(p.ctx));
+  assert.ok(await f.service.selectChild(sel2, kids[2].id, '763829'), 'C can enter again with the old PIN');
 });
 test('events are idempotent by id, recorded before they act, and a manual grant is refused once a subscription exists', async () => {
   const f = fixture(); const a = await f.family('parentA', 0);
   const id = randomUUID(); const ev = { id, type: 'payment.succeeded', plan: 'starter', periodEnd: f.now() + 30 * DAY };
   const first = await f.billing.apply(a.familyId, ev, 'test-operator'); const again = await f.billing.apply(a.familyId, ev, 'test-operator');
   assert.deepEqual(again, first); assert.equal((await f.store.get(`families/${a.familyId}`)).subscription.version, 1);
-  const rec = await f.store.get(`families/${a.familyId}/billing/${id}`); assert.equal(rec.type, 'payment.succeeded'); assert.equal(rec.result.state, 'active');
+  const rec = await f.store.get(`families/${a.familyId}/billing/${id}`); assert.equal(rec.type, 'payment.succeeded'); assert.equal(rec.result.state, 'active'); assert.equal(typeof rec.fingerprint, 'string');
+  // 3.2-B: the same id with different content is a conflict, not a silent replay
+  await assert.rejects(f.billing.apply(a.familyId, { id, type: 'payment.failed' }, 'test-operator'), rejected('IDEMPOTENCY_CONFLICT'));
+  await assert.rejects(f.billing.apply(a.familyId, { ...ev, plan: 'family' }, 'test-operator'), rejected('IDEMPOTENCY_CONFLICT'));
+  assert.equal((await f.store.get(`families/${a.familyId}`)).subscription.plan, 'starter');
   await assert.rejects(f.billing.apply(a.familyId, { id: randomUUID(), type: 'payment.succeeded', plan: 'starter', periodEnd: f.now() + 30 * DAY, extra: 1 }, 'test-operator'), rejected('INVALID_REQUEST'));
   await assert.rejects(grantEntitlement(f.store, { familyId: a.familyId, seatLimit: 5, accessUntil: f.now() + DAY, reason: 'manual on subscribed', actor: 'test-operator' }, f.now()), rejected('SUBSCRIPTION_MANAGED'));
   await assert.rejects(f.billing.apply(randomUUID(), ev, 'test-operator'), rejected('FAMILY_NOT_FOUND'));
@@ -110,7 +141,10 @@ test('a parent can cancel at the end of the period and undo it; access is never 
   const f = fixture(); const a = await f.family('parentA', 0);
   await f.billing.apply(a.familyId, { id: randomUUID(), type: 'payment.succeeded', plan: 'starter', periodEnd: f.now() + 30 * DAY }, 'test-operator');
   await assert.rejects(f.billing.cancel(a.ctx, { undo: true }), rejected('INVALID_TRANSITION'));
-  const r = await f.billing.cancel(a.ctx, {}); assert.equal(r.entitlement.cancelAtPeriodEnd, true); assert.equal(r.state, 'active');
+  const op = randomUUID();
+  const r = await f.billing.cancel(a.ctx, { operationId: op }); assert.equal(r.entitlement.cancelAtPeriodEnd, true); assert.equal(r.state, 'active');
+  assert.deepEqual(await f.billing.cancel(a.ctx, { operationId: op }), r); // a retried click after a lost response is the same event
+  await assert.rejects(f.billing.cancel(a.ctx, { undo: true, operationId: op }), rejected('IDEMPOTENCY_CONFLICT'));
   f.advance(29 * DAY); const p = await parentAgain(f);
   assert.equal((await f.billing.view(p.ctx)).subscription.status, 'active');
   const undone = await f.billing.cancel(p.ctx, { undo: true }); assert.equal(undone.entitlement.cancelAtPeriodEnd, false);

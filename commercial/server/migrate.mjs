@@ -87,7 +87,7 @@ export async function importLearning(store, { familyId, childId, record, actor, 
     if (existing) fail(409, 'ALREADY_HAS_PROGRESS'); // never merge, never overwrite — an operator deletes by hand if it was wrong
     // The carried balance is the ledger's opening row, so the child's ledger derives to the wallet from day one.
     const base = `families/${familyId}/learning/${childId}`;
-    const opened = post(tx, base, { ...doc, wallet: { ...doc.wallet, gc: 0, rp: 0, ledgerSeq: 0, ledgerLast: null } },
+    const opened = await post(tx, base, { ...doc, wallet: { ...doc.wallet, gc: 0, rp: 0, ledgerSeq: 0, ledgerLast: null } },
       entry({ id: 'migrate-opening', type: 'migrate.opening', gc: doc.wallet.gc, rp: doc.wallet.rp, note: 'carried from v2', at: now }));
     tx.set(base, opened);
     tx.set(`audit/${randomUUID()}`, { action: 'learning.migrated', familyId, childId, actor, reason, at: now, expireAt: now + 400 * DAY,

@@ -29,6 +29,7 @@ export class MemoryStore {
       const write = () => { if (readOnly) throw Error('Write in readOnly transaction'); written = true; };
       const result = await fn({
         get: async (p) => { if (written) throw Error('Read after write'); return structuredClone(working.get(p) || null); },
+        list: async (c) => { if (written) throw Error('Read after write'); const prefix = `${c}/`; return [...working.entries()].filter(([k]) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/')).map(([, v]) => structuredClone(v)); },
         set: (p, v) => { write(); assertFirestoreShape(v, p); working.set(p, structuredClone(v)); },
         delete: (p) => { write(); working.delete(p); },
       });

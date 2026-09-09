@@ -15,6 +15,7 @@ const messages = {
   CHILD_SESSION_REVOKED: 'The child PIN changed. Select the child and enter the new PIN.',
   TRIAL_ALREADY_USED: 'A free trial has already been used with this mobile number.', TRIAL_REQUIRES_VERIFIED_PHONE: 'A verified mobile number is needed for the free trial.',
   SUBSCRIPTION_EXISTS: 'This family already has a subscription.', NO_SUBSCRIPTION: 'There is no subscription to change.', INVALID_TRANSITION: 'That change is not possible in the current state.',
+  SEATS_CANNOT_REMOVE: 'Seats can be added here, not taken away.', SELECT_CHILDREN_FOR_DOWNGRADE: 'Not enough seats for that many children.', IDEMPOTENCY_CONFLICT: 'That request was already made differently. Refresh and try again.',
   INSUFFICIENT_GRID_COINS: 'Not enough Grid Coins yet.', INSUFFICIENT_REWARD_POINTS: 'Not enough Reward Points yet.',
   ITEM_ALREADY_OWNED: 'You already own that item.', SHIELD_LIMIT: 'You can hold at most two streak shields.',
   EGG_ALREADY_WARMING: 'Your Mystery Egg is already warming.', REWARD_DAILY_LIMIT: 'That reward has reached its daily limit.',
@@ -200,8 +201,9 @@ function cards(children, action) {
   }
   return grid;
 }
-function parentScreen() {
+async function parentScreen() {
   const family = model.family, e = family.entitlement || { status: 'inactive', seatLimit: 0, accessUntil: 0 };
+  const billing = e.state || e.status === 'active' ? null : await api('/billing'); // eligibility comes from the server, not guessed from /me
   const active = e.status === 'active' && e.accessUntil > Date.now(); // Display only; API is authoritative.
   const box = panel('PARENT WORKSPACE', family.label, 'Manage your children here. Hand over the device to remove parent access.');
   const summary = el('div', null, 'allowance');
@@ -217,10 +219,24 @@ function parentScreen() {
       : e.state === 'past_due' ? `${e.planName} plan. Access is paused until a payment goes through.`
       : e.state === 'cancelled' ? 'The subscription has ended. Subscribe again to reopen the grid.' : 'The subscription expired. Subscribe again to reopen the grid.';
     box.append(el('p', line, 'notice'));
-    if (['trial', 'active', 'grace'].includes(e.state)) box.append(button(e.cancelAtPeriodEnd ? 'Keep my subscription' : 'Cancel at the end of the period', async () => { await api('/billing/cancel', { undo: e.cancelAtPeriodEnd }); await refresh(); }, 'text-button'));
+    if (['trial', 'active', 'grace'].includes(e.state)) {
+      const cancelOp = crypto.randomUUID(); // one id per rendered button: a retried click is the same event
+      box.append(button(e.cancelAtPeriodEnd ? 'Keep my subscription' : 'Cancel at the end of the period', async () => { await api('/billing/cancel', { undo: e.cancelAtPeriodEnd, operationId: cancelOp }); await refresh(); }, 'text-button'));
+      // a child without a seat can be given a free one (adding only; a downgrade is the only way a seat is taken away)
+      const seated = family.children.filter((c) => c.status === 'active').map((c) => c.id);
+      if (active && seated.length < e.seatLimit) for (const c of family.children.filter((c) => c.status !== 'active')) {
+        const seatOp = crypto.randomUUID();
+        box.append(button(`Give ${c.nickname} a seat`, async () => { await api('/billing/seats', { childIds: [...seated, c.id], operationId: seatOp }); await refresh(); }, 'ghost'));
+      }
+    }
   } else if (!active) {
-    box.append(el('p', 'Your parent account is ready. Start the free trial to open child slots, or ask the pilot operator to activate them.', 'notice'),
-      button('Start the 7-day free trial', async () => { await api('/billing/trial', {}); note('Trial started.'); await refresh(); }, 'primary'));
+    if (billing?.trial?.eligible) {
+      const trialOp = crypto.randomUUID();
+      box.append(el('p', 'Your parent account is ready. Start the free trial to open two child slots for seven days.', 'notice'),
+        button('Start the 7-day free trial', async () => { await api('/billing/trial', { operationId: trialOp }); note('Trial started.'); await refresh(); }, 'primary'));
+    } else {
+      box.append(el('p', `${messages[billing?.trial?.reason] || 'The free trial is not available for this family.'} Ask the pilot operator to activate child slots.`, 'notice'));
+    }
   }
   const row = el('div', null, 'actions');
   if (active && family.activeCount < e.seatLimit) row.append(button('Add a child', addChildScreen, 'primary'));
