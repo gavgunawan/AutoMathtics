@@ -342,7 +342,8 @@ function summaryView(session, s) {
   transientView = true;
   const t = TRACK[session.track];
   const box = panel(`${t.emoji} ${t.name} · ${s.papers}`, s.passed ? 'PASS!' : 'Not this time.',
-    s.passed ? `${s.correct} out of ${s.total}. ⚡ +${s.gcEarned} 🏆 +${s.rpEarned}` : `${s.correct} out of ${s.total}${s.timeout ? `, ${s.timeout} timed out` : ''}. A pass needs every question right.`);
+    s.passed ? (s.rewarded ? `${s.correct} out of ${s.total}. ⚡ +${s.gcEarned} 🏆 +${s.rpEarned}` : `${s.correct} out of ${s.total}. Practice runs keep you sharp but pay nothing — coins come back when the other track finishes the sector.`)
+      : `${s.correct} out of ${s.total}${s.timeout ? `, ${s.timeout} timed out` : ''}. A pass needs every question right.`);
   if (s.leveledUp) box.append(el('p', `Sector ${s.newLevelId} unlocked!`, 'notice'));
   else if (s.bossNext) box.append(el('p', '👑 A check point is next: questions from the whole tier, double loot.', 'notice'));
   box.append(el('p', `Wallet: ⚡ ${s.wallet.gc} · 🏆 ${s.wallet.rp}`, 'muted'), button('Back to my grid', refresh, 'primary'));

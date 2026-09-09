@@ -110,8 +110,11 @@ test('a finished sector is practice until the other track catches up, then both 
   const f = fixture(); const k = await f.childSession();
   await f.store.put(progPath(k), { ...freshProgress(), engine: { level: 0, paper: 101, bossCleared: 5 }, nav: { level: 0, paper: 96, bossCleared: 5 } });
   const practice = await play(f, k, 'engine');
-  assert.equal(practice.started.session.mode, 'practice'); assert.equal(practice.last.summary.gcEarned, 50); // practice still pays
+  assert.equal(practice.started.session.mode, 'practice'); assert.equal(practice.last.summary.passed, true);
+  assert.equal(practice.last.summary.rewarded, false); assert.equal(practice.last.summary.gcEarned, 0); assert.equal(practice.last.summary.rpEarned, 0); // practice pays nothing
   let st = await f.learning.state(k.childCtx); assert.equal(st.engine.paper, 101); assert.equal(st.engine.level, 0);
+  assert.deepEqual(st.wallet, { gc: 0, rp: 0, bonuses: 0 }); assert.equal((await f.store.get(progPath(k))).passDays.length, 0); // and counts for no streak
+  assert.equal(st.history[0].passed, true); assert.equal(st.history[0].papers.startsWith('practice '), true);
   const finish = await play(f, k, 'nav');
   assert.equal(finish.last.summary.passed, true); assert.deepEqual(finish.last.summary.jumped.sort(), ['engine', 'nav']); assert.equal(finish.last.summary.newLevelId, 'B');
   st = await f.learning.state(k.childCtx);
