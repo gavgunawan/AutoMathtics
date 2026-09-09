@@ -24,7 +24,15 @@ test('production fails closed for emulator variables, weak secrets and missing o
     // Stage 3.3: the fake provider must be acknowledged outside the emulator; the webhook secret is real and distinct
     { FAKE_PAYMENTS_ACK: undefined }, { PAYMENT_PROVIDER: 'stripe' }, { PAYMENT_PROVIDER: undefined }, { WEBHOOK_SECRET_FAKE: undefined }, { WEBHOOK_SECRET_FAKE: secret }, { WEBHOOK_SECRET_FAKE: 'short' },
     { PIN_PEPPER_PREVIOUS: 'c3'.repeat(32) }]) assert.throws(() => config({ ...prod, ...patch }));
-  assert.deepEqual(config(prod).payments, { provider: 'fake', webhookSecrets: { fake: 'c3'.repeat(32) } });
+  assert.deepEqual(config(prod).payments, { provider: 'fake', webhookSecrets: { fake: 'c3'.repeat(32) }, stripe: null });
+  // Stage 4.1: Stripe — test keys everywhere but production, live keys only there; all three prices named
+  const stripe = { PAYMENT_PROVIDER: 'stripe', STRIPE_SECRET_KEY: 'sk_test_' + 'a1b2c3d4'.repeat(3), WEBHOOK_SECRET_STRIPE: 'whsec_' + 'z9y8x7w6'.repeat(3), STRIPE_PRICE_STARTER: 'price_1Starter00', STRIPE_PRICE_FAMILY: 'price_1Family000', STRIPE_PRICE_BIG: 'price_1BigFam000' };
+  assert.equal(config({ ...env, ...stripe }).payments.stripe.prices.family, 'price_1Family000');
+  assert.equal(config({ ...prod, ...stripe, APP_MODE: 'staging' }).payments.provider, 'stripe');
+  assert.throws(() => config({ ...prod, ...stripe }), /live Stripe key/);
+  assert.throws(() => config({ ...env, ...stripe, STRIPE_SECRET_KEY: 'sk_live_' + 'a1b2c3d4'.repeat(3) }), /only for production/);
+  for (const patch of [{ STRIPE_SECRET_KEY: undefined }, { WEBHOOK_SECRET_STRIPE: 'nope' }, { STRIPE_PRICE_BIG: undefined }, { STRIPE_PRICE_STARTER: 'plan_x' }]) assert.throws(() => config({ ...env, ...stripe, ...patch }));
+  assert.equal(config({ ...prod, ...stripe, STRIPE_SECRET_KEY: 'sk_live_' + 'a1b2c3d4'.repeat(3) }).payments.stripe.secretKey.startsWith('sk_live_'), true);
   assert.deepEqual(config({ ...prod, PIN_PEPPER_PREVIOUS: `${'e5'.repeat(32)}, ${'d4'.repeat(32)}` }).previousPeppers, ['e5'.repeat(32), 'd4'.repeat(32)]);
   assert.equal(config(env).proxyHops, 0); // emulator defaults to the socket address
 });

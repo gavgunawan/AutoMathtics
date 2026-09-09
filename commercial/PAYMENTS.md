@@ -163,6 +163,33 @@ for money that may have moved. A provider's own idempotency window is not assume
 without these records a reused operation id could reach the provider again. Terminal records
 may one day be archived under a deliberate financial-retention policy, not garbage collection.
 
+## Stripe (Stage 4.1)
+
+`server/gateways/stripe.mjs` implements the contract below against Stripe, selected with
+`PAYMENT_PROVIDER=stripe` and `STRIPE_SECRET_KEY`, `WEBHOOK_SECRET_STRIPE`, `STRIPE_PRICE_STARTER/FAMILY/BIG`
+(`config.mjs`: test keys everywhere but production, live keys only there). **Test mode costs nothing** —
+that is how 4.2 is exercised: `stripe listen --forward-to 127.0.0.1:8787/api/webhooks/stripe` gives the
+`whsec_` and forwards real test-mode events to the local server.
+
+- **Customer**: one Stripe Customer per family, found by our reference in its metadata or created with
+  `customer:<ref>` as the idempotency key. Stripe assigns its own id, so `Payments.checkout` records it
+  as an alias mapping (`billingCustomers/stripe:cus_…` → the same family, and only that family) and on
+  `families/{f}.providerCustomer.stripe`; webhooks resolve by the Stripe id.
+- **Checkout**: a hosted Checkout Session in subscription mode with the checkout id as
+  `client_reference_id`, in the metadata, and as the idempotency key; the browser follows `url`. A
+  superseded session is **expired at Stripe** (`cancelCheckout`) so a stale hosted page cannot be paid.
+- **Plan change**: the customer's active subscription moves to the new price with
+  `proration_behavior=always_invoice` under the operation id; the provider operation reference is the
+  subscription and its latest invoice.
+- **Webhooks**: `Stripe-Signature` (t, v1…) verified over the raw bytes, five-minute window, before a byte is
+  parsed. `checkout.session.completed` is resolved against the **subscription Stripe holds** (price id and
+  period end fetched, never our metadata); `invoice.paid` / `invoice.payment_failed` take the price and
+  period from the invoice's line; `customer.subscription.deleted` → `subscription.deleted`;
+  `charge.refunded` → `amount_refunded` and `refunded`. Stripe has no sequence number and second-resolution
+  timestamps, so `seq` is null and events dated in the future are refused.
+- **Errors**: Stripe's error code and status only (`PROVIDER_ERROR`, `PROVIDER_UNREACHABLE`); the key never
+  appears in a message or a record.
+
 ## Adapter contract for a real provider (Stage 4)
 
 An adapter implements `createCheckout`, `changePlan` and `verify`. It must:

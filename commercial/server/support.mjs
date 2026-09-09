@@ -163,9 +163,9 @@ export class Support {
       children.push({ id, nickname: c.nickname, status: c.status, seated: (family.activeChildIds || []).includes(id), ledger: ledger ? { match: ledger.match, damaged: ledger.damaged, problems: ledger.problems, cached: ledger.cached, derived: ledger.derived } : null });
     }
     const customers = [];
-    for (const [provider, ref] of Object.entries(family.billing || {})) {
+    for (const [provider, ref] of [...Object.entries(family.billing || {}), ...Object.entries(family.providerCustomer || {})]) {
       const mapping = await this.store.get(`billingCustomers/${provider}:${ref}`);
-      customers.push({ provider, ref, mapping: mapping ? { lastEventAt: mapping.lastEventAt, lastEventId: mapping.lastEventId, pending: mapping.pending || [] } : null });
+      customers.push({ provider, ref, mapping: mapping ? { lastEventAt: mapping.lastEventAt, lastEventId: mapping.lastEventId, pending: mapping.pending || [], aliasOf: mapping.aliasOf || null } : null });
     }
     const refs = new Set(customers.map((c) => c.ref));
     const inbox = (await this.store.list('billingEvents')).filter((e) => refs.has(e.customer)).sort((a, b) => a.at - b.at)
@@ -215,7 +215,7 @@ export class Support {
     const id = randomUUID(), startedAt = this.now();
     await this.store.transaction(async (tx) => { tx.set(`supportOperations/${id}`, { id, action: 'reprocess', operator, familyId, startedAt, status: 'running', results: null, finishedAt: null }); this.audit(tx, 'support.reprocess_started', operator, familyId, { operationId: id }); });
     const results = [];
-    for (const [provider, ref] of Object.entries(family.billing || {})) for (const r of await this.payments.reprocess(provider, ref)) results.push({ provider, ...r });
+    for (const [provider, ref] of [...Object.entries(family.billing || {}), ...Object.entries(family.providerCustomer || {})]) for (const r of await this.payments.reprocess(provider, ref)) results.push({ provider, ...r });
     await this.store.transaction(async (tx) => {
       const row = await tx.get(`supportOperations/${id}`);
       tx.set(`supportOperations/${id}`, { ...row, status: 'done', results: results.map((r) => ({ provider: r.provider, id: r.id, status: r.status, reason: r.reason || null })), finishedAt: this.now() });

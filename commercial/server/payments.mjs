@@ -161,14 +161,23 @@ export class Payments {
       // no expireAt: a checkout intent is idempotency and recovery evidence, kept under the financial retention policy (S3.4-G)
       tx.set(path, { provider: gw.name, checkoutId, familyId: s.familyId, customerRef, plan: plan.id, priceId: gw.priceFor(plan.id), fingerprint, status: 'creating', providerCheckoutRef: null, createdAt: now, completedAt: null, result: null });
       this.audit(tx, 'billing.checkout', s.uid, s.familyId);
-      return { familyId: s.familyId, uid: s.uid, customerRef };
+      return { familyId: s.familyId, uid: s.uid, customerRef, superseded: older && ['creating', 'pending'].includes(older.status) ? older.providerCheckoutRef : null };
     });
     if (prepared.done) return prepared.done;
+    // a superseded hosted session is expired at the provider (best effort: its completion is refused regardless)
+    if (prepared.superseded && typeof gw.cancelCheckout === 'function') { try { await gw.cancelCheckout(prepared.superseded); } catch { /* recorded by the provider; the inbox refuses a late completion anyway */ } }
     const result = await gw.createCheckout({ checkoutId, idempotencyKey: checkoutId, customerRef: prepared.customerRef, plan, familyId: prepared.familyId });
     return this.store.transaction(async (tx) => {
       const intent = await tx.get(path);
+      const family = await tx.get(`families/${prepared.familyId}`);
+      // a provider that assigns its own customer id (Stripe does): that id resolves to this family too — and only this family
+      const providerId = result.providerCustomerId && result.providerCustomerId !== prepared.customerRef ? result.providerCustomerId : null;
+      const aliasPath = providerId ? `billingCustomers/${gw.name}:${providerId}` : null, alias = aliasPath ? await tx.get(aliasPath) : null;
       if (!intent || intent.status !== 'creating') return intent?.result ?? result; // a concurrent attempt finished first; the provider deduplicated on the key
-      tx.set(path, { ...intent, status: 'pending', providerCheckoutRef: result.providerCheckoutRef || null, result });
+      if (alias && alias.familyId !== prepared.familyId) fail(409, 'PROVIDER_CUSTOMER_CONFLICT'); // NO_TRANSFER: the provider's id can belong to one family only
+      tx.set(path, { ...intent, status: 'pending', providerCheckoutRef: result.providerCheckoutRef || null, providerCustomerId: providerId, result });
+      if (aliasPath && !alias) tx.set(aliasPath, { provider: gw.name, customerRef: providerId, aliasOf: prepared.customerRef, familyId: prepared.familyId, createdAt: this.now(), lastEventAt: 0, lastEventSeq: null, lastEventId: null, pending: [] });
+      if (providerId && family && family.providerCustomer?.[gw.name] !== providerId) tx.set(`families/${prepared.familyId}`, { ...family, providerCustomer: { ...(family.providerCustomer || {}), [gw.name]: providerId } });
       return result;
     });
   }
@@ -271,7 +280,7 @@ export class Payments {
     const gw = this.gateway(providerName);
     if (!Buffer.isBuffer(rawBody)) fail(400, 'INVALID_REQUEST');
     if (rawBody.length > WEBHOOK_BODY_LIMIT) fail(413, 'REQUEST_TOO_LARGE');
-    const now = this.now(), ev = gw.verify(rawBody, headers, now);
+    const now = this.now(), ev = await gw.verify(rawBody, headers, now); // a real adapter may fetch provider state here
     const outcome = await this.process(gw, ev, sha256(JSON.stringify(ev)), now);
     if (outcome.status === 'applied' && !outcome.replayed && ev.type === 'checkout.completed') await this.reprocess(gw.name, ev.customer); // an early invoice was waiting for this
     return outcome;
