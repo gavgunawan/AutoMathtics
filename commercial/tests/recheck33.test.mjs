@@ -71,7 +71,10 @@ test('S3.3-B: an invoice renews the plan on record; any other plan needs a serve
   f.advance(2000); const p = await f.login('parentA');
   assert.equal((await f.payments.changePlan(p.ctx, { plan: 'big', ...op() })).kind, 'upgrade');
   assert.equal((await renew('big')).status, 'applied'); assert.equal((await renew('family')).outcome ?? (await renew('family')).reason, 'PLAN_CHANGE_NOT_AUTHORIZED');
-  // a new checkout is an intent for the plan it was opened for — and for that plan only
+  // a checkout is not a plan-change shortcut while the family is paid up (S3.3/3.4-E)
+  await assert.rejects(f.payments.checkout(p.ctx, { plan: 'starter', ...op() }), rejected('USE_PLAN_CHANGE'));
+  // once the subscription has ended, a new checkout is an intent for the plan it was opened for — and for that plan only
+  await f.billing.apply(a.familyId, { id: randomUUID(), type: 'terminate' }, 'test-operator');
   const co2 = await f.payments.checkout(p.ctx, { plan: 'starter', ...op() });
   assert.deepEqual(await deliver(f, evt(f, co.customerRef, 'checkout.completed', { price: 'price_fake_family', periodEnd: f.now() + 30 * DAY, checkoutId: co2.checkoutId })), { status: 'rejected', reason: 'CHECKOUT_MISMATCH' });
   assert.equal((await deliver(f, evt(f, co.customerRef, 'checkout.completed', { price: 'price_fake_starter', periodEnd: f.now() + 30 * DAY, checkoutId: co2.checkoutId }))).status, 'applied');

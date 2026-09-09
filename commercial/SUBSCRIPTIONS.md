@@ -62,6 +62,8 @@ Operator CLI: `scripts/subscription.mjs`; signed fake webhooks: `scripts/fake-we
 `POST /api/billing/plan { plan, seatChildIds?, operationId }` (parent, recent auth, paid subscription in
 `active` or `grace`; a trial becomes paid through a checkout, `CHECKOUT_REQUIRED`):
 
+- A paid family (`active`/`grace`) cannot start a fresh checkout (`USE_PLAN_CHANGE`); this lifecycle is the
+  only way its plan changes (S3.3/3.4-E).
 - Every plan change is a **durable change intent** `billingChangeIntents/{provider}:{operationId}`
   (family, subscription version, from/to plan, seat choice, kind, fingerprint, status). Same operation id
   + same plan and seat choice → replay; anything else under that id → `IDEMPOTENCY_CONFLICT` (S3.4-A).

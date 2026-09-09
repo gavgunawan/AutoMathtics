@@ -123,11 +123,15 @@ The server stamps short-lived records with an `expireAt` timestamp; Firestore de
 if a TTL policy names that field for the collection group. Run once, after the database exists:
 
 ```bash
-for GROUP in sessions rateLimits pinAttempts operations audit checkouts billingChangeIntents; do
+for GROUP in sessions rateLimits pinAttempts operations audit; do
   gcloud firestore fields ttls update expireAt --collection-group="$GROUP" \
     --enable-ttl --project "$PROJECT_ID"
 done
 ```
+
+`checkouts`, `billingChangeIntents`, `billingEvents`, `billingCustomers` and `families/*/billing` carry no
+`expireAt` on purpose: they are financial idempotency and recovery evidence and are kept under the
+retention policy in `PAYMENTS.md`, never by TTL (S3.4-G).
 
 Learning sessions live under `families/*/learning/*/sessions`, whose collection group is
 `sessions` as well, so the first line covers them. Deletion runs within about 24 hours of the
