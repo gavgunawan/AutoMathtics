@@ -253,12 +253,11 @@ bypass application invariants. OPERATOR_ID is an audit label; IAM is the permiss
 
 ## 7. Acceptance and rollback
 
-Test email and SMS delivery, iPhone Safari and Android Chrome, incorrect PIN lockout,
-parent-to-child handover in old tabs, PIN reset, one-seat/two-seat limits, expiry,
-concurrent child creation and cross-family denial. Verify no secrets reach responses,
+Run `ACCEPTANCE.md` on the real devices: email and SMS delivery, PIN lockout and reset,
+handover in old tabs, seat limits and expiry, placement and the learning game, money in test
+mode, recovery, export and deletion, failure states. Verify no secrets reach responses,
 logs, page source or Git. A green health check only proves the server is responding.
-The child screen intentionally stops at the protected profile; no maths game is
-connected in this release. Do not send users back into the existing v2 application with this session.
+The pilot family's cutover from v2 follows `PILOT.md`; until then nobody plays in both.
 
 The GitHub branch/PR itself does not deploy or merge anything. A manual Cloud Run
 and Hosting deployment publishes a pilot URL only after your cloud setup succeeds.
