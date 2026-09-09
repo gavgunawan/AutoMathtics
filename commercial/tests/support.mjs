@@ -52,7 +52,7 @@ export function fixture() {
   const learning = new Learning({ foundation: service, store, now: () => clock });
   function token(uid, patch = {}) {
     if (!users.has(uid)) users.set(uid, { uid, email: `${uid}@example.test`, emailVerified: true, disabled: false,
-      tokensValidAfterTime: new Date(0).toUTCString(), multiFactor: { enrolledFactors: [{ uid: `mfa-${uid}`, factorId: 'phone' }] } });
+      tokensValidAfterTime: new Date(0).toUTCString(), multiFactor: { enrolledFactors: [{ uid: `mfa-${uid}`, factorId: 'phone', phoneNumber: `+65${String(Math.abs([...uid].reduce((h, c) => (h * 31 + c.charCodeAt(0)) | 0, 7)) % 1e8).padStart(8, '0')}` }] } }); // a distinct fake number per uid
     const value = `test-id-token-${randomUUID()}`;
     tokens.set(value, { uid, email: users.get(uid).email, email_verified: true, auth_time: Math.floor(clock / 1000),
       firebase: { sign_in_provider: 'password', sign_in_second_factor: 'phone', second_factor_identifier: `mfa-${uid}` }, ...patch });

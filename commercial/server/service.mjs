@@ -90,8 +90,11 @@ export class Foundation {
   }
   async login(idToken, previousToken) {
     text(idToken, 20, 8192);
-    const who = await this.identity.verifyLogin(idToken, this.now());
+    const { phone, ...who } = await this.identity.verifyLogin(idToken, this.now());
     await this.rate(`login:${who.uid}`, 10, 10 * MINUTE); // per account, once the token is proven
+    // The parent's verified phone, keyed and never stored raw. A parent who signs up again with a
+    // new email keeps the same phoneKey, which is how a free trial can be granted once per phone.
+    const phoneKey = phone ? mac(this.secret, `phone:${phone}`) : null;
     const token = randomToken(), key = sha256(token), oldKey = sessionKey(previousToken);
     await this.store.transaction(async (tx) => {
       const path = `parents/${who.uid}`;
@@ -101,7 +104,8 @@ export class Foundation {
       if (parent && who.authTime <= (parent.reauthAfter || 0)) fail(403, 'REAUTHENTICATE');
       const s = { ...who, familyId: parent?.familyId || null, role: 'parent', childId: null,
         csrf: randomToken(), createdAt: this.now(), expiresAt: this.now() + 30 * MINUTE, expireAt: this.now() + 30 * MINUTE };
-      if (!parent) tx.set(path, { familyId: null, reauthAfter: 0, createdAt: this.now() });
+      if (!parent) tx.set(path, { familyId: null, reauthAfter: 0, createdAt: this.now(), phoneKey });
+      else if (parent.phoneKey !== phoneKey) tx.set(path, { ...parent, phoneKey });
       if (old) tx.delete(`sessions/${oldKey}`);
       tx.set(`sessions/${key}`, s);
       this.audit(tx, 'parent.signed_in', who.uid, s.familyId);
@@ -131,9 +135,14 @@ export class Foundation {
     return this.store.transaction(async (tx) => {
       const { s, parent } = await this.authorize(tx, ctx, ['parent'], false);
       this.requireRecent(s);
+      // Every family made under this phone, in order. Trials and abuse checks read this ledger;
+      // nothing ever moves a child or their progress between the families it lists.
+      const ledgerPath = parent.phoneKey ? `phones/${parent.phoneKey}` : null;
+      const ledger = ledgerPath ? await tx.get(ledgerPath) : null;
       if (parent.familyId) return { id: parent.familyId, token: null }; // Existing family; no boundary change.
-      tx.set(`families/${familyId}`, { id: familyId, label, childIds: [], activeChildIds: [], createdAt: this.now(), timeZone: DEFAULT_TIME_ZONE,
+      tx.set(`families/${familyId}`, { id: familyId, label, childIds: [], activeChildIds: [], createdAt: this.now(), timeZone: DEFAULT_TIME_ZONE, phoneKey: parent.phoneKey || null,
         entitlement: { status: 'inactive', seatLimit: 0, accessUntil: 0, version: 0, source: 'manual' } });
+      if (ledgerPath) tx.set(ledgerPath, { families: [...(ledger?.families || []), familyId], count: (ledger?.count || 0) + 1, firstAt: ledger?.firstAt || this.now(), lastAt: this.now() });
       tx.set(`families/${familyId}/members/${s.uid}`, { role: 'owner', status: 'active' });
       tx.set(`parents/${s.uid}`, { ...parent, familyId, consentVersion: 'pilot-v1', attestedAt: this.now() });
       const token = this.rotateSession(tx, ctx, s, { familyId });
