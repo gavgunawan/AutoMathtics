@@ -9,7 +9,7 @@ can shortcut. The policy comes first; `server/recovery.mjs` implements exactly t
 
 | | Who | What happens |
 |---|---|---|
-| **Changed number, old phone still works** | the parent | no ceremony: sign in normally, then use *Change mobile number* (the identity provider's own unenroll-and-enrol flow, which needs a fresh sign-in); the next sign-in carries the new factor, the family and everything in it are unchanged |
+| **Changed number, old phone still works** | the parent | no ceremony: sign in normally, then *Change my mobile number* in Mission Control — a fresh sign-in (password and a code to the old number), a code to the new number, the new factor enrolled before the old one is removed, then a sign-in with the new number; the next sign-in carries the new factor, the family and everything in it are unchanged |
 | **Lost phone / number gone** | the parent, alone | the recovery ceremony below |
 
 Support has no third path. There is no command that removes a second factor, no command that

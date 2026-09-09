@@ -5,7 +5,9 @@ import { entry, post } from './ledger.mjs';
 
 const MINUTE = 60_000, DAY = 24 * 60 * MINUTE;
 const OP_LIFE = DAY;
-const PURCHASE_MAX = 120, REDEMPTION_MAX = 50;
+const PURCHASE_MAX = 120, REDEMPTION_MAX = 50, PENDING_MAX = 20;
+// the newest decided rows are kept; a pending request is never dropped — the points it holds come back only through a decision (Stage 4 review, third round)
+const keepRedemptions = (rows) => { let decided = 0; return rows.filter((r) => r.status === 'pending' || decided++ < REDEMPTION_MAX); };
 export const LEGEND_SINCE = '2026-09-06', EGG_PASSES = 5;
 export const ROCKET_AMOUNTS = Object.freeze({ gc: [50, 100, 250], rp: [100, 200, 500] });
 
@@ -183,7 +185,7 @@ export class Game {
     const configPath = `families/${a.s.familyId}/game/config`, cfg = normalizeConfig(await tx.get(configPath));
     return { ...a, configPath, cfg };
   }
-  publicWallet(w) { return { ...w, inventory: [...w.inventory], purchases: w.purchases.slice(0, 20), redemptions: w.redemptions.slice(0, 20) }; }
+  publicWallet(w) { return { ...w, inventory: [...w.inventory], purchases: w.purchases.slice(0, 20), redemptions: [...w.redemptions.filter((r) => r.status === 'pending'), ...w.redemptions.filter((r) => r.status !== 'pending').slice(0, 20)] }; } // every pending request reaches the parent
   catalogFor(prog, timeZone) { return SHOP_ITEMS.map((it) => ({ ...itemPublic(it), owned: prog.wallet.inventory.includes(it.id), unlockProgress: unlockProgress(it, prog, this.now(), timeZone) })); }
   async state(ctx) {
     return this.store.transaction(async (tx) => {
@@ -250,8 +252,9 @@ export class Game {
       const date = dayISO(this.now(), family.timeZone || 'Asia/Singapore'); const w = { ...prog.wallet, redemptions: [...prog.wallet.redemptions] };
       const used = w.redemptions.filter((r) => r.rewardId === reward.id && r.date === date && r.status !== 'rejected').length;
       if (reward.cap > 0 && used >= reward.cap) fail(409, 'REWARD_DAILY_LIMIT'); if (w.rp < reward.cost) fail(409, 'INSUFFICIENT_REWARD_POINTS');
+      if (w.redemptions.filter((r) => r.status === 'pending').length >= PENDING_MAX) fail(409, 'REWARD_PENDING_LIMIT'); // the parent decides before more can queue
       const redemption = { id: randomUUID(), rewardId: reward.id, emoji: reward.emoji, name: reward.name, cost: reward.cost, date, status: 'pending', requestedAt: this.now() };
-      w.rpSpent += reward.cost; w.redemptions = [redemption, ...w.redemptions].slice(0, REDEMPTION_MAX);
+      w.rpSpent += reward.cost; w.redemptions = keepRedemptions([redemption, ...w.redemptions]);
       const next = await post(tx, p.doc, { ...prog, wallet: w }, entry({ id: operationId, type: 'reward.request', rp: -reward.cost, ref: redemption.id, note: rewardId, at: this.now() }));
       const response = { redemption, wallet: this.publicWallet(next.wallet) };
       tx.set(p.doc, next);
@@ -271,7 +274,7 @@ export class Game {
       const label = { id: 'rocket', emoji: '🚀', name: `Rocket fuel - ${r.prize.name}` };
       const timeZone = family.timeZone || 'Asia/Singapore';
       if (r.currency === 'gc') w.purchases = [nowRow(label, body.amount, this.now(), timeZone), ...w.purchases].slice(0, PURCHASE_MAX);
-      else w.redemptions = [{ id: randomUUID(), rewardId: 'rocket', emoji: '🚀', name: label.name, cost: body.amount, date: dayISO(this.now(), timeZone), status: 'approved', requestedAt: this.now(), decidedAt: this.now() }, ...w.redemptions].slice(0, REDEMPTION_MAX);
+      else w.redemptions = keepRedemptions([{ id: randomUUID(), rewardId: 'rocket', emoji: '🚀', name: label.name, cost: body.amount, date: dayISO(this.now(), timeZone), status: 'approved', requestedAt: this.now(), decidedAt: this.now() }, ...w.redemptions]);
       const nextRocket = { ...r, fuel: { ...r.fuel, [s.childId]: (r.fuel[s.childId] || 0) + body.amount }, lastFuel: { childId: s.childId, amount: body.amount, at: this.now() } };
       if (rocketReady(nextRocket)) { nextRocket.status = 'launched'; nextRocket.launchedAt = this.now(); }
       const nextCfg = { ...cfg, rocket: nextRocket };

@@ -56,8 +56,9 @@ business backend) and a **start option** (`children/{c}.start`). Sector A is Yea
 F Year 6 — but children arrive at different skill and speed levels and school curricula differ, so:
 
 1. **Placement test (recommended, the default when a year is given).** `learning.start({ mode: 'placement' })`
-   is the only session a child with a pending test can open (`PLACEMENT_PENDING` otherwise; the test can be
-   taken once, `PLACEMENT_NOT_PENDING` after). It is 25 timed questions from the **middle tier (papers 41–60)
+   is the only session a child with a pending test can open (`PLACEMENT_PENDING` otherwise; the test is
+   taken once — one left unfinished, quit or abandoned past its two hours, may be retaken once, and the second
+   time it is graded as it stands with every unanswered question counted wrong; `PLACEMENT_NOT_PENDING` after). It is 25 timed questions from the **middle tier (papers 41–60)
    of the year's sector**: 15 Engine then 10 Navigator, with the normal per-question allowances — a full
    allowance of about 19 minutes at Year 1 rising to about 28 at Year 6, so most children finish in
    15–25 minutes. It pays nothing, counts for no streak day and no pass. Each track is placed separately

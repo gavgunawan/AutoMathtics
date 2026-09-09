@@ -24,6 +24,9 @@ jobs:
         with:
           node-version: '22'
       - run: npm test
+      # production dependencies only, straight from the committed lockfile (no install needed): a high or critical
+      # advisory fails the build. The moderate ones accepted on 9 Sep 2026 are recorded in commercial/DEPLOY_V3.md § 3.
+      - run: npm audit --omit=dev --audit-level=high
   emulator:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -42,13 +45,14 @@ jobs:
           distribution: temurin
           java-version: '21'
       - name: Install pinned dependencies
+        # never `npm install` here: without a lockfile this job would resolve and test a dependency tree that is not the
+        # one that deploys, and it used to say so only in a warning nobody reads (commercial/DEPLOY_V3.md § 3)
         run: |
-          if [ -f package-lock.json ]; then
-            npm ci --ignore-scripts --no-fund --no-audit
-          else
-            echo "::warning::Generate, review and commit package-lock.json before deploying."
-            npm install --ignore-scripts --no-fund --no-audit
+          if [ ! -f package-lock.json ]; then
+            echo "::error::package-lock.json is missing: generate it with npm install --ignore-scripts on your own machine, review and commit it."
+            exit 1
           fi
+          npm ci --ignore-scripts --no-fund --no-audit
       - run: npm run test:emulator
         env:
           CI: 'true'

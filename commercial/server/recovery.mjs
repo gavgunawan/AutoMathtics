@@ -31,6 +31,8 @@ export const RECOVERY_NOTICE_MS = 30 * DAY;    // how long a finished request st
 export const RECOVERY_STATES = Object.freeze(['pending', 'completing', 'completed', 'cancelled_by_sign_in', 'cancelled_by_operator', 'expired']);
 const EMAIL = /^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,}$/;
 const NOT_COMPLETED = Object.freeze({ completed: false }); // the one answer for every way of not completing
+const DECOY_UID = 'recovery-decoy';                         // a uid no account has: the provider lookup made when there is nothing to check
+const decoyUid = (email) => `none-${sha256(email).slice(0, 40)}`; // a record path nothing ever writes: the reads made when there is no account
 
 /** Every session of a uid, in bounded batches (Firestore commits at most 500 writes; TTL is eventual, so old rows may be many). */
 export async function sweepSessions(store, uid, batch = 200) {
@@ -76,14 +78,18 @@ export class Recovery {
    */
   async start(body) {
     const email = this.email(body), now = this.now(), answer = { accepted: true, readyAt: now + this.waitMs };
-    await this.foundation.rate(`recovery:${sha256(email)}`, 3, DAY);
     const user = await this.identity.lookupByEmail(email);
-    if (!user || !user.emailVerified || !(user.multiFactor?.enrolledFactors || []).some((f) => f.factorId === 'phone')) return answer;
-    const path = `recoveries/${user.uid}`, factor = user.multiFactor.enrolledFactors.find((f) => f.factorId === 'phone');
+    const factor = user && user.emailVerified ? (user.multiFactor?.enrolledFactors || []).find((f) => f.factorId === 'phone') || null : null;
+    // The same work for every email — one provider lookup, then one transaction that spends the per-email budget, reads a request
+    // record and a parent record, and commits — so neither the answer nor the time it takes says whether an account exists
+    // (Stage 4 review, third round). Without an account the reads land on a path nothing ever writes.
+    const uid = factor ? user.uid : decoyUid(email), path = `recoveries/${uid}`;
     await this.store.transaction(async (tx) => {
-      const current = await tx.get(path);
+      const spend = await this.foundation.rateIn(tx, `recovery:${sha256(email)}`, 3, DAY);
+      const current = await tx.get(path), parent = await tx.get(`parents/${uid}`);
+      spend();
+      if (!factor) return;
       if (current && (current.status === 'completing' || (current.status === 'pending' && now <= current.readyAt + RECOVERY_WINDOW_MS))) return; // the same request; the clock does not restart
-      const parent = await tx.get(`parents/${user.uid}`);
       tx.set(path, { uid: user.uid, requestId: randomUUID(), status: 'pending', requestedAt: now, readyAt: answer.readyAt, snapshot: this.fingerprint(user), mfaUid: factor.uid, proof: null, claimId: null, claimedAt: null, completedAt: null, cancelledAt: null, cancelledBy: null, note: null, acknowledgedAt: null, expireAt: answer.readyAt + RECOVERY_WINDOW_MS + RECOVERY_NOTICE_MS });
       this.foundation.audit(tx, 'parent.recovery_requested', user.uid, parent?.familyId || null);
     });
@@ -100,9 +106,13 @@ export class Recovery {
   async complete(body) {
     const email = this.email(body), now = this.now();
     await this.foundation.rate(`recovery-complete:${sha256(email)}`, 20, DAY);
-    const user = await this.identity.lookupByEmail(email), path = user ? `recoveries/${user.uid}` : null;
-    const rec = path ? await this.store.get(path) : null;
-    if (!user || !rec || typeof rec.requestId !== 'string' || (rec.status !== 'pending' && rec.status !== 'completing')) return NOT_COMPLETED;
+    const user = await this.identity.lookupByEmail(email);
+    const path = `recoveries/${user ? user.uid : decoyUid(email)}`, rec = await this.store.get(path);
+    const open = !!user && !!rec && typeof rec.requestId === 'string' && (rec.status === 'pending' || rec.status === 'completing');
+    // The same work whether or not there is anything to complete — one record read, one fresh provider lookup (of a uid nothing
+    // has, when there is no proof to check) — so the time an answer takes says nothing either (Stage 4 review, third round).
+    const fresh = open && rec.status === 'pending' ? await this.identity.lookup(user.uid, true) : await this.identity.lookup(DECOY_UID, true).catch(() => null);
+    if (!open) return NOT_COMPLETED;
     // Everything below is decided about *this* request. One cancelled and replaced by a newer request since it was read
     // here carries a different requestId: the newer one has its own proof to show and its own wait to sit out, and
     // nothing verified against the old one may touch it (Stage 4 review, second round).
@@ -112,7 +122,7 @@ export class Recovery {
         await this.store.transaction(async (tx) => { const c = await tx.get(path); if (same(c) && c.status === 'pending') tx.set(path, { ...c, status: 'expired', cancelledAt: now, cancelledBy: 'time' }); });
         return NOT_COMPLETED;
       }
-      const fresh = await this.identity.lookup(user.uid, true), proof = this.proven(rec.snapshot, this.fingerprint(fresh));
+      const proof = this.proven(rec.snapshot, this.fingerprint(fresh));
       if (!proof || now < rec.readyAt) return NOT_COMPLETED;
       // the claim: the point of no return, decided against the record as it is now, not as it was read above
       const claimId = randomUUID();

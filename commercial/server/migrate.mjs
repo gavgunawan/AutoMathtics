@@ -84,10 +84,13 @@ export async function importLearning(store, { familyId, childId, record, actor, 
     const existing = child ? await tx.get(`families/${familyId}/learning/${childId}`) : null;
     if (!family || !child || !family.childIds.includes(childId)) fail(404, 'CHILD_NOT_FOUND');
     if (child.status !== 'active') fail(409, 'CHILD_INACTIVE');
-    if (existing) fail(409, 'ALREADY_HAS_PROGRESS'); // never merge, never overwrite — an operator deletes by hand if it was wrong
+    // never merge, never overwrite anything played; a document that exists only because the child was created with a year level
+    // (a pending placement test) or a pace was set is not progress (Stage 4 review, third round)
+    if (existing && (existing.stats?.sessions > 0 || existing.activeSession || (existing.history || []).length > 0 || (existing.wallet?.ledgerSeq || 0) > 0)) fail(409, 'ALREADY_HAS_PROGRESS');
     // The carried balance is the ledger's opening row, so the child's ledger derives to the wallet from day one.
     const base = `families/${familyId}/learning/${childId}`;
-    const opened = await post(tx, base, { ...doc, wallet: { ...doc.wallet, gc: 0, rp: 0, ledgerSeq: 0, ledgerLast: null } },
+    const carried = { ...(Number.isInteger(existing?.pacePercent) ? { pacePercent: existing.pacePercent } : {}), placement: { status: 'done', finishedAt: now, attempts: 0, result: null, source: 'v2-import' } }; // the v2 record places the child; no test is pending
+    const opened = await post(tx, base, { ...doc, ...carried, wallet: { ...doc.wallet, gc: 0, rp: 0, ledgerSeq: 0, ledgerLast: null } },
       entry({ id: 'migrate-opening', type: 'migrate.opening', gc: doc.wallet.gc, rp: doc.wallet.rp, note: 'carried from v2', at: now }));
     tx.set(base, opened);
     tx.set(`audit/${randomUUID()}`, { action: 'learning.migrated', familyId, childId, actor, reason, at: now, expireAt: now + 400 * DAY,

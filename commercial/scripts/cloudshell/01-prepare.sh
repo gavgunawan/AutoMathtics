@@ -16,5 +16,6 @@ cd AutoMathtics && git fetch --quiet origin release/v3.0 && git checkout --quiet
 gcloud config set project "$PROJECT_ID" --quiet
 echo "node $(node --version)  java: $(java -version 2>&1 | head -1)"
 npm ci --ignore-scripts --no-fund --no-audit --loglevel=error || { echo 'BLOCK A FAILED: npm ci'; return 1; }
-npm test 2>&1 | tail -4
+# `set -o pipefail` above makes the pipeline's status the suite's, not tail's: a red suite stops here instead of reading DONE
+npm test 2>&1 | tail -4 || { echo 'BLOCK A FAILED: unit tests'; return 1; }
 echo "BLOCK A DONE in $(pwd)"

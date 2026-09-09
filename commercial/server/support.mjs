@@ -73,7 +73,7 @@ export class Support {
     const config = await tx.get(`families/${f}/game/config`);
     const billing = (await tx.list(`families/${f}/billing`)).sort((a, b) => a.at - b.at)
       .map((e) => ({ id: e.id, type: e.type, plan: e.plan, periodEnd: e.periodEnd, amountCents: e.amountCents ?? null, at: e.at, actor: e.actor, state: e.result?.state || null }));
-    const audit = (await tx.list('audit')).filter((a) => a.familyId === f).sort((a, b) => a.at - b.at).map((a) => ({ action: a.action, at: a.at, childId: a.childId || null }));
+    const audit = (await tx.query('audit', 'familyId', f, 5000)).map(([, a]) => a).sort((a, b) => a.at - b.at).map((a) => ({ action: a.action, at: a.at, childId: a.childId || null })); // this family's rows only: the collection is every family's (Stage 4 review, third round)
     return { exportedAt: this.now(), exportedBy: uid,
       family: { id: f, label: family.label, createdAt: family.createdAt, timeZone: family.timeZone || null, activeChildIds: family.activeChildIds || [], deletion: family.deletion || null },
       entitlement: effectiveEntitlement(family, this.now()), subscription: family.subscription || null, billing, gameConfig: config || null, children, audit };
@@ -187,7 +187,7 @@ export class Support {
     const checkouts = (await this.store.list('checkouts')).filter((c) => c.familyId === familyId).sort((a, b) => a.createdAt - b.createdAt)
       .map((c) => ({ checkoutId: c.checkoutId, provider: c.provider, plan: c.plan, status: c.status, providerCheckoutRef: c.providerCheckoutRef || null, supersededBy: c.supersededBy || null, createdAt: c.createdAt }));
     const billing = (await this.store.list(`families/${familyId}/billing`)).sort((a, b) => a.at - b.at).map((e) => ({ id: e.id, type: e.type, plan: e.plan, at: e.at, actor: e.actor, state: e.result?.state || null }));
-    const audit = (await this.store.list('audit')).filter((a) => a.familyId === familyId).sort((a, b) => a.at - b.at).map((a) => ({ action: a.action, uid: a.uid, at: a.at, childId: a.childId || null }));
+    const audit = (await this.store.query('audit', 'familyId', familyId, 5000)).map(([, a]) => a).sort((a, b) => a.at - b.at).map((a) => ({ action: a.action, uid: a.uid, at: a.at, childId: a.childId || null })); // this family's rows only
     const reconciliations = (await this.store.list('billingReconciliations')).filter((r) => r.familyId === familyId);
     const providerChecks = reconciliations.filter((r) => r.kind === 'provider_state').sort((a, b) => b.at - a.at);
     const members = family.deleted ? [] : await this.store.entries(`families/${familyId}/members`), recoveries = []; // Stage 4.4: the parents' recovery requests
@@ -272,7 +272,10 @@ export class Support {
     }
     for (let after = null; ;) { // the inbox: what still waits on somebody
       const page = await this.store.entriesAfter('billingEvents', after, batch);
-      for (const [, e] of page) { if (e.outcome?.status === 'requires_action') counts.inboxWaiting++; if (e.outcome?.status === 'reconciliation_required' && !e.outcome.resolution) counts.inboxReconciliation++; }
+      for (const [eid, e] of page) {
+        if (e.outcome?.status === 'requires_action') { counts.inboxWaiting++; if ((e.lastReceivedAt || e.receivedAt || 0) < now - DAY) add('INBOX_WAITING_STALE', e.familyId || null, `${eid}: ${e.outcome.reason} since ${new Date(e.receivedAt || 0).toISOString()} — the server-side action it waits for never came: reprocess, or resolve-event`); } // a day is longer than any parent action takes
+        if (e.outcome?.status === 'reconciliation_required' && !e.outcome.resolution) counts.inboxReconciliation++;
+      }
       if (page.length < batch) break; after = page.at(-1)[0];
     }
     const id = randomUUID(), record = { id, kind: 'sweep', operator, startedAt, finishedAt: this.now(), counts, findings, truncated: counts.findings > findings.length, expireAt: now + 90 * DAY };
@@ -286,7 +289,8 @@ export class Support {
       if ((await this.store.entries(`families/${id}/children`, 1)).length) add('TOMBSTONE_RESIDUE', id, 'a child document remains');
       if ((await this.store.entries(`families/${id}/learning`, 1)).length) add('TOMBSTONE_RESIDUE', id, 'a learning document remains');
       if ((await this.store.query('sessions', 'familyId', id, 1)).length) add('TOMBSTONE_RESIDUE', id, 'a session remains');
-      if (f.deletion?.providerCancellation?.status === 'failed') add('DELETED_FAMILY_PROVIDER_LIVE', id, 'the provider subscription was not ended at deletion: reconcile-provider, then cancel at the provider');
+      const pc = f.deletion?.providerCancellation || null, hadProvider = !!f.subscription && f.subscription.plan !== 'trial' && !!f.subscription.provider && !!f.billing?.[f.subscription.provider];
+      if (pc?.status === 'failed' || (hadProvider && !pc)) add('DELETED_FAMILY_PROVIDER_LIVE', id, pc ? 'the provider subscription was not ended at deletion: reconcile-provider, then cancel at the provider' : 'the deletion never asked the provider to end the subscription: reconcile-provider, then cancel at the provider');
       return;
     }
     counts.families++;
@@ -499,11 +503,13 @@ export class Support {
       return next;
     });
     if (family.deleted) return await this.store.get(`deletions/${familyId}`);
-    // phase 0b — the subscription ends as a recorded financial event, now that nothing can revive it (a rerun finds it ended)
-    if (family.subscription && ACCESS.has(deriveState(family.subscription, this.now()))) {
+    // phase 0b — the subscription ends as a recorded financial event, now that nothing can revive it (a rerun finds it ended).
+    // The provider is told whatever the local state — a past_due family is still being dunned there, a refunded one may still be
+    // live (Stage 4 review, third round); the machine records `terminate` only where access still existed.
+    if (family.subscription) {
       // Stage 4.2: the provider stops billing first (idempotent under the execution id; a fault is recorded, never fatal — RECONCILIATION.md), then the machine records the end
       const providerCancellation = this.payments ? await this.payments.cancelAtProvider(family, `deletion:${family.deletion.executionId}`) : { provider: null, status: 'not_applicable' };
-      await this.billing.apply(familyId, { id: randomUUID(), type: 'terminate' }, operator);
+      if (ACCESS.has(deriveState(family.subscription, this.now()))) await this.billing.apply(familyId, { id: randomUUID(), type: 'terminate' }, operator);
       await this.store.transaction(async (tx) => { const f = await tx.get(`families/${familyId}`); if (f && !f.deleted) tx.set(`families/${familyId}`, { ...f, deletion: { ...f.deletion, providerCancellation } }); });
     }
     // phase 1 — login sessions of the family and of its parents (nobody could use them: authorize and login refuse an executing family)

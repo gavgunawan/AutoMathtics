@@ -1,7 +1,7 @@
 const root = document.querySelector('#app'), status = document.querySelector('#message');
 const icons = { fox: '\u{1f98a}', panda: '\u{1f43c}', tiger: '\u{1f42f}', wolf: '\u{1f43a}', robot: '\u{1f916}', rocket: '\u{1f680}' };
 let csrf = '', model = null, authModule = null, working = false, transientView = false;
-let reauthEpoch = 0, sessionRefreshPending = false;
+let reauthEpoch = 0, sessionRefreshPending = false, keepSdkSession = false; // keepSdkSession: a change of mobile needs the provider's fresh sign-in kept open
 const channel = 'BroadcastChannel' in window ? new BroadcastChannel('automathtics-session') : null;
 const messages = {
   CHILD_LIMIT_REACHED: 'All child slots are in use. A larger allowance is needed to add another child.',
@@ -15,6 +15,7 @@ const messages = {
   CHILD_SESSION_REVOKED: 'The child PIN changed. Select the child and enter the new PIN.',
   TRIAL_ALREADY_USED: 'A free trial has already been used with this mobile number.', TRIAL_REQUIRES_VERIFIED_PHONE: 'A verified mobile number is needed for the free trial.',
   SUBSCRIPTION_EXISTS: 'This family already has a subscription.', NO_SUBSCRIPTION: 'There is no subscription to change.', INVALID_TRANSITION: 'That change is not possible in the current state.',
+  CHILD_INACTIVE: 'This explorer\u2019s seat is not active right now. Ask your parent.', REWARD_PENDING_LIMIT: 'Too many reward requests are waiting for your parent. Ask them to decide first.',
   FAMILY_DELETED: 'This family has been deleted.', NO_DELETION_PENDING: 'No deletion is scheduled.', FAMILY_STILL_EXISTS: 'Delete the family first; the sign-in account can go after that.', PLACEMENT_PENDING: 'The placement test comes first.', PLACEMENT_NOT_PENDING: 'There is no placement test to take.', ALREADY_STARTED: 'This child has already started playing; the starting point can no longer be changed.', INVALID_START: 'Choose a year level for that starting option.', RECOVERY_NOT_FOUND: 'No recovery request exists for that account.', ACCOUNT_DELETED: 'This sign-in account has been deleted.', PAYMENT_PENDING: 'A plan change is still waiting for its payment. Complete that payment, or wait for it to lapse, before changing the plan again.', RECOVERY_NOT_PENDING: 'That recovery request is no longer pending.', IDENTITY_UNAVAILABLE: 'The sign-in service did not answer. Try again in a moment.',
   MANUAL_GRANT_ACTIVE: 'This family already has pilot access, so the free trial is not needed.', CHECKOUT_REQUIRED: 'Choose a plan to subscribe first; a trial cannot be changed.', PLAN_CHANGE_NOT_AUTHORIZED: 'That payment does not match the plan on record.', RENEWAL_REQUIRED: 'The renewal payment comes first; upgrade after it goes through.', CHANGE_IN_PROGRESS: 'A plan change is already in progress. Try again in a moment.', USE_PLAN_CHANGE: 'Your family is subscribed: change the plan from the subscription controls.', SUBSCRIPTION_CHANGED: 'The subscription changed while this was in progress. Refresh and try again.', LEDGER_REPLAYED: 'That was already done. Refresh to see the result.',
   SEATS_CANNOT_REMOVE: 'Seats can be added here, not taken away.', INVALID_PLAN: 'That plan is not available.', SELECT_CHILDREN_FOR_DOWNGRADE: 'Not enough seats for that many children.', IDEMPOTENCY_CONFLICT: 'That request was already made differently. Refresh and try again.',
@@ -71,7 +72,16 @@ async function refresh() {
   transientView = false;
   csrf = (await api('/bootstrap')).csrf;
   try { model = await api('/me'); csrf = model.csrf; await renderModel(); }
-  catch (error) { if (error.code === 'SIGN_IN_REQUIRED' || error.code === 'SESSION_REVOKED') { model = null; signInScreen(); } else throw error; }
+  catch (error) {
+    if (error.code === 'SIGN_IN_REQUIRED' || error.code === 'SESSION_REVOKED') { model = null; signInScreen(); return; }
+    // a child whose seat, PIN or subscription changed under the device goes back to the launch pad — never a dead screen (Stage 4 review, third round)
+    if (['CHILD_INACTIVE', 'CHILD_SESSION_REVOKED', 'SUBSCRIPTION_INACTIVE'].includes(error.code)) {
+      try { await api('/session/select', {}); model = await api('/me'); csrf = model.csrf; await renderModel(); }
+      catch { model = null; signInScreen(); }
+      note(messages[error.code] || 'Please choose an explorer again.'); return;
+    }
+    throw error;
+  }
 }
 async function auth() { authModule ||= await import('/auth.js'); return authModule; }
 async function authStep(result, afterReady = null) {
@@ -86,7 +96,7 @@ async function authStep(result, afterReady = null) {
       if (afterReady?.valid && !afterReady.valid()) return;
       await api('/auth/session', { idToken: result.idToken });
     }
-    finally { await (await auth()).clear(); result.idToken = ''; }
+    finally { if (!keepSdkSession) await (await auth()).clear(); result.idToken = ''; }
     await refresh(); channel?.postMessage('changed');
     if (afterReady) await afterReady();
     return;
@@ -152,7 +162,7 @@ function signInScreen(signup = false, afterReady = null, reauth = false) {
   }); };
   box.append(form);
   if (reauth) box.append(button('Cancel verification', async () => {
-    reauthEpoch++;
+    reauthEpoch++; keepSdkSession = false;
     if (authModule) await authModule.clear();
     await refresh(); note('Verification cancelled. The unfinished action was discarded.');
   }, 'ghost'));
@@ -184,7 +194,7 @@ function reauthenticate(afterReady) {
   signInScreen(false, resume, true);
 }
 async function signOut() {
-  reauthEpoch++;
+  reauthEpoch++; keepSdkSession = false;
   await api('/auth/logout', {}); if (authModule) await authModule.clear(); channel?.postMessage('changed'); await refresh();
 }
 function renderModel() {
@@ -349,6 +359,7 @@ async function parentScreen() {
   }, 'primary'));
   if (family.children.length) row.append(button('Game & progress', parentGameScreen, 'ghost'));
   row.append(button('Sign out', signOut, 'ghost')); box.append(row);
+  box.append(button('Change my mobile number', changeMobileScreen, 'text-button')); // Stage 4 review: the old phone still works, the number is changing
   for (const child of family.children) { box.append(button(`Reset ${child.nickname}\u2019s PIN`, () => resetPinScreen(child), 'text-button')); box.append(button(`Change ${child.nickname}\u2019s starting point`, () => startScreen(child), 'text-button')); }
   // Stage 3.5: the family's own data to keep, and the way to leave — 14 days to change your mind
   const keep = el('div', null, 'actions');
@@ -365,6 +376,28 @@ async function parentScreen() {
   }
   box.append(keep);
   box.append(el('p', `Family reference: ${family.id}`, 'reference'));
+}
+// Stage 4 review: the parent still has the old phone and wants a new number on the account (RECOVERY.md). A fresh sign-in
+// first — password and a code to the old number — then a code to the new number; the new factor is enrolled before the old
+// one goes, so there is never a moment without a second factor. The server is not involved: its next sign-in sees the new
+// factor and the phone key follows the number.
+function changeMobileScreen() {
+  keepSdkSession = true;
+  reauthenticate(async () => {
+    transientView = true;
+    const box = panel('CHANGE MOBILE', 'Your new number.', 'A code goes to the new number. The old one stops working for sign-in the moment the new one is verified.');
+    const phone = field('New mobile number, including country code', 'tel', { placeholder: '+62...', autocomplete: 'tel' });
+    const consent = el('input'); consent.type = 'checkbox'; const consentLabel = el('label', null, 'check');
+    consentLabel.append(consent, el('span', 'I agree to receive a verification SMS on this number. Google processes it for authentication and abuse prevention; carrier charges may apply.'));
+    const otp = field('SMS verification code', 'text', { inputMode: 'numeric', pattern: '[0-9]{6}', maxLength: 6, autocomplete: 'one-time-code' });
+    box.append(phone.wrap, consentLabel,
+      button('Send code to the new number', async () => { await (await auth()).changeMobileSend(phone.input.value, consent.checked); note('Code sent to the new number. Enter it below.'); }, 'ghost'), otp.wrap,
+      button('Verify new number', async () => {
+        const r = await (await auth()).changeMobileConfirm(otp.input.value); keepSdkSession = false;
+        await api('/auth/logout', {}); channel?.postMessage('changed'); model = null; signInScreen(); note(r.notice); // the next sign-in carries the new factor
+      }, 'primary'),
+      button('Cancel', async () => { keepSdkSession = false; if (authModule) await authModule.clear(); await refresh(); }, 'ghost'));
+  });
 }
 function pinFields() {
   const first = field('Six-digit child PIN', 'password', { inputMode: 'numeric', pattern: '[0-9]{6}', maxLength: 6, autocomplete: 'new-password' });
@@ -488,7 +521,7 @@ async function childScreen() {
   if (st.placement?.status === 'pending') { // the test comes first; the track cards wait
     const card = el('div', null, 'track');
     card.append(el('strong', `🎯 PLACEMENT TEST · SECTOR ${'ABCDEF'[st.placement.level]}`), el('span', 'Engine and Navigator questions from the middle of the sector. Timed — answer as quickly as you can. Each track will start where you are ready.', 'card-meta'));
-    if (!st.active) card.append(button('Start the placement test', async () => { playStreak = 0; const r = await api('/learn/session', { track: 'engine', mode: 'placement' }); playView(r.session, r.question); }, 'primary'));
+    if (!st.active) card.append(button('Start the placement test', async () => { playStreak = 0; const r = await api('/learn/session', { track: 'engine', mode: 'placement' }); if (r.settled) return summaryView({ mode: 'placement', track: 'engine' }, r.summary); playView(r.session, r.question); }, 'primary')); // settled: an abandoned test was graded as it stood
     box.append(card);
   }
   for (const t of st.placement?.status === 'pending' ? [] : ['engine', 'nav']) {

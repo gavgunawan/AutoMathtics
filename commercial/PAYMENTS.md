@@ -36,7 +36,14 @@ provider ──POST /api/webhooks/{provider}, X-Webhook-Signature──▶ verif
 - **Ordering (S3.3-C).** `billingCustomers/{provider}:{ref}` keeps `lastEventAt` and
   `lastEventSeq` of the last applied event. An event with an older timestamp, or the same
   timestamp and a lower `seq`, is recorded and **ignored** (`STALE_EVENT`), so a retried old event
-  can never roll the facts back. Providers expose timestamps at second resolution, so `seq` is the
+  can never roll the facts back. A refund or a dispute is exempt: it is money that went back, not a
+  snapshot of state, so one created before a renewal and delivered after it still ends access (its own
+  id dedupes it), and an older one that applied never moves `lastEventAt` back. An event about another
+  subscription of the same customer — the one a fresh checkout replaced, still winding down at the
+  provider — is recorded and ignored (`OTHER_SUBSCRIPTION`): every subscription event names its
+  subscription (`subscriptionRef`), the family remembers which one it paid for
+  (`providerSubscriptionRef`), and a checkout from `past_due` / `cancelled` / `expired` ends the
+  provider's previous subscription before a new one can be paid for. Providers expose timestamps at second resolution, so `seq` is the
   adapter's ordering key *within* a second; two events sharing a timestamp with no `seq` are
   processed in delivery order — a real adapter must supply a total order (see the adapter
   contract below). A signed event dated beyond the signature window is malformed
@@ -195,12 +202,15 @@ that is how 4.2 is exercised: `stripe listen --forward-to 127.0.0.1:8787/api/web
   (`process()` finds the intent by invoice reference, applies it with its seat choice, marks it `applied`,
   releases the marker). A held update never paid lapses after a day and may be superseded.
 - **Webhooks**: `Stripe-Signature` (t, v1…) verified over the raw bytes, five-minute window, before a byte is
-  parsed. `checkout.session.completed` is resolved against the **subscription Stripe holds** (price id and
-  period end fetched, never our metadata); so is `invoice.paid` — a proration invoice lists the old price
-  (negative, unused time) and the new one (positive, remaining time) on separate lines, and the fact that
-  matters is the price the subscription is on now; without a subscription to fetch (and for
-  `invoice.payment_failed`) the best line answers: positive amount, latest period. `customer.subscription.deleted`
-  → `subscription.deleted`. **Refunds come from `refund.created` / `refund.updated`**, the per-refund object:
+  parsed. `checkout.session.completed` is resolved against the **subscription Stripe holds** (price id,
+  period end and subscription id fetched, never our metadata). An invoice's facts are **the invoice's own
+  lines** — what was paid, for which period, for which subscription — never the subscription as Stripe holds
+  it at delivery time, so a retry after the price moved says what the first delivery said; a proration
+  invoice lists the old price (negative, unused time) and the new one (positive, remaining time) on separate
+  lines, and the best line answers: positive amount, latest period. The inbox fingerprint is the **event's own
+  identity** (id, type, time, object), never the enrichment of the moment: a redelivery after the family
+  changed plan is a replay, not a conflict. `customer.subscription.deleted` → `subscription.deleted`, for
+  the family's subscription only. **Refunds come from `refund.created` / `refund.updated`**, the per-refund object:
   its own id (`ref`, kept on the inbox row as `refundRef`) and amount; the charge is fetched for the customer and
   for whether it is now refunded in full; a refund not yet `succeeded` is recorded and ignored, and the same
   refund delivered under a second event id is `DUPLICATE_REFUND`. `charge.refunded` — the charge's running

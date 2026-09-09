@@ -39,7 +39,12 @@ export class FirebaseIdentity {
   /** Stage 4: the parent's Auth account itself. Only support.deleteAccount calls this, after the family is gone. */
   async deleteUser(uid) { this.cache.delete(uid); await this.auth.deleteUser(uid); }
   /** Stage 4.4: recovery starts from an email, before any token exists. Unknown → null; the caller answers uniformly. */
-  async lookupByEmail(email) { try { return await this.auth.getUserByEmail(email); } catch { return null; } }
+  async lookupByEmail(email) {
+    try { return await this.auth.getUserByEmail(email); }
+    catch (error) { if (error?.code === 'auth/user-not-found' || error?.errorInfo?.code === 'auth/user-not-found') return null; fail(502, 'IDENTITY_UNAVAILABLE'); } // an outage is not "no account": a parent must not lose seven days to it (the answer is the same for every email)
+  }
+  /** Signature and expiry only, from cached keys — no network: the login route asks this before spending anything on a token. */
+  async verifyLocal(idToken) { try { await this.auth.verifyIdToken(idToken, false); return true; } catch { return false; } }
   /** Stage 4.4: the one privileged identity change this server makes — Recovery.complete only, after the ceremony (RECOVERY.md). */
   async unenrollFactors(uid) { this.cache.delete(uid); await this.auth.updateUser(uid, { multiFactor: { enrolledFactors: null } }); this.cache.delete(uid); }
   async lookup(uid, fresh = false) {

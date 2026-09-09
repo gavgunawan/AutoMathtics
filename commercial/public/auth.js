@@ -50,13 +50,34 @@ export async function sendCode(phoneNumber, consent) {
     ? { multiFactorHint: resolver.hints.find((h) => h.factorId === sdk.PhoneMultiFactorGenerator.FACTOR_ID), session: resolver.session }
     : { phoneNumber, session: await sdk.multiFactor(auth.currentUser).getSession() };
   try { verificationId = await new sdk.PhoneAuthProvider(auth).verifyPhoneNumber(options, verifier); }
-  catch (error) {
-    // the SMS resend ladder at the provider (DEPLOY_V3.md, section 5) refuses with SMS_WAIT:<seconds> inside the provider's error
-    const wait = /SMS_WAIT:(\d+)/.exec(String(error?.message || ''));
-    if (wait) throw Error(`Too many codes were sent to this number recently. Try again in ${waitText(Number(wait[1]))}.`);
-    throw error;
-  }
+  catch (error) { throw providerError(error); }
   lastSend = Date.now();
+}
+// the SMS resend ladder at the provider (DEPLOY_V3.md, section 5) refuses with SMS_WAIT:<seconds> inside the provider's error
+function providerError(error) {
+  const wait = /SMS_WAIT:(\d+)/.exec(String(error?.message || ''));
+  return wait ? Error(`Too many codes were sent to this number recently. Try again in ${waitText(Number(wait[1]))}.`) : error;
+}
+// Stage 4 review: a parent whose old phone still works changes the number here — a code to the new number, the new factor
+// enrolled first, then every other one removed, so the account is never without a second factor (RECOVERY.md). Needs the
+// fresh provider sign-in the caller just made (the provider refuses enrolment on an old one).
+export async function changeMobileSend(phoneNumber, consent) {
+  if (!auth.currentUser) throw Error('Sign in again first.');
+  if (consent !== true) throw Error('Acknowledge the mobile verification notice first.');
+  if (Date.now() - lastSend < 60_000) throw Error('Wait a minute before requesting another code.');
+  verifier?.clear();
+  verifier = new sdk.RecaptchaVerifier(auth, 'recaptcha', { size: 'normal' });
+  try { verificationId = await new sdk.PhoneAuthProvider(auth).verifyPhoneNumber({ phoneNumber, session: await sdk.multiFactor(auth.currentUser).getSession() }, verifier); }
+  catch (error) { throw providerError(error); }
+  lastSend = Date.now();
+}
+export async function changeMobileConfirm(code) {
+  if (!verificationId || !auth.currentUser) throw Error('Request a verification code first.');
+  const user = auth.currentUser, before = sdk.multiFactor(user).enrolledFactors.map((f) => f.uid);
+  await sdk.multiFactor(user).enroll(sdk.PhoneMultiFactorGenerator.assertion(sdk.PhoneAuthProvider.credential(verificationId, code)), 'Parent mobile');
+  for (const f of sdk.multiFactor(user).enrolledFactors) if (before.includes(f.uid)) await sdk.multiFactor(user).unenroll(f); // the old number goes only once the new one is in
+  await clear();
+  return { stage: 'signin', notice: 'Mobile number changed. Sign in with your password and a code to your new number.' };
 }
 export async function confirmCode(code) {
   if (!verificationId) throw Error('Request a verification code first.');

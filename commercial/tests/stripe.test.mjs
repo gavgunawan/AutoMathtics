@@ -83,7 +83,8 @@ test('webhooks: signature before parsing, then Stripe\'s events become the inbox
   const done = event(f, 'checkout.session.completed', { object: 'checkout.session', customer: 'cus_stripe1', subscription: 'sub_1', client_reference_id: 'chk_1', metadata: { familyId: 'fam_1', checkoutId: 'chk_1', price: 'price_1BigFam000' } });
   const { raw, headers } = signed(f, done);
   const n = await gw.verify(raw, headers, f.now());
-  assert.deepEqual(n, { id: done.id, at: done.created * 1000, seq: null, type: 'checkout.completed', customer: 'cus_stripe1', data: { price: 'price_1Family000', periodEnd: Math.floor(end / 1000) * 1000, familyId: 'fam_1', checkoutId: 'chk_1', amountCents: null, full: null, ref: null } });
+  assert.match(n.fingerprint, /^[0-9a-f]{64}$/, 'the event fingerprinted by its own identity');
+  assert.deepEqual(n, { id: done.id, at: done.created * 1000, seq: null, fingerprint: n.fingerprint, type: 'checkout.completed', customer: 'cus_stripe1', data: { price: 'price_1Family000', periodEnd: Math.floor(end / 1000) * 1000, familyId: 'fam_1', checkoutId: 'chk_1', amountCents: null, full: null, ref: null, subscriptionRef: 'sub_1' } });
   assert.equal(calls.length, 1, 'the price came from the subscription Stripe holds, not from the metadata we authored');
   const paid = event(f, 'invoice.paid', { object: 'invoice', customer: 'cus_stripe1', lines: { data: [{ price: { id: 'price_1Starter00' }, period: { end: Math.floor(end / 1000) } }] }, subscription_details: { metadata: { familyId: 'fam_1' } } });
   const np = await gw.verify(...Object.values(signed(f, paid)).slice(0, 2), f.now());

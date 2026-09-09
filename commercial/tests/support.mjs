@@ -59,7 +59,7 @@ export function fixture() {
   const auth = { verifyCalls: [], getUserCalls: 0, deleted: [], failDelete: null, updates: [], failUpdate: null, beforeGetUser: null, beforeUpdateUser: null,
     verifyIdToken: async (t, revoked) => { auth.verifyCalls.push(revoked); if (!tokens.has(t)) throw Error('invalid'); return structuredClone(tokens.get(t)); },
     getUser: async (uid) => { auth.getUserCalls++; if (auth.beforeGetUser) await auth.beforeGetUser(uid); if (!users.has(uid)) throw Error('missing'); return structuredClone(users.get(uid)); },
-    getUserByEmail: async (email) => { const u = [...users.values()].find((x) => x.email.toLowerCase() === email.toLowerCase()); if (!u) throw Error('missing'); return structuredClone(u); },
+    getUserByEmail: async (email) => { if (auth.failLookup) { const e = auth.failLookup; auth.failLookup = null; throw e; } const u = [...users.values()].find((x) => x.email.toLowerCase() === email.toLowerCase()); if (!u) { const e = Error('missing'); e.code = 'auth/user-not-found'; throw e; } return structuredClone(u); },
     updateUser: async (uid, patch) => { if (auth.beforeUpdateUser) await auth.beforeUpdateUser(uid, patch); if (auth.failUpdate) { const e = auth.failUpdate; auth.failUpdate = null; throw e; } const u = users.get(uid); if (!u) throw Error('missing'); if (patch.multiFactor && patch.multiFactor.enrolledFactors === null) u.multiFactor = { enrolledFactors: [] }; auth.updates.push([uid, structuredClone(patch)]); return structuredClone(u); },
     deleteUser: async (uid) => { if (auth.failDelete) { const e = auth.failDelete; auth.failDelete = null; throw e; } if (!users.has(uid)) throw Error('missing'); users.delete(uid); auth.deleted.push(uid); },
   };
