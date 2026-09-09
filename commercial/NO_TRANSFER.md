@@ -20,8 +20,10 @@ every week and the same child would keep progressing for nothing.
    wallet. Tested.
 5. **Coins are per child, server-owned, and never gifted** (shop/rewards are a later slice; when
    the Family Rocket arrives it pools within one family only).
-6. **The parent workspace shows progress but cannot set it.** There is no parent route that writes
-   papers, crowns or coins. Operator adjustments, if ever needed, are CLI-only like `grant.mjs`.
+6. **The parent workspace shows progress but cannot set it.** No parent route writes papers, crowns
+   or placement. A parent may credit coins to their own child (`/api/game/parent/adjust`: a logged,
+   in-family bonus, at most 10,000 a call, refused for a child of another family) and approve or reject
+   reward requests; nothing leaves the family. Operator adjustments are CLI-only like `grant.mjs`.
 7. **The one exception is the one-off v2 import** (`scripts/migrate-v2.mjs` → `server/migrate.mjs`),
    used to bring the owner's own children over from the old game. It is CLI-only with the same
    project guards as the grant tool, takes the v2 record as a file (it never connects to the v2

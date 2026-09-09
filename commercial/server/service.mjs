@@ -334,10 +334,10 @@ export class Foundation {
       if (!family.childIds.includes(childId)) fail(404, 'CHILD_NOT_FOUND');
       const child = await tx.get(`families/${s.familyId}/children/${childId}`), prog = normalizeProgress(await tx.get(`families/${s.familyId}/learning/${childId}`));
       if (!child) fail(404, 'CHILD_NOT_FOUND');
-      if (prog.stats.sessions > 0 || prog.activeSession) fail(409, 'ALREADY_STARTED');
+      if (prog.stats.sessions > 0 || prog.activeSession || prog.history.length > 0) fail(409, 'ALREADY_STARTED'); // a quit session is play too
       const chosen = startInput({ yearLevel: body.yearLevel ?? child.demographics?.yearLevel ?? null, start: body.start });
       const next = initialProgress(chosen, this.now());
-      tx.set(`families/${s.familyId}/learning/${childId}`, { ...next, wallet: prog.wallet }); // whatever the wallet already holds stays
+      tx.set(`families/${s.familyId}/learning/${childId}`, { ...next, wallet: prog.wallet, pacePercent: prog.pacePercent, passDays: prog.passDays }); // whatever the wallet holds, the pace the parent set and the days already passed stay
       tx.set(`families/${s.familyId}/children/${childId}`, { ...child, demographics: { ...(child.demographics || {}), yearLevel: chosen.yearLevel }, start: { option: chosen.start, yearLevel: chosen.yearLevel, chosenAt: this.now() } });
       this.audit(tx, 'child.start_changed', s.uid, s.familyId, childId);
       return { child: publicChild({ ...child, start: { option: chosen.start }, demographics: { yearLevel: chosen.yearLevel } }), placement: next.placement };

@@ -46,10 +46,16 @@ export class Learning {
     if (requestedMode !== null && requestedMode !== 'scan' && requestedMode !== 'placement') fail(400, 'INVALID_REQUEST'); if (requestedMode !== null) track = 'engine';
     const id = randomUUID(), shieldRowId = randomUUID();
     return this.store.transaction(async (tx) => {
-      const { p, prog: original, s, family } = await this.child(tx, ctx); const active = original.activeSession ? await tx.get(p.session(original.activeSession)) : null;
+      let { p, prog: original, s, family } = await this.child(tx, ctx); const active = original.activeSession ? await tx.get(p.session(original.activeSession)) : null;
       if (active && active.status === 'active' && this.now() < active.createdAt + SESSION_LIFE)
         return { session: this.publicSession(active), question: this.publicQuestion(active, active.index), resumed: true };
       const commitRate = await this.foundation.rateIn(tx, `learning-start:${s.familyId}:${s.childId}`, 20, HOUR);
+      if (active && active.status === 'active' && active.mode === 'placement') { // a placement test abandoned past its two hours settles like a quit
+        const now = this.now(), settled = this.settlePlacement(original, active, now, family.timeZone || DEFAULT_TIME_ZONE);
+        tx.set(p.session(active.id), { ...active, status: 'expired', finishedAt: now });
+        if (settled.summary) { commitRate(); tx.set(p.doc, settled.progress); return { settled: true, summary: settled.summary }; }
+        original = settled.progress;
+      }
       // A pending placement test comes first: nothing else starts until it is done (or the parent picks another start)
       const pendingPlacement = original.placement?.status === 'pending';
       if (pendingPlacement && requestedMode !== 'placement') fail(409, 'PLACEMENT_PENDING');
@@ -100,10 +106,22 @@ export class Learning {
     return this.store.transaction(async (tx) => {
       const { p, prog, family } = await this.child(tx, ctx); const sess = await tx.get(p.session(body.sessionId)); if (!sess) fail(404, 'SESSION_NOT_FOUND');
       if (sess.status !== 'active') return { ok: true, status: sess.status }; const now = this.now(); tx.set(p.session(sess.id), { ...sess, status: 'quit', finishedAt: now });
+      if (sess.mode === 'placement') { const settled = this.settlePlacement(prog, sess, now, family.timeZone || DEFAULT_TIME_ZONE); tx.set(p.doc, settled.progress); return { ok: true, status: 'quit', attempts: settled.progress.placement?.attempts ?? null, placement: settled.summary?.placement || null }; }
       const row = { ts: now, date: dayISO(now, family.timeZone || DEFAULT_TIME_ZONE), track: sess.track, mode: sess.mode, level: sess.level, levelId: LEVELS[sess.level].id,
         papers: this.label(sess), quit: true, atQ: sess.index, total: sess.questions.length };
       tx.set(p.doc, { ...prog, activeSession: prog.activeSession === sess.id ? null : prog.activeSession, history: [row, ...prog.history].slice(0, HISTORY_MAX) }); return { ok: true, status: 'quit' };
     });
+  }
+  // A placement test left unfinished — quit, or abandoned past its two hours — is not a way to try again until the numbers look
+  // better: the first time it may be retaken; the second time it is graded as it stands, every unanswered question counted wrong
+  // (Stage 4 review, third round; STAGE2_LEARNING.md).
+  settlePlacement(prog, sess, now, tz) {
+    const attempts = (prog.placement?.attempts || 0) + 1;
+    const quitRow = { ts: now, date: dayISO(now, tz), track: sess.track, mode: sess.mode, level: sess.level, levelId: LEVELS[sess.level].id, papers: this.label(sess), quit: true, atQ: sess.index, total: sess.questions.length };
+    if (attempts < 2) return { progress: { ...prog, activeSession: prog.activeSession === sess.id ? null : prog.activeSession, placement: { ...prog.placement, attempts }, history: [quitRow, ...prog.history].slice(0, HISTORY_MAX) }, summary: null };
+    const unanswered = sess.questions.slice(sess.index).map((q) => ({ r: 'unanswered', secs: q.seconds, tier: q.tier, level: q.level, track: q.track || sess.track, allowed: q.seconds }));
+    const { progress, summary } = this.finish({ ...prog, placement: { ...prog.placement, attempts } }, { ...sess, results: [...sess.results, ...unanswered] }, now, tz);
+    return { progress: { ...progress, history: [{ ...progress.history[0], quit: true, atQ: sess.index }, ...progress.history.slice(1)] }, summary };
   }
   label(sess) {
     if (sess.mode === 'boss') return `CP T${sess.tierEnd / 20}`; if (sess.mode === 'scan') return 'SYSTEM SCAN'; if (sess.mode === 'placement') return 'PLACEMENT TEST';

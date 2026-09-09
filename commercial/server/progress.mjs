@@ -55,7 +55,8 @@ export function normalizeWallet(value) {
   out.inventory = uniqStrings(out.inventory, 200);
   out.shieldDays = uniqStrings(out.shieldDays, 400).sort();
   out.purchases = Array.isArray(out.purchases) ? out.purchases.slice(0, 120) : [];
-  out.redemptions = Array.isArray(out.redemptions) ? out.redemptions.slice(0, 50) : [];
+  // every pending request survives a read; only decided rows are trimmed to the newest fifty (Stage 4 review, third round)
+  out.redemptions = Array.isArray(out.redemptions) ? (() => { let decided = 0; return out.redemptions.filter((r) => r && typeof r === 'object' && (r.status === 'pending' || decided++ < 50)); })() : [];
   if (!out.egg || typeof out.egg !== 'object' || Array.isArray(out.egg)) out.egg = null;
   for (const slot of Object.values(EQUIP_SLOTS)) if (typeof out[slot] !== 'string') out[slot] = null;
   if (typeof out.lastScanWeek !== 'string') out.lastScanWeek = null;

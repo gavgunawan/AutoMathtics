@@ -51,7 +51,7 @@ written onto every deletion record.
 - **Delete the sign-in account**: after the family is gone, from the no-family screen; the identity
   provider deletes email, password and phone.
 - **Recover the account**: `RECOVERY.md` — self-service, seven days, no support shortcut.
-- **Change the mobile number**: through the identity provider, with a fresh sign-in.
+- **Change the mobile number**: *Change my mobile number* in Mission Control — a fresh sign-in, a code to the new number, the old factor removed only once the new one is enrolled.
 
 ## What is not collected
 

@@ -25,6 +25,16 @@ const clientAddress = (req, hops) => {
   const ip = hops > 0 && chain.length >= hops ? chain[chain.length - hops] : req.socket.remoteAddress;
   return /^[A-Za-z0-9.:]{1,64}$/.test(ip || '') ? ip : 'unknown';
 };
+// The last entry was appended by the Google frontend that accepted the connection and cannot be forged by the caller: through
+// Hosting it is Hosting's egress (shared by everyone); straight at the run.app hostname — reachable, since Hosting's rewrites
+// need the service public — it is the caller itself. With the hop count measured through Hosting, a direct caller who forges
+// one entry would otherwise choose its own client address; so every address budget is spent twice, on the client's key (fine)
+// and on the peer's (coarse, peerFactor times wider), and the forger runs into the peer's wall (Stage 4 review, third round).
+const peerAddress = (req) => {
+  const chain = String(req.headers['x-forwarded-for'] || '').split(',').map((v) => v.trim()).filter(Boolean);
+  const ip = chain.length ? chain[chain.length - 1] : req.socket.remoteAddress;
+  return /^[A-Za-z0-9.:]{1,64}$/.test(ip || '') ? ip : 'unknown';
+};
 async function rawBody(req, limit) {
   if ((req.headers['content-type'] || '').split(';')[0].trim() !== 'application/json') fail(415, 'JSON_REQUIRED');
   if (req.headers['content-encoding'] && req.headers['content-encoding'] !== 'identity') fail(415, 'ENCODING_UNSUPPORTED');
@@ -36,7 +46,7 @@ async function body(req) {
   const raw = await rawBody(req, 16_384);
   try { return JSON.parse(raw.toString('utf8')); } catch { fail(400, 'INVALID_JSON'); }
 }
-export function createApp(service, cfg, { publicDir = new URL('../public/', import.meta.url), reportError = () => {}, learning = null, game = null, billing = null, payments = null, support = null, recovery = null } = {}) {
+export function createApp(service, cfg, { publicDir = new URL('../public/', import.meta.url), reportError = () => {}, learning = null, game = null, billing = null, payments = null, support = null, recovery = null, peerFactor = 20 } = {}) {
   function setCookie(res, value, maxAge) {
     res.setHeader('Set-Cookie', `${COOKIE}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${cfg.emulator ? '' : '; Secure'}`);
   }
@@ -50,6 +60,9 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
     next.count++; hits.set(key, next);
     if (hits.size > 10_000) for (const [k, v] of hits) if (v.until <= now) hits.delete(k);
   }
+  // an address budget is spent on the client's key and on the peer's (peerAddress); one key when they coincide
+  const budgets = (name, req) => { const client = clientAddress(req, cfg.proxyHops), peer = peerAddress(req); return client === peer ? [[`${name}:${client}`, 1]] : [[`${name}:${client}`, 1], [`${name}:peer:${peer}`, peerFactor]]; };
+  const spend = async (name, req, maximum, windowMs) => { for (const [bucket, factor] of budgets(name, req)) await service.rate(bucket, maximum * factor, windowMs); };
   const server = createServer(async (req, res) => {
     const json = (status, value) => {
       res.statusCode = status; res.setHeader('Content-Type', 'application/json; charset=utf-8'); res.end(JSON.stringify(value));
@@ -95,7 +108,7 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
         try { return json(200, await payments.receive(hook[1], raw, req.headers)); }
         catch (error) {
           if (error instanceof Fault && error.status === 401) {
-            try { await service.rate(`webhook-fail:${clientAddress(req, cfg.proxyHops)}`, 60, 10 * 60_000); }
+            try { await spend('webhook-fail', req, 60, 10 * 60_000); }
             catch (limit) { if (limit instanceof Fault && limit.status === 429) throw limit; }
           }
           throw error;
@@ -127,14 +140,18 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
         // Failures are counted per client address (see clientAddress); successes cost nothing here
         // and are limited per account inside login(), so a flood of bad tokens from one address —
         // or from everyone behind a mis-measured proxy — cannot lock honest parents out.
-        const address = `login-fail:${clientAddress(req, cfg.proxyHops)}`;
         let next;
-        try { next = await service.login(data.idToken, token); }
+        try {
+          // A token without even a valid signature costs a saturated address nothing more than a read: the budgets are looked at
+          // before any work (Stage 4 review, third round). A validly signed token is never refused for its address.
+          if (!(await service.identity.verifyLocal(data.idToken))) { for (const [bucket, factor] of budgets('login-fail', req)) await service.peek(bucket, 30 * factor); fail(401, 'INVALID_LOGIN'); }
+          next = await service.login(data.idToken, token);
+        }
         catch (error) {
           // Address budgets count failed credentials only. A saturated shared IP must not block a
           // subsequently valid signed login (office Wi-Fi / carrier NAT); bad attempts stay 429.
           if (error instanceof Fault && error.status !== 429) {
-            try { await service.rate(address, 30, 10 * 60_000); }
+            try { await spend('login-fail', req, 30, 10 * 60_000); }
             catch (limit) { if (limit instanceof Fault && limit.status === 429) throw limit; }
           }
           throw error;
@@ -150,7 +167,8 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
       // Origin and CSRF checks as login apply; budgeted per address here and per email inside; the answer never
       // says whether an account exists (RECOVERY.md).
       if (recovery && req.method === 'POST' && (path === '/api/auth/recovery/start' || path === '/api/auth/recovery/complete')) {
-        throttle(`recovery:${clientAddress(req, cfg.proxyHops)}`, 20, 60 * 60_000);
+        throttle(`recovery:${clientAddress(req, cfg.proxyHops)}`, 20, 60 * 60_000); throttle(`recovery:peer:${peerAddress(req)}`, 20 * peerFactor, 60 * 60_000);
+        throttle('recovery:all', 200, 60 * 60_000); // per instance: probing many addresses at once is capped whatever the keys say
         return json(200, path.endsWith('/start') ? await recovery.start(data) : await recovery.complete(data));
       }
       if (stored) throttle(`session:${sha256(token)}`, 120, 60_000);
