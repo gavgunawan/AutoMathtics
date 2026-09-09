@@ -117,6 +117,7 @@ test('the whole flow through the Stage 3 inbox: checkout, Stripe\'s own customer
     'POST /v1/customers': (body) => { const c = { id: `cus_stripe${++created}`, metadata: { customerRef: body['metadata[customerRef]'] } }; customers = [c]; return c; },
     'POST /v1/checkout/sessions': (body) => ({ id: `cs_${body.client_reference_id.slice(0, 8)}`, url: 'https://checkout.stripe.com/c/pay/x' }),
     'POST /v1/checkout/sessions/': (body, all) => { expired.push(all.at(-1).path); return { status: 'expired' }; },
+    'GET /v1/subscriptions?customer=': { data: [] }, // a returning checkout inspects the customer before opening a session (fourth round): nothing live here
     'GET /v1/subscriptions/sub_1': sub('price_1Starter00', end),
   });
   const payments = new Payments({ foundation: f.service, store: f.store, billing: f.billing, provider: 'stripe', gateways: { stripe: gw }, now: f.now });

@@ -162,9 +162,18 @@ export class StripeGateway {
     const updated = await this.api('POST', `/v1/subscriptions/${sub.id}`, { cancel_at_period_end: cancel === true }, idempotencyKey);
     return { providerOperationRef: updated.id, cancelAtPeriodEnd: updated.cancel_at_period_end === true, simulated: false };
   }
-  /** End the subscription now (a family's deletion). Already ended at Stripe: nothing to do. Refunds are the operator's decision in the dashboard. */
-  async cancelSubscription({ customerRef }) {
-    const cus = await this.findCustomer(customerRef), sub = cus ? await this.subscriptionOf(cus.id) : null;
+  /**
+   * End the subscription now (a family's deletion, a returning checkout). Already ended at Stripe: nothing to do. Refunds are the
+   * operator's decision in the dashboard. With `subscriptionRef` — the subscription the family's record names — only that one is
+   * ended: a different live one is a checkout completing (just paid for) and is answered, never ended (fourth round).
+   */
+  async cancelSubscription({ customerRef, subscriptionRef = null }) {
+    const cus = await this.findCustomer(customerRef);
+    if (!cus) return { cancelled: false, reason: 'NO_PROVIDER_SUBSCRIPTION', simulated: false };
+    const { live, all } = await this.subscriptionsOf(cus.id);
+    if (live.length > 1) fail(409, 'MULTIPLE_PROVIDER_SUBSCRIPTIONS');
+    if (subscriptionRef && live[0] && live[0].id !== subscriptionRef) return { cancelled: false, reason: 'ANOTHER_SUBSCRIPTION_LIVE', liveRef: live[0].id, simulated: false };
+    const sub = (subscriptionRef && all.find((x) => x.id === subscriptionRef)) || live[0] || all[0] || null;
     if (!sub) return { cancelled: false, reason: 'NO_PROVIDER_SUBSCRIPTION', simulated: false };
     if (!LIVE.has(sub.status)) return { cancelled: true, already: true, providerOperationRef: sub.id, simulated: false };
     try { await this.api('DELETE', `/v1/subscriptions/${sub.id}`); return { cancelled: true, providerOperationRef: sub.id, simulated: false }; }
@@ -174,7 +183,7 @@ export class StripeGateway {
   async inspect(customerRef) {
     const cus = await this.findCustomer(customerRef);
     if (!cus) return { provider: this.name, customer: null, subscription: null, liveCount: 0, multiple: false, simulated: false };
-    const { live, all } = await this.subscriptionsOf(cus.id), sub = live[0] || all[0] || null; // read-only: two live ones are reported, never chosen between
+    const { live, all } = await this.subscriptionsOf(cus.id), sub = live.length === 1 ? live[0] : live.length === 0 ? all[0] || null : null; // read-only: two live ones are reported, never chosen between
     return { provider: this.name, customer: { id: cus.id }, subscription: sub ? this.describe(sub) : null, liveCount: live.length, multiple: live.length > 1, subscriptions: live.map((s) => this.describe(s)), simulated: false };
   }
   /** Signature first, then Stripe's event → the inbox shape. Async: a completed checkout is resolved against the subscription Stripe holds. */

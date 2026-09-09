@@ -81,14 +81,14 @@ export class Support {
       family: { id: f, label: family.label, createdAt: family.createdAt, timeZone: family.timeZone || null, activeChildIds: family.activeChildIds || [], deletion: family.deletion || null },
       entitlement: effectiveEntitlement(family, this.now()), subscription: family.subscription || null, billing, gameConfig: config || null, children, audit, auditTruncated: trail.truncated };
   }
-  /** Every audit row of one family, oldest first, read in pages under the reader given (a transaction or the store); `truncated` only past the cap. */
+  /** Every audit row of one family, oldest first, read in pages under the reader given (a transaction or the store); `truncated` only past the cap — and then the rows kept are the first by document id, not by time (the cap is years of use; SUPPORT.md). */
   async familyAudit(reader, familyId) {
     const rows = []; let after = null, truncated = false;
     for (;;) {
       const page = await reader.queryAfter('audit', 'familyId', familyId, after, this.auditPage);
       for (const [, a] of page) rows.push(a);
+      if (rows.length > this.auditCap) { truncated = true; break; } // strictly past the cap: exactly the cap is every row
       if (page.length < this.auditPage) break;
-      if (rows.length >= this.auditCap) { truncated = true; break; }
       after = page.at(-1)[0];
     }
     return { rows: rows.slice(0, this.auditCap).sort((a, b) => a.at - b.at), truncated };
@@ -309,6 +309,9 @@ export class Support {
       return;
     }
     counts.families++;
+    // a refusal on the provider's truth (two live subscriptions, a subscription the family does not know) marked the family: the
+    // operator resolves it at the provider and reconcile-provider clears the mark once the provider is clean
+    if (f.providerAttention && f.providerAttention.at > now - 7 * DAY) { counts.providerAttention = (counts.providerAttention || 0) + 1; add('PROVIDER_ATTENTION', id, `${f.providerAttention.code} on ${new Date(f.providerAttention.at).toISOString()}: reconcile-provider, resolve at the provider, reconcile again`); }
     const active = f.activeChildIds || [], childIds = f.childIds || [], e = effectiveEntitlement(f, now), live = !!e && e.status === 'active' && e.accessUntil > now;
     counts.children += childIds.length; counts.activeChildren += active.length;
     if (live && active.length > e.seatLimit) add('SEAT_OVERFLOW', id, `${active.length} active children for ${e.seatLimit} seats`);
@@ -409,11 +412,15 @@ export class Support {
     const target = (i) => (i.kind === 'clear' ? i.fromPlan : i.toPlan);
     const intents = (await this.store.query('billingChangeIntents', 'familyId', familyId, 100)).map(([, i]) => i).filter((i) => ['creating', 'awaiting_payment', 'stale', 'superseded', 'frozen_by_deletion'].includes(i.status)).sort((a, b) => a.createdAt - b.createdAt)
       .map((i) => { const p = providers.find((x) => x.provider === i.provider), ps = p?.subscription; return { operationId: i.operationId, provider: i.provider, kind: i.kind, fromPlan: i.fromPlan, toPlan: i.toPlan, status: i.status, providerOperationRef: i.providerOperationRef || null,
-        providerEvidence: !p || !p.available || p.simulated || p.error ? 'unknown' : !ps?.live ? 'no_live_provider_subscription' : ps.plan === target(i) ? 'provider_on_target_plan' : 'provider_on_other_plan' }; });
+        providerEvidence: !p || !p.available || p.simulated || p.error ? 'unknown' : (p.liveCount || 0) > 1 ? 'ambiguous_multiple_subscriptions' : !ps?.live ? 'no_live_provider_subscription' : ps.plan === target(i) ? 'provider_on_target_plan' : 'provider_on_other_plan' }; });
     const findings = providers.flatMap((p) => p.findings.map((x) => ({ provider: p.provider, ...x }))), compared = providers.some((p) => p.available && !p.simulated && !p.error);
     const id = randomUUID(), record = { id, kind: 'provider_state', familyId, deleted: family.deleted === true, operator, at: now, local, providers, intents, findings, match: compared ? findings.length === 0 : null };
-    await this.store.transaction(async (tx) => { tx.set(`billingReconciliations/${id}`, record); this.audit(tx, 'support.provider_reconciled', operator, familyId, { reconciliationId: id, findings: findings.map((x) => x.code), match: record.match }); });
-    return record;
+    await this.store.transaction(async (tx) => {
+      const current = await tx.get(`families/${familyId}`);
+      if (current?.providerAttention && record.match === true) tx.set(`families/${familyId}`, { ...current, providerAttention: null }); // the provider is clean again: the mark goes
+      tx.set(`billingReconciliations/${id}`, record); this.audit(tx, 'support.provider_reconciled', operator, familyId, { reconciliationId: id, findings: findings.map((x) => x.code), match: record.match });
+    });
+    return { ...record, attentionCleared: record.match === true };
   }
   /**
    * Stage 4.2: close an inbox row the server could not apply — a late event on a deleted family
