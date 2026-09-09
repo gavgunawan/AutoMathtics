@@ -41,17 +41,22 @@ the same summary and stops unless `CONFIRM_MIGRATION=write` is set.
 
 1. **Reward Store**: v2's family settings hold one reward — *¥100 cash*, 100 RP, both children, no daily
    cap. Re-enter it in the v3 parent workspace (*Game & progress* → rewards) before the children play.
+   **Decided (9 Sep 2026): re-enter it exactly as it is — ¥100 cash, 100 RP, both children, no daily cap;
+   no policy change during the migration.**
 2. **Rocket**: every redemption is *Rocket fuel · Bonus ¥5000 cash for reaching ¥10000*, but the v2
    export carries no rocket object — the fuel already accumulated is not in the data. The owner sets the
    rocket goal in v3 (*Game & progress* → Family Rocket) and decides the starting fuel from what v2 shows on the day.
+   **Decided (9 Sep 2026): on cutover day, read the visible v2 Rocket fuel immediately before the final
+   export and use that exact amount as the v3 opening fuel; if no authoritative number can be established,
+   record a reset to 0 in the cutover record rather than an estimate.**
 3. **Mystery Egg**: nothing to refund — neither child has one pending.
 4. **Font scale and sound** (60 / 90, sound on) are device settings in v2; v3 has its own.
 5. **History beyond the last 60 rows.** The importer carries at most 60 history rows per child
    (`HISTORY_MAX`), so 12 older session rows in total (Allison 1, Geralt 11) are not part of the
    children's active v3 progress. Balances, sectors and crowns are unaffected — those come from the
-   whole record. Accept this, or ask for the limit to be raised before cutover. Either way, keep the
-   final raw v2 export files as the historical archive: store them with the cutover record, outside
-   the app, and do not delete them.
+   whole record. **Decided (9 Sep 2026): the 60-row limit stands** — the older rows change no balance,
+   sector, crown or placement. Keep the final raw v2 export files as the historical archive: store them
+   with the cutover record, outside the app, and do not delete them.
 
 ## Cutover, in order
 

@@ -13,6 +13,7 @@ end of the run. Nothing here requires code; every failure is a ticket for the ne
 |---|---|---|
 | P1 | Create a parent account; open the verification email on the phone | the app refuses the family screens until verified; after the link, *I have verified my email* continues |
 | P2 | Enrol the mobile: country code, consent box, SMS code | one SMS; a wrong code is refused; a second request within a minute is refused; after enrolment the app asks to sign in again |
+| P2b | Ask for a second code 2 minutes after the first, then a third straight away | the second arrives; the third is refused with "Try again in 15 minutes" (the SMS ladder, `DEPLOY_V3.md` section 5) |
 | P3 | Sign in with password + SMS | the family setup screen; cookie is HttpOnly (no `document.cookie` in the console) |
 | P4 | Create the family with the attestation unticked, then ticked | refused, then created; the family reference is shown |
 | P5 | Add a child: nickname, PIN, age, year level, each of the three starting options | all three accepted; year/test options need a year; the placement card shows for *test* |

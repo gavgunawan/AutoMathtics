@@ -49,7 +49,13 @@ export async function sendCode(phoneNumber, consent) {
   const options = resolver
     ? { multiFactorHint: resolver.hints.find((h) => h.factorId === sdk.PhoneMultiFactorGenerator.FACTOR_ID), session: resolver.session }
     : { phoneNumber, session: await sdk.multiFactor(auth.currentUser).getSession() };
-  verificationId = await new sdk.PhoneAuthProvider(auth).verifyPhoneNumber(options, verifier);
+  try { verificationId = await new sdk.PhoneAuthProvider(auth).verifyPhoneNumber(options, verifier); }
+  catch (error) {
+    // the SMS resend ladder at the provider (DEPLOY_V3.md, section 5) refuses with SMS_WAIT:<seconds> inside the provider's error
+    const wait = /SMS_WAIT:(\d+)/.exec(String(error?.message || ''));
+    if (wait) throw Error(`Too many codes were sent to this number recently. Try again in ${waitText(Number(wait[1]))}.`);
+    throw error;
+  }
   lastSend = Date.now();
 }
 export async function confirmCode(code) {
@@ -63,6 +69,13 @@ export async function confirmCode(code) {
   await sdk.multiFactor(auth.currentUser).enroll(assertion, 'Parent mobile');
   await clear();
   return { stage: 'signin', notice: 'Mobile verified. Sign in with your password and SMS code to open the family workspace.' };
+}
+function waitText(seconds) {
+  if (seconds < 90) return 'a minute';
+  if (seconds < 3600) return `${Math.ceil(seconds / 60)} minutes`;
+  if (seconds < 5400) return 'an hour';
+  if (seconds < 86_400) return `${Math.ceil(seconds / 3600)} hours`;
+  return 'a day';
 }
 export async function resetPassword(email) {
   // Uniform UI response avoids disclosing whether an account exists.
