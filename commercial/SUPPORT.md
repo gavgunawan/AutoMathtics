@@ -103,11 +103,14 @@ actions are the ones below, and each writes an audit row with the operator's ide
 | `inbox [status]` | the global inbox by outcome (`requires_action` by default) |
 | `reprocess FAMILY_UUID` | server-side reprocessing of the family's waiting events (the same code the server runs itself); `supportOperations/{id}` names the operator before anything moves and records how it ended |
 | `reconcile-intent PROVIDER OPERATION_UUID OUTCOME "note"` | record what was established at the provider for a change intent the server could not finalise (`creating` / `stale` / `superseded`): `no_provider_change`, `provider_reverted`, `applied_by_operator`, `refunded`; writes `billingReconciliations/{id}`, marks the intent `reconciled` (it can never finalise afterwards); an `applied` intent is not open to this |
+| `reconcile-provider FAMILY_UUID` | Stage 4.2: fetch the provider's customer and subscription and compare them with the family's record — plan (a scheduled downgrade explains the provider's price), period end, cancel flag, live vs ended, deleted family with a live subscription — plus every open change intent with provider evidence; writes `billingReconciliations/{id}` (`kind: provider_state`, `match`, `findings`) and an audit row; the family report shows the latest run under **attention** (`providerCheck`). Read-only at the provider. RECONCILIATION.md says what each finding means and what to do |
+| `resolve-event PROVIDER EVENT_ID OUTCOME "note"` | Stage 4.2: close an inbox row the server could not apply — `reconciliation_required` (a late event on a deleted family) or `rejected` — after acting at the provider: `refunded_at_provider`, `cancelled_at_provider`, `applied_by_operator`, `no_action_needed`; the row keeps its outcome and gains the resolution, `billingReconciliations/{id}` (`kind: event`) records it, and **attention** stops counting it |
 | `export FAMILY_UUID` | the same export the parent gets |
 | `delete FAMILY_UUID` | execute a requested deletion (above) |
 
-Superseded checkouts and superseded/stale/creating intents appear in the report so support has
-visibility before a real provider arrives. For Stage 4: the adapter must cancel or expire a
-superseded provider checkout where the provider allows it; where it cannot, the superseded
-checkout never returns its URL again (already the case) and a late payment on it is reconciled
-and refunded.
+Superseded checkouts and superseded/stale/creating intents appear in the report. With Stripe (Stage
+4.1/4.2) a superseded hosted session is expired at the provider, a superseded checkout never returns
+its URL again, and a late payment on it is refused by the inbox and refunded by the operator in the
+provider's dashboard; the family's own decisions — cancel at period end, a scheduled downgrade, the
+deletion of the family — reach the provider before the record changes, and `reconcile-provider`
+shows where the two still disagree (RECONCILIATION.md).

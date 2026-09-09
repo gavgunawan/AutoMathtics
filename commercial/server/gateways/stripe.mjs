@@ -19,6 +19,7 @@ import { Fault, fail, equal } from '../security.mjs';
 
 export const STRIPE_TOLERANCE_MS = 5 * 60_000;
 const PLAN_KEYS = ['starter', 'family', 'big'];
+const LIVE = new Set(['active', 'trialing', 'past_due', 'unpaid']); // Stripe subscription statuses that still bill or await payment
 // form-encode nested objects the way Stripe expects: a[b][c]=v
 export function form(obj, prefix = '') {
   const out = [];
@@ -88,15 +89,60 @@ export class StripeGateway {
     try { await this.api('POST', `/v1/checkout/sessions/${providerCheckoutRef}/expire`, {}, `expire:${providerCheckoutRef}`); return { expired: true }; }
     catch (error) { if (error instanceof Fault && [400, 404].includes(error.provider?.status)) return { expired: false, reason: error.provider.code }; throw error; }
   }
+  /** The customer carrying our reference, without creating one: a change, a cancellation or a check never mints a customer. */
+  async findCustomer(customerRef) {
+    const found = await this.api('GET', `/v1/customers/search?query=${encodeURIComponent(`metadata['customerRef']:'${customerRef}'`)}&limit=1`);
+    return found.data?.[0] || null;
+  }
+  /** The subscription that matters for a customer: a live one, else the most recent. */
+  async subscriptionOf(cusId) {
+    const subs = await this.api('GET', `/v1/subscriptions?customer=${cusId}&status=all&limit=10`), data = subs.data || [];
+    return data.find((s) => LIVE.has(s.status)) || data[0] || null;
+  }
+  async liveSubscription(customerRef) {
+    const cus = await this.findCustomer(customerRef); if (!cus) fail(409, 'NO_PROVIDER_SUBSCRIPTION');
+    const sub = await this.subscriptionOf(cus.id); if (!sub || !LIVE.has(sub.status) || !sub.items?.data?.[0]) fail(409, 'NO_PROVIDER_SUBSCRIPTION');
+    return sub;
+  }
+  /** Stripe's subscription in the shape the reconciliation compares (RECONCILIATION.md); nothing secret in it. */
+  describe(sub) {
+    const price = sub.items?.data?.[0]?.price?.id || null;
+    return { ref: sub.id, status: sub.status, live: LIVE.has(sub.status), price, plan: this.planFor(price), periodEnd: sub.current_period_end ? sub.current_period_end * 1000 : null, cancelAtPeriodEnd: sub.cancel_at_period_end === true, canceledAt: sub.canceled_at ? sub.canceled_at * 1000 : null };
+  }
   /** Move the customer's live subscription to the new price; the prorated difference is invoiced now. */
   async changePlan({ idempotencyKey, customerRef, to }) {
     const price = this.priceFor(to); if (!price) fail(400, 'INVALID_PLAN');
-    const cus = await this.customer(customerRef, null);
-    const subs = await this.api('GET', `/v1/subscriptions?customer=${cus.id}&status=active&limit=1`);
-    const sub = subs.data?.[0]; if (!sub) fail(409, 'NO_PROVIDER_SUBSCRIPTION');
-    const item = sub.items?.data?.[0]; if (!item) fail(409, 'NO_PROVIDER_SUBSCRIPTION');
-    const updated = await this.api('POST', `/v1/subscriptions/${sub.id}`, { items: [{ id: item.id, price }], proration_behavior: 'always_invoice', metadata: { lastChange: idempotencyKey } }, idempotencyKey);
+    const sub = await this.liveSubscription(customerRef);
+    const updated = await this.api('POST', `/v1/subscriptions/${sub.id}`, { items: [{ id: sub.items.data[0].id, price }], proration_behavior: 'always_invoice', metadata: { lastChange: idempotencyKey } }, idempotencyKey);
     return { chargeCents: null, basis: 'stripe proration, invoiced now', providerOperationRef: `${updated.id}:${updated.latest_invoice || ''}`, simulated: false };
+  }
+  /** A scheduled change: the new price without proration, so the next invoice carries it and the current period stays as paid. */
+  async schedulePlan({ idempotencyKey, customerRef, to }) {
+    const price = this.priceFor(to); if (!price) fail(400, 'INVALID_PLAN');
+    const sub = await this.liveSubscription(customerRef);
+    const updated = await this.api('POST', `/v1/subscriptions/${sub.id}`, { items: [{ id: sub.items.data[0].id, price }], proration_behavior: 'none', metadata: { lastChange: idempotencyKey } }, idempotencyKey);
+    return { providerOperationRef: updated.id, effectiveAt: updated.current_period_end ? updated.current_period_end * 1000 : null, simulated: false };
+  }
+  /** The parent's cancel-at-period-end, or its undo, on the provider's subscription. */
+  async setCancelAtPeriodEnd({ idempotencyKey, customerRef, cancel }) {
+    const sub = await this.liveSubscription(customerRef);
+    const updated = await this.api('POST', `/v1/subscriptions/${sub.id}`, { cancel_at_period_end: cancel === true }, idempotencyKey);
+    return { providerOperationRef: updated.id, cancelAtPeriodEnd: updated.cancel_at_period_end === true, simulated: false };
+  }
+  /** End the subscription now (a family's deletion). Already ended at Stripe: nothing to do. Refunds are the operator's decision in the dashboard. */
+  async cancelSubscription({ customerRef }) {
+    const cus = await this.findCustomer(customerRef), sub = cus ? await this.subscriptionOf(cus.id) : null;
+    if (!sub) return { cancelled: false, reason: 'NO_PROVIDER_SUBSCRIPTION', simulated: false };
+    if (!LIVE.has(sub.status)) return { cancelled: true, already: true, providerOperationRef: sub.id, simulated: false };
+    try { await this.api('DELETE', `/v1/subscriptions/${sub.id}`); return { cancelled: true, providerOperationRef: sub.id, simulated: false }; }
+    catch (error) { if (error instanceof Fault && [400, 404].includes(error.provider?.status)) return { cancelled: true, already: true, providerOperationRef: sub.id, reason: error.provider.code, simulated: false }; throw error; }
+  }
+  /** What Stripe holds for this customer, for the reconciliation report. Read-only. */
+  async inspect(customerRef) {
+    const cus = await this.findCustomer(customerRef);
+    if (!cus) return { provider: this.name, customer: null, subscription: null, simulated: false };
+    const sub = await this.subscriptionOf(cus.id);
+    return { provider: this.name, customer: { id: cus.id }, subscription: sub ? this.describe(sub) : null, simulated: false };
   }
   /** Signature first, then Stripe's event → the inbox shape. Async: a completed checkout is resolved against the subscription Stripe holds. */
   async verify(rawBody, headers, nowMs) {
