@@ -47,7 +47,9 @@ not its display name. Do not use `automathtics`; the server explicitly rejects i
   email verification and phone MFA on the SAME parent account. SMS-only login is
   not accepted. Under Authentication > Settings > SMS region policy allow only the
   countries your parents live in, so nobody elsewhere can run up SMS charges; set
-  a daily SMS quota; add your own numbers as test numbers while you try things out.
+  a daily SMS quota. Do not add your own mobile as a *test phone number* unless you want it to
+  receive no SMS at all: a test number gets a fixed code and the provider sends nothing, which
+  looks exactly like a lost SMS.
   The app adds its own resend ladder on top (section 5, block F): one code at once,
   then 2 minutes, 15 minutes, 1 hour, 6 hours and 12 hours before the next ones,
   and a day before the seventh.

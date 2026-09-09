@@ -63,6 +63,11 @@ function field(label, type = 'text', options = {}) {
   wrap.append(el('span', label)); Object.assign(input, { type, required: true, ...options }); wrap.append(input);
   return { wrap, input };
 }
+// The provider's \u201cI\u2019m not a robot\u201d box renders into #recaptcha. It lives inside the screen that needs it, right under the
+// Send button, and the parent is told to tick it: a widget nobody mentioned, appearing under the panel, read as a dead button.
+function captchaBox() { const c = el('div', null, 'captcha'); c.id = 'recaptcha'; return c; }
+// the number in international form, as the provider wants it (spaces, dashes and brackets are fine)
+const e164 = (value) => /^\+[1-9]\d{6,14}$/.test(String(value || '').replace(/[\s().-]/g, ''));
 function panel(kicker, title, subtitle) {
   root.replaceChildren();
   const box = el('section', null, 'panel'); box.setAttribute('data-deck', model?.role === 'child' ? 'GRID // ONLINE' : 'MISSION CONTROL // ONLINE'); // the corner tag every deck carries
@@ -142,7 +147,10 @@ async function authStep(result, afterReady = null) {
   consentLabel.append(consent, el('span', 'I agree to receive a verification SMS. Google processes this number for authentication and abuse prevention; carrier charges may apply.'));
   if (enrolling) box.append(phone.wrap, consentLabel);
   const otp = field('SMS verification code', 'text', { inputMode: 'numeric', pattern: '[0-9]{6}', maxLength: 6, autocomplete: 'one-time-code' });
-  box.append(button('Send verification code', async () => { await (await auth()).sendCode(phone.input.value, consent.checked); note('Code sent. Enter it below.'); }, 'ghost'), otp.wrap,
+  box.append(button('Send verification code', async () => {
+    if (enrolling && !e164(phone.input.value)) { note('Enter the number in international form, for example +62 812 3456 7890.'); return; }
+    note('Tick \u201cI\u2019m not a robot\u201d just below, then the code is sent.'); await (await auth()).sendCode(phone.input.value, consent.checked); note('Code sent. Enter it below.');
+  }, 'ghost'), captchaBox(), otp.wrap,
     button('Verify code', async () => authStep(await (await auth()).confirmCode(otp.input.value), afterReady), 'primary'));
   if (!enrolling && result.email) box.append(button('I can\u2019t receive the code', () => recoveryScreen(result.email), 'text-button')); // Stage 4.4
 }
@@ -415,7 +423,10 @@ function changeMobileScreen() {
     consentLabel.append(consent, el('span', 'I agree to receive a verification SMS on this number. Google processes it for authentication and abuse prevention; carrier charges may apply.'));
     const otp = field('SMS verification code', 'text', { inputMode: 'numeric', pattern: '[0-9]{6}', maxLength: 6, autocomplete: 'one-time-code' });
     box.append(phone.wrap, consentLabel,
-      button('Send code to the new number', async () => { await (await auth()).changeMobileSend(phone.input.value, consent.checked); note('Code sent to the new number. Enter it below.'); }, 'ghost'), otp.wrap,
+      button('Send code to the new number', async () => {
+        if (!e164(phone.input.value)) { note('Enter the number in international form, for example +62 812 3456 7890.'); return; }
+        note('Tick \u201cI\u2019m not a robot\u201d just below, then the code is sent.'); await (await auth()).changeMobileSend(phone.input.value, consent.checked); note('Code sent to the new number. Enter it below.');
+      }, 'ghost'), captchaBox(), otp.wrap,
       button('Verify new number', async () => {
         const r = await (await auth()).changeMobileConfirm(otp.input.value); keepSdkSession = false;
         await api('/auth/logout', {}); channel?.postMessage('changed'); model = null; signInScreen(); note(r.notice); // the next sign-in carries the new factor

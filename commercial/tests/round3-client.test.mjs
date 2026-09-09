@@ -32,9 +32,17 @@ test('the sign-in provider\'s refusal reaches the parent in words, with its code
   let next = fail('auth/invalid-phone-number', 'Firebase: Error (auth/invalid-phone-number).');
   h.setAuth('parentA', { signIn: async () => ({ stage: 'enroll' }), sendCode: async () => { throw next; } });
   await h.submitLogin(); assert.ok(h.root.textContent.includes('Protect the command deck'), h.root.textContent.slice(0, 200));
-  h.nodes('INPUT')[0].value = '0812'; await h.click('Send verification code'); assert.ok(h.message.textContent.includes('international form'), h.message.textContent);
+  h.nodes('INPUT')[0].value = '+6281234567890'; await h.click('Send verification code'); assert.ok(h.message.textContent.includes('international form'), h.message.textContent); // the provider's own verdict on a well-formed number
   next = fail('auth/too-many-requests', 'Firebase: Error (auth/too-many-requests).'); await h.click('Send verification code'); assert.ok(h.message.textContent.includes('paused requests'), h.message.textContent);
   next = fail('auth/internal-error', 'Firebase: ((HTTP Cloud Function returned an error. Code: 429, Message: SMS quota exceeded)) (auth/internal-error).'); await h.click('Send verification code');
   assert.ok(h.message.textContent.includes('auth/internal-error') && h.message.textContent.includes('SMS quota exceeded'), h.message.textContent);
   assert.ok(!h.message.textContent.includes('Firebase:'), 'the provider\'s prefix is dropped');
+});
+test('the mobile screen checks the international form before asking the provider, tells the parent to tick the robot check, and keeps that check inside the screen', async (t) => {
+  const h = await uiFixture(t, { signedIn: false }); const sends = [];
+  h.setAuth('parentA', { signIn: async () => ({ stage: 'enroll' }), sendCode: async (phone) => { sends.push(phone); } });
+  await h.submitLogin(); h.nodes('INPUT')[0].value = '0812 3456 7890'; await h.click('Send verification code');
+  assert.ok(h.message.textContent.includes('international form'), h.message.textContent); assert.deepEqual(sends, [], 'nothing asked of the provider');
+  h.nodes('INPUT')[0].value = '+62 812-3456-7890'; await h.click('Send verification code'); assert.deepEqual(sends, ['+62 812-3456-7890']); assert.ok(h.message.textContent.includes('Code sent'));
+  assert.ok(h.nodes('DIV').some((d) => d.id === 'recaptcha'), 'the robot check box is inside the screen, under the button');
 });
