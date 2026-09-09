@@ -191,7 +191,7 @@ test('real Firestore: two families under one verified phone race for the single 
   const fb = await service.createFamily(lb, { label: 'Trial race B', adultAttestation: true, consentVersion: 'pilot-v1' });
   const ctxA = await service.authenticate(fa.token), ctxB = await service.authenticate(fb.token);
   assert.deepEqual((await db.doc(`phones/${keyA}`).get()).data().families.sort(), [fa.id, fb.id].sort());
-  const race = await Promise.allSettled([billing.startTrial(ctxA, {}), billing.startTrial(ctxB, {})]);
+  const race = await Promise.allSettled([billing.startTrial(ctxA, { operationId: randomUUID() }), billing.startTrial(ctxB, { operationId: randomUUID() })]);
   assert.equal(race.filter((r) => r.status === 'fulfilled').length, 1, JSON.stringify(race.map((r) => r.status === 'rejected' ? r.reason.code : 'ok')));
   assert.equal(race.find((r) => r.status === 'rejected').reason.code, 'TRIAL_ALREADY_USED');
   const ledger = (await db.doc(`phones/${keyA}`).get()).data();
@@ -212,7 +212,7 @@ test('real Firestore: the same signed webhook delivered three times at once is a
   const ctx = await service.authenticate(fam.token);
   const co = await payments.checkout(ctx, { plan: 'starter', operationId: randomUUID() });
   assert.equal((await db.doc(`billingCustomers/fake:${co.customerRef}`).get()).data().familyId, fam.id);
-  const event = { id: `evt_${randomUUID()}`, type: 'checkout.completed', at: Date.now(), customer: co.customerRef, data: { plan: 'starter', periodEnd: Date.now() + 30 * 86_400_000, checkoutId: co.checkoutId } };
+  const event = { id: `evt_${randomUUID()}`, type: 'checkout.completed', at: Date.now(), customer: co.customerRef, data: { price: 'price_fake_starter', periodEnd: Date.now() + 30 * 86_400_000, checkoutId: co.checkoutId } };
   const raw = Buffer.from(JSON.stringify(event)), headers = { 'x-webhook-signature': signWebhook(webhookSecret, raw, Date.now()) };
   const results = await Promise.all([1, 2, 3].map(() => payments.receive('fake', raw, headers)));
   assert.equal(results.filter((r) => r.status === 'applied').length, 3, JSON.stringify(results));

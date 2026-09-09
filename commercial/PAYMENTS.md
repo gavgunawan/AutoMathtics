@@ -42,21 +42,30 @@ provider ──POST /api/webhooks/{provider}, X-Webhook-Signature──▶ verif
   The browser never supplies a reference. This keeps the no-transfer invariant: a webhook can
   subscribe, renew or end the family that started the checkout and no other, and it never touches
   a child wallet (`NO_TRANSFER.md`).
+- **Nothing in the payload names a plan, a seat count, a state or a family.** The plan comes from
+  the provider's *price id* through the gateway's server-side table (`price_fake_starter` →
+  `starter`); a payment with an unknown price is recorded and rejected (`UNKNOWN_PRICE`); a
+  completed checkout must agree with the price it was opened for (`CHECKOUT_MISMATCH`). A payload
+  carrying `plan`, `seats` or `state` is malformed (400) and never recorded. `periodEnd` is the
+  provider's signed statement of the paid period and is range-checked by the state machine.
+  `subscription.updated` is deliberately **not** mapped: a webhook cannot change seat capacity;
+  paid upgrade/downgrade with proration and the seat choice are Stage 3.4.
 - **Outcomes are acknowledged.** `applied`, `ignored` (unsupported type, stale) and `rejected`
-  (unknown customer, mismatch, or the state machine refused — e.g. a provider downgrade that needs
-  a seat choice, `SELECT_CHILDREN_FOR_DOWNGRADE`) all return 200 so the provider stops retrying;
-  the inbox row is the operator's audit trail and 3.4 resolves the rejected ones. Only signature
-  failures (401), malformed events (400), size (413) and infrastructure errors (500, retry) are not.
+  (unknown customer, unknown price, mismatch, or the state machine refused — e.g. a renewal on a
+  plan smaller than the seated children, `SELECT_CHILDREN_FOR_DOWNGRADE`) all return 200 so the
+  provider stops retrying; the inbox row is the operator's audit trail and 3.4 resolves the
+  rejected ones. Only signature failures (401), malformed events (400), size (413) and
+  infrastructure errors (500, retry) are not.
 
 ## Provider events → machine events
 
 | provider event | internal event | data used |
 |---|---|---|
-| `checkout.completed` | `payment.succeeded` | `plan`, `periodEnd`, `checkoutId` (marks the checkout completed) |
-| `invoice.paid` | `payment.succeeded` | `plan`, `periodEnd` |
+| `checkout.completed` | `payment.succeeded` | `price` → plan, `periodEnd`, `checkoutId` (marks the checkout completed) |
+| `invoice.paid` | `payment.succeeded` | `price` → plan, `periodEnd` |
 | `invoice.payment_failed` | `payment.failed` | — |
-| `subscription.updated` | `plan.change` | `plan` |
 | `subscription.deleted` | `terminate` | — |
+| `subscription.updated` (and anything else) | — | recorded, ignored until 3.4 |
 
 The family's own record `families/{f}/billing/{uuid}` is written by the same `commit()` as every
 other billing event, with `provider`, `providerRef` and actor `webhook:<provider>`; the uuid is

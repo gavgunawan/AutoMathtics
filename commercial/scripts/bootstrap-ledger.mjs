@@ -38,12 +38,19 @@ for (const childId of (family.childIds || []).filter((id) => !onlyChild || id ==
   const needs = (prog.wallet.ledgerSeq || 0) === 0 && (prog.wallet.gc || prog.wallet.rp);
   console.log(JSON.stringify({ childId, gc: prog.wallet.gc, rp: prog.wallet.rp, ledgerSeq: prog.wallet.ledgerSeq || 0, needsOpeningRow: !!needs }));
   if (!needs || process.env.CONFIRM_BOOTSTRAP !== 'write') continue;
-  const opened = await store.transaction(async (tx) => {
-    const current = normalizeProgress(await tx.get(base));
-    const r = await bootstrap(tx, base, current, Date.now());
-    if (r.opened) { tx.set(base, r.prog); tx.set(`audit/${randomUUID()}`, { action: 'ledger.bootstrapped', familyId, childId, actor, gc: current.wallet.gc, rp: current.wallet.rp, at: Date.now(), expireAt: Date.now() + 400 * 86_400_000 }); }
-    return r.opened;
-  });
+  let opened;
+  try {
+    opened = await store.transaction(async (tx) => {
+      const current = normalizeProgress(await tx.get(base));
+      const r = await bootstrap(tx, base, current, Date.now());
+      if (r.opened) { tx.set(base, r.prog); tx.set(`audit/${randomUUID()}`, { action: 'ledger.bootstrapped', familyId, childId, actor, gc: current.wallet.gc, rp: current.wallet.rp, at: Date.now(), expireAt: Date.now() + 400 * 86_400_000 }); }
+      return r.opened;
+    });
+  } catch (error) {
+    if (error.code !== 'LEDGER_DAMAGED') throw error;
+    console.log(JSON.stringify({ childId, opened: false, damaged: true, note: 'ledger rows exist but the wallet says none; run scripts/reconcile.mjs and investigate before bootstrapping' }));
+    process.exitCode = 3; continue;
+  }
   console.log(JSON.stringify({ childId, opened }));
 }
 if (process.env.CONFIRM_BOOTSTRAP !== 'write') console.log('Dry run. Set CONFIRM_BOOTSTRAP=write to write opening rows.');

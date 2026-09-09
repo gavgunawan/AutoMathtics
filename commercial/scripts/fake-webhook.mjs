@@ -6,14 +6,13 @@
 //   WEBHOOK_SECRET_FAKE=... node scripts/fake-webhook.mjs ORIGIN CUSTOMER_REF checkout.completed PLAN PERIOD_END_ISO [CHECKOUT_ID]
 //   WEBHOOK_SECRET_FAKE=... node scripts/fake-webhook.mjs ORIGIN CUSTOMER_REF invoice.paid PLAN PERIOD_END_ISO
 //   WEBHOOK_SECRET_FAKE=... node scripts/fake-webhook.mjs ORIGIN CUSTOMER_REF invoice.payment_failed
-//   WEBHOOK_SECRET_FAKE=... node scripts/fake-webhook.mjs ORIGIN CUSTOMER_REF subscription.updated PLAN
 //   WEBHOOK_SECRET_FAKE=... node scripts/fake-webhook.mjs ORIGIN CUSTOMER_REF subscription.deleted
 //
 // EVENT_ID (default evt_<uuid>) lets you re-deliver the same event to see the replay; EVENT_AT
 // (unix ms, default now) lets you deliver an old event to see it ignored as stale. The customer
 // reference is on the parent's billing view (`GET /api/billing` → customer.fake) after a checkout.
 import { randomUUID } from 'node:crypto';
-import { signWebhook, PROVIDER_EVENTS } from '../server/payments.mjs';
+import { signWebhook, PROVIDER_EVENTS, FAKE_PRICES } from '../server/payments.mjs';
 
 const [origin, customer, type, ...rest] = process.argv.slice(2);
 const secret = process.env.WEBHOOK_SECRET_FAKE;
@@ -24,10 +23,11 @@ const url = new URL(origin);
 if (!['127.0.0.1', 'localhost'].includes(url.hostname) && process.env.CONFIRM_WEBHOOK_TARGET !== url.origin) throw Error('Non-loopback target: set CONFIRM_WEBHOOK_TARGET to exactly that origin.');
 const data = {};
 if (['checkout.completed', 'invoice.paid'].includes(type)) {
-  data.plan = rest[0]; data.periodEnd = Date.parse(rest[1] || '');
-  if (!data.plan || !Number.isSafeInteger(data.periodEnd)) throw Error('PLAN and PERIOD_END_ISO are required for a payment event.');
+  // The event carries the provider's price id, as a real provider's would; the server maps it to a plan.
+  data.price = Object.keys(FAKE_PRICES).find((p) => FAKE_PRICES[p] === rest[0]); data.periodEnd = Date.parse(rest[1] || '');
+  if (!data.price || !Number.isSafeInteger(data.periodEnd)) throw Error(`PLAN (one of ${Object.values(FAKE_PRICES).join(', ')}) and PERIOD_END_ISO are required for a payment event.`);
   if (type === 'checkout.completed' && rest[2]) data.checkoutId = rest[2];
-} else if (type === 'subscription.updated') { data.plan = rest[0]; if (!data.plan) throw Error('PLAN is required.'); }
+}
 const at = Number(process.env.EVENT_AT || Date.now());
 const event = { id: process.env.EVENT_ID || `evt_${randomUUID()}`, type, at, customer, data };
 const raw = Buffer.from(JSON.stringify(event));

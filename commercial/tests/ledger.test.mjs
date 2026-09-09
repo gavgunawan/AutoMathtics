@@ -42,12 +42,13 @@ test('entry() validates, post() chains rows and advances the cached balance, and
   await assert.rejects(store.transaction(async (tx) => post(tx, 'x', prog, entry({ id: 'r3', type: 'reward.request', rp: -51, at }))), rejected('INSUFFICIENT_REWARD_POINTS'));
   assert.equal((await store.list('x/ledger')).length, 2); // the refused rows rolled back
 });
-test('3.1-C: a ledger row is never overwritten — same id and content is a replay, same id and different content is a conflict', async () => {
+test('3.1-C / S3-F1: a ledger row is never overwritten — the same id is refused, as a replay when the content matches and as a conflict when it does not', async () => {
   const store = new MemoryStore(); const at = 1_700_000_000_000;
   let prog = freshProgress();
   prog = await store.transaction(async (tx) => { const p = await post(tx, 'x', prog, entry({ id: 'op1', type: 'parent.adjust', gc: 100, at })); tx.set('x', p); return p; });
-  const replay = await store.transaction(async (tx) => post(tx, 'x', await tx.get('x'), entry({ id: 'op1', type: 'parent.adjust', gc: 100, at })));
-  assert.equal(replay.wallet.gc, 100); assert.equal(replay.wallet.ledgerSeq, 1); // nothing moved twice
+  // the row is the durable receipt: a caller that reaches it again is refused, so whatever side effects it rebuilt never commit
+  await assert.rejects(store.transaction(async (tx) => post(tx, 'x', await tx.get('x'), entry({ id: 'op1', type: 'parent.adjust', gc: 100, at }))), rejected('LEDGER_REPLAYED'));
+  assert.equal((await store.get('x')).wallet.gc, 100); assert.equal((await store.get('x')).wallet.ledgerSeq, 1); // nothing moved twice
   await assert.rejects(store.transaction(async (tx) => post(tx, 'x', await tx.get('x'), entry({ id: 'op1', type: 'parent.adjust', gc: 999, at }))), rejected('LEDGER_CONFLICT'));
   await assert.rejects(store.transaction(async (tx) => post(tx, 'x', await tx.get('x'), entry({ id: 'op1', type: 'shop.buy', gc: -100, at }))), rejected('LEDGER_CONFLICT'));
   const rows = await store.list('x/ledger'); assert.equal(rows.length, 1); assert.equal(rows[0].gc, 100); // the original row survived untouched
@@ -151,4 +152,16 @@ test('a migrated child opens with a ledger row, reconciles, and keeps reconcilin
   assert.equal(rows.length, 1); assert.equal(rows[0].type, 'migrate.opening'); assert.equal(rows[0].gc, 30); assert.equal(rows[0].rp, 100); assert.equal(r.derived.gc, 30);
   await play(f, k, 'nav');
   ({ r } = await check(f, k)); assert.equal(r.derived.count, 2); assert.equal(r.derived.gc, 80);
+});
+test('opening rows are legal only as sequence 1, and bootstrap stops when rows exist that the wallet does not know about', async () => {
+  const store = new MemoryStore(); const at = 1_700_000_000_000;
+  const prog = await store.transaction(async (tx) => { const p = await post(tx, 'x', freshProgress(), entry({ id: 'a', type: 'parent.adjust', gc: 10, at })); tx.set('x', p); return p; });
+  for (const type of ['ledger.opening', 'migrate.opening']) await assert.rejects(store.transaction(async (tx) => post(tx, 'x', await tx.get('x'), entry({ id: `open-${type.replace('.', '-')}`, type, gc: 5, at }))), rejected('LEDGER_OPENING_NOT_FIRST'));
+  assert.equal((await store.list('x/ledger')).length, 1);
+  // metadata says no rows while rows exist: never open, never guess — whatever the cached balance says
+  for (const wallet of [{ gc: 10, rp: 0 }, { gc: 0, rp: 0 }]) {
+    await store.put('x', { ...prog, wallet: { ...prog.wallet, ...wallet, ledgerSeq: 0, ledgerLast: null } });
+    await assert.rejects(store.transaction(async (tx) => bootstrap(tx, 'x', await tx.get('x'), at)), rejected('LEDGER_DAMAGED'));
+  }
+  assert.equal((await store.list('x/ledger')).length, 1);
 });
