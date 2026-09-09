@@ -88,10 +88,10 @@ account has no family and creates a new one.
 ## Recovery rules
 
 Recovery never bypasses MFA or family ownership. A parent who loses their second factor
-recovers their **own** account through the identity provider — a tested customer recovery
-ceremony for a lost phone or changed number that does not enable takeover is a Stage 4 item
-(real MFA validation lives there); an operator never points a parent
-record at a different family, never adds a member, never moves a child. The only corrective
+recovers their **own** account through the ceremony in `RECOVERY.md` — self-service, seven days,
+proof of the inbox through the identity provider's own password reset, cancelled by any full
+sign-in; the operator's only verb is `cancel-recovery`. An operator never points a parent record at
+a different family, never adds a member, never moves a child, never removes a second factor. The only corrective
 actions are the ones below, and each writes an audit row with the operator's identity.
 
 ## The operator's door (`scripts/support.mjs`)
@@ -105,6 +105,7 @@ actions are the ones below, and each writes an audit row with the operator's ide
 | `reconcile-intent PROVIDER OPERATION_UUID OUTCOME "note"` | record what was established at the provider for a change intent the server could not finalise (`creating` / `stale` / `superseded`): `no_provider_change`, `provider_reverted`, `applied_by_operator`, `refunded`; writes `billingReconciliations/{id}`, marks the intent `reconciled` (it can never finalise afterwards); an `applied` intent is not open to this |
 | `reconcile-provider FAMILY_UUID` | Stage 4.2: fetch the provider's customer and subscription and compare them with the family's record — plan (a scheduled downgrade explains the provider's price), period end, cancel flag, live vs ended, deleted family with a live subscription — plus every open change intent with provider evidence; writes `billingReconciliations/{id}` (`kind: provider_state`, `match`, `findings`) and an audit row; the family report shows the latest run under **attention** (`providerCheck`). Read-only at the provider. RECONCILIATION.md says what each finding means and what to do |
 | `resolve-event PROVIDER EVENT_ID OUTCOME "note"` | Stage 4.2: close an inbox row the server could not apply — `reconciliation_required` (a late event on a deleted family) or `rejected` — after acting at the provider: `refunded_at_provider`, `cancelled_at_provider`, `applied_by_operator`, `no_action_needed`; the row keeps its outcome and gains the resolution, `billingReconciliations/{id}` (`kind: event`) records it, and **attention** stops counting it |
+| `cancel-recovery UID "reason"` | Stage 4.4: cancel a pending account-recovery request (the parent says it was not them, or anything looks wrong). Protective only — there is no command that removes a second factor, shortens the wait or completes a recovery (`RECOVERY.md`) |
 | `export FAMILY_UUID` | the same export the parent gets |
 | `delete FAMILY_UUID` | execute a requested deletion (above) |
 

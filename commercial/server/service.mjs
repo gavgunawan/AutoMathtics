@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Fault, fail, sha256, mac, randomToken, object, text, uuid, pin, childInput, startInput, publicChild } from './security.mjs';
 import { initialProgress, normalizeProgress } from './progress.mjs';
 import { effectiveEntitlement } from './subscription.mjs';
+import { recoveryView } from './recovery.mjs';
 
 const MINUTE = 60_000, DAY = 24 * 60 * MINUTE;
 const FAMILY_LIMIT = 20; // Pilot safety cap, independent of paid seat count.
@@ -107,6 +108,7 @@ export class Foundation {
       const parent = await tx.get(path);
       const old = oldKey ? await tx.get(`sessions/${oldKey}`) : null;
       const family = parent?.familyId ? await tx.get(`families/${parent.familyId}`) : null;
+      const recovery = await tx.get(`recoveries/${who.uid}`);
       // Also blocks a copied pre-handover ID token presented with a new cookie.
       if (parent && who.authTime <= (parent.reauthAfter || 0)) fail(403, 'REAUTHENTICATE');
       // Stage 3.5: a family being deleted, or deleted, gets no new session at all — the sweep must find none (after the tombstone the parent record points at no family, so a returning parent signs in and starts fresh)
@@ -118,6 +120,9 @@ export class Foundation {
       if (old) tx.delete(`sessions/${oldKey}`);
       tx.set(`sessions/${key}`, s);
       this.audit(tx, 'parent.signed_in', who.uid, s.familyId);
+      // Stage 4.4: a full sign-in during a recovery's waiting period is the owner saying "I still have my phone":
+      // the request is cancelled here and a notice waits for them (RECOVERY.md)
+      if (recovery && recovery.status === 'pending') { tx.set(`recoveries/${who.uid}`, { ...recovery, status: 'cancelled_by_sign_in', cancelledAt: this.now(), cancelledBy: who.uid }); this.audit(tx, 'parent.recovery_cancelled', who.uid, s.familyId); }
     });
     return token;
   }
@@ -130,7 +135,8 @@ export class Foundation {
         const c = await tx.get(`families/${s.familyId}/children/${id}`);
         if (c) children.push(publicChild(c));
       }
-      return { role: s.role, csrf: s.csrf, ...(s.role === 'parent' ? { parent: { uid: s.uid } } : {}), family: family ? {
+      const recovery = s.role === 'parent' ? recoveryView(await tx.get(`recoveries/${s.uid}`), this.now()) : null; // Stage 4.4: a finished request is shown until acknowledged
+      return { role: s.role, csrf: s.csrf, ...(s.role === 'parent' ? { parent: { uid: s.uid }, recovery } : {}), family: family ? {
         id: family.id, label: family.label, children,
         ...(s.role === 'parent' ? { entitlement: effectiveEntitlement(family, this.now()), activeCount: family.activeChildIds.length, deletion: family.deletion ? { requestedAt: family.deletion.requestedAt, effectiveAt: family.deletion.effectiveAt } : null } : {}),
       } : null };

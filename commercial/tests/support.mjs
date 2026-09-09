@@ -6,6 +6,7 @@ import { Game } from '../server/game.mjs';
 import { Subscriptions } from '../server/subscription.mjs';
 import { Payments, FakeGateway } from '../server/payments.mjs';
 import { Support } from '../server/support.mjs';
+import { Recovery } from '../server/recovery.mjs';
 import { mac } from '../server/security.mjs';
 
 // Firestore rejects `undefined` values and arrays nested directly inside arrays; fail the same way
@@ -54,9 +55,11 @@ export const fakeHasher = {
 export function fixture() {
   let clock = Date.parse('2026-09-06T10:00:00Z');
   const store = new MemoryStore(), users = new Map(), tokens = new Map();
-  const auth = { verifyCalls: [], getUserCalls: 0, deleted: [], failDelete: null,
+  const auth = { verifyCalls: [], getUserCalls: 0, deleted: [], failDelete: null, updates: [], failUpdate: null,
     verifyIdToken: async (t, revoked) => { auth.verifyCalls.push(revoked); if (!tokens.has(t)) throw Error('invalid'); return structuredClone(tokens.get(t)); },
     getUser: async (uid) => { auth.getUserCalls++; if (!users.has(uid)) throw Error('missing'); return structuredClone(users.get(uid)); },
+    getUserByEmail: async (email) => { const u = [...users.values()].find((x) => x.email.toLowerCase() === email.toLowerCase()); if (!u) throw Error('missing'); return structuredClone(u); },
+    updateUser: async (uid, patch) => { if (auth.failUpdate) { const e = auth.failUpdate; auth.failUpdate = null; throw e; } const u = users.get(uid); if (!u) throw Error('missing'); if (patch.multiFactor && patch.multiFactor.enrolledFactors === null) u.multiFactor = { enrolledFactors: [] }; auth.updates.push([uid, structuredClone(patch)]); return structuredClone(u); },
     deleteUser: async (uid) => { if (auth.failDelete) { const e = auth.failDelete; auth.failDelete = null; throw e; } if (!users.has(uid)) throw Error('missing'); users.delete(uid); auth.deleted.push(uid); },
   };
   const identity = new FirebaseIdentity(auth, { now: () => clock });
@@ -67,6 +70,10 @@ export function fixture() {
   const gateway = new FakeGateway({ secret: webhookSecret });
   const payments = new Payments({ foundation: service, store, billing, provider: 'fake', gateways: { fake: gateway }, now: () => clock });
   const support = new Support({ foundation: service, store, billing, payments, now: () => clock });
+  const recovery = new Recovery({ foundation: service, store, identity, secret, now: () => clock });
+  // what the identity provider's own password reset changes, as the server sees it
+  function resetPassword(uid) { const u = users.get(uid); u.tokensValidAfterTime = new Date(clock).toUTCString(); u.passwordHash = `hash-${randomUUID()}`; }
+  function enrollPhone(uid, phoneNumber) { const u = users.get(uid), id = `mfa-${uid}-${randomUUID().slice(0, 8)}`; u.multiFactor = { enrolledFactors: [{ uid: id, factorId: 'phone', phoneNumber }] }; return id; }
   function token(uid, patch = {}) {
     if (!users.has(uid)) users.set(uid, { uid, email: `${uid}@example.test`, emailVerified: true, disabled: false,
       tokensValidAfterTime: new Date(0).toUTCString(), multiFactor: { enrolledFactors: [{ uid: `mfa-${uid}`, factorId: 'phone', phoneNumber: `+65${String(Math.abs([...uid].reduce((h, c) => (h * 31 + c.charCodeAt(0)) | 0, 7)) % 1e8).padStart(8, '0')}` }] } }); // a distinct fake number per uid
@@ -96,7 +103,7 @@ export function fixture() {
     const childCtx = await service.authenticate(await service.selectChild(selCtx, kid.id, '763829'));
     return { p, child: kid, selCtx, childCtx };
   }
-  return { service, learning, game, billing, payments, support, gateway, store, identity, users, tokens, auth, token, login, family, child, childSession, now: () => clock, advance: (ms) => { clock += ms; } };
+  return { service, learning, game, billing, payments, support, recovery, resetPassword, enrollPhone, gateway, store, identity, users, tokens, auth, token, login, family, child, childSession, now: () => clock, advance: (ms) => { clock += ms; } };
 }
 export const rejected = (code) => (err) => err.code === code;
 // the answer the server holds, in the shape the browser would send — and a nearby wrong one

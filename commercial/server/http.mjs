@@ -34,7 +34,7 @@ async function body(req) {
   const raw = await rawBody(req, 16_384);
   try { return JSON.parse(raw.toString('utf8')); } catch { fail(400, 'INVALID_JSON'); }
 }
-export function createApp(service, cfg, { publicDir = new URL('../public/', import.meta.url), reportError = () => {}, learning = null, game = null, billing = null, payments = null, support = null } = {}) {
+export function createApp(service, cfg, { publicDir = new URL('../public/', import.meta.url), reportError = () => {}, learning = null, game = null, billing = null, payments = null, support = null, recovery = null } = {}) {
   function setCookie(res, value, maxAge) {
     res.setHeader('Set-Cookie', `${COOKIE}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${cfg.emulator ? '' : '; Secure'}`);
   }
@@ -137,9 +137,17 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
         if (stored) await service.logout({ key: sha256(token), uid: stored.uid });
         setCookie(res, '', 0); return json(200, { ok: true });
       }
+      // Stage 4.4: recovery runs before any session can exist (the parent cannot pass the second factor). The same
+      // Origin and CSRF checks as login apply; budgeted per address here and per email inside; the answer never
+      // says whether an account exists (RECOVERY.md).
+      if (recovery && req.method === 'POST' && (path === '/api/auth/recovery/start' || path === '/api/auth/recovery/complete')) {
+        throttle(`recovery:${clientAddress(req, cfg.proxyHops)}`, 20, 60 * 60_000);
+        return json(200, path.endsWith('/start') ? await recovery.start(data) : await recovery.complete(data));
+      }
       if (stored) throttle(`session:${sha256(token)}`, 120, 60_000);
       const ctx = await service.authenticate(token);
       if (req.method === 'GET' && path === '/api/me') return json(200, await service.me(ctx));
+      if (recovery && req.method === 'POST' && path === '/api/auth/recovery/ack') return json(200, await recovery.acknowledge(ctx));
       if (req.method === 'GET' && path === '/api/child/profile') {
         const me = await service.me(ctx);
         if (me.role !== 'child') fail(403, 'CHILD_MODE_REQUIRED');

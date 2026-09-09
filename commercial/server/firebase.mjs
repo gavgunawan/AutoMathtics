@@ -36,6 +36,10 @@ export class FirebaseIdentity {
   }
   /** Stage 4: the parent's Auth account itself. Only support.deleteAccount calls this, after the family is gone. */
   async deleteUser(uid) { this.cache.delete(uid); await this.auth.deleteUser(uid); }
+  /** Stage 4.4: recovery starts from an email, before any token exists. Unknown → null; the caller answers uniformly. */
+  async lookupByEmail(email) { try { return await this.auth.getUserByEmail(email); } catch { return null; } }
+  /** Stage 4.4: the one privileged identity change this server makes — Recovery.complete only, after the ceremony (RECOVERY.md). */
+  async unenrollFactors(uid) { this.cache.delete(uid); await this.auth.updateUser(uid, { multiFactor: { enrolledFactors: null } }); this.cache.delete(uid); }
   async lookup(uid, fresh = false) {
     const hit = this.cache.get(uid);
     if (!fresh && hit && hit.until > this.now()) return hit.user;

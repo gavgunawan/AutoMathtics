@@ -15,7 +15,7 @@ const messages = {
   CHILD_SESSION_REVOKED: 'The child PIN changed. Select the child and enter the new PIN.',
   TRIAL_ALREADY_USED: 'A free trial has already been used with this mobile number.', TRIAL_REQUIRES_VERIFIED_PHONE: 'A verified mobile number is needed for the free trial.',
   SUBSCRIPTION_EXISTS: 'This family already has a subscription.', NO_SUBSCRIPTION: 'There is no subscription to change.', INVALID_TRANSITION: 'That change is not possible in the current state.',
-  FAMILY_DELETED: 'This family has been deleted.', NO_DELETION_PENDING: 'No deletion is scheduled.', FAMILY_STILL_EXISTS: 'Delete the family first; the sign-in account can go after that.', PLACEMENT_PENDING: 'The placement test comes first.', PLACEMENT_NOT_PENDING: 'There is no placement test to take.', ALREADY_STARTED: 'This child has already started playing; the starting point can no longer be changed.', INVALID_START: 'Choose a year level for that starting option.',
+  FAMILY_DELETED: 'This family has been deleted.', NO_DELETION_PENDING: 'No deletion is scheduled.', FAMILY_STILL_EXISTS: 'Delete the family first; the sign-in account can go after that.', PLACEMENT_PENDING: 'The placement test comes first.', PLACEMENT_NOT_PENDING: 'There is no placement test to take.', ALREADY_STARTED: 'This child has already started playing; the starting point can no longer be changed.', INVALID_START: 'Choose a year level for that starting option.', RECOVERY_NOT_FOUND: 'No recovery request exists for that account.', RECOVERY_NOT_PENDING: 'That recovery request is no longer pending.', IDENTITY_UNAVAILABLE: 'The sign-in service did not answer. Try again in a moment.',
   MANUAL_GRANT_ACTIVE: 'This family already has pilot access, so the free trial is not needed.', CHECKOUT_REQUIRED: 'Choose a plan to subscribe first; a trial cannot be changed.', PLAN_CHANGE_NOT_AUTHORIZED: 'That payment does not match the plan on record.', RENEWAL_REQUIRED: 'The renewal payment comes first; upgrade after it goes through.', CHANGE_IN_PROGRESS: 'A plan change is already in progress. Try again in a moment.', USE_PLAN_CHANGE: 'Your family is subscribed: change the plan from the subscription controls.', SUBSCRIPTION_CHANGED: 'The subscription changed while this was in progress. Refresh and try again.', LEDGER_REPLAYED: 'That was already done. Refresh to see the result.',
   SEATS_CANNOT_REMOVE: 'Seats can be added here, not taken away.', INVALID_PLAN: 'That plan is not available.', SELECT_CHILDREN_FOR_DOWNGRADE: 'Not enough seats for that many children.', IDEMPOTENCY_CONFLICT: 'That request was already made differently. Refresh and try again.',
   INSUFFICIENT_GRID_COINS: 'Not enough Grid Coins yet.', INSUFFICIENT_REWARD_POINTS: 'Not enough Reward Points yet.',
@@ -109,6 +109,22 @@ async function authStep(result, afterReady = null) {
   const otp = field('SMS verification code', 'text', { inputMode: 'numeric', pattern: '[0-9]{6}', maxLength: 6, autocomplete: 'one-time-code' });
   box.append(button('Send verification code', async () => { await (await auth()).sendCode(phone.input.value, consent.checked); note('Code sent. Enter it below.'); }, 'ghost'), otp.wrap,
     button('Verify code', async () => authStep(await (await auth()).confirmCode(otp.input.value), afterReady), 'primary'));
+  if (!enrolling && result.email) box.append(button('I can\u2019t receive the code', () => recoveryScreen(result.email), 'text-button')); // Stage 4.4
+}
+// Stage 4.4: the lost-phone ceremony (RECOVERY.md). No session exists here; the server answers the same for any email.
+function recoveryScreen(email) {
+  reauthEpoch++; model = null;
+  const box = panel('ACCOUNT RECOVERY', 'Lost your phone?', 'Recovery takes seven days and needs your email inbox. Nobody can shorten it. Your family and children stay exactly as they are.');
+  box.append(el('p', `1. Start recovery for ${email}.  2. Reset your password from the emailed link \u2014 that proves the inbox is yours.  3. After the waiting period, complete recovery here, then sign in and verify your new mobile.`, 'notice'));
+  const when = (ms) => new Date(ms).toLocaleString();
+  box.append(button('1. Start recovery', async () => { const r = await api('/auth/recovery/start', { email }); note(`Recovery requested. It can be completed from ${when(r.readyAt)}. Now reset your password from the email link.`); }, 'primary'),
+    button('2. Send password reset email', async () => { await (await auth()).resetPassword(email); note('If this email can receive a reset link, one has been requested. Set a new password, then come back after the waiting period.'); }, 'ghost'),
+    button('3. Complete recovery', async () => {
+      const r = await api('/auth/recovery/complete', { email });
+      if (r.completed) { signInScreen(); note('Recovery complete. Sign in with your password, then verify your new mobile number.'); return; }
+      note(r.reason === 'WAITING' ? `Not yet: recovery can be completed from ${when(r.readyAt)}.` : r.reason === 'PROOF_REQUIRED' ? 'Reset your password from the email link first; that is how we know the inbox is yours.' : 'No recovery is in progress for this email. Start one first.');
+    }, 'ghost'),
+    button('Back to sign-in', () => signInScreen(), 'text-button'));
 }
 function signInScreen(signup = false, afterReady = null, reauth = false) {
   if (!reauth) reauthEpoch++;
@@ -275,6 +291,12 @@ async function parentScreen() {
   const billing = await api('/billing'); // plans, trial eligibility and the payment reference come from the server, never guessed from /me
   const active = e.status === 'active' && e.accessUntil > Date.now(); // Display only; API is authoritative.
   const box = panel('PARENT WORKSPACE', family.label, 'Manage your children here. Hand over the device to remove parent access.');
+  if (model.recovery && model.recovery.status !== 'pending' && !model.recovery.acknowledgedAt) { // Stage 4.4: a finished recovery request is shown until the parent acknowledges it
+    const r = model.recovery, when = new Date(r.requestedAt).toLocaleDateString();
+    box.append(el('p', r.status === 'completed' ? `Account recovery requested on ${when} was completed and a new mobile was verified. If that wasn\u2019t you, reset your password now and contact support.`
+      : `Account recovery was requested on ${when} and ${r.status === 'cancelled_by_operator' ? 'cancelled by support' : 'cancelled by your sign-in'}. If you didn\u2019t request it, reset your password now.`, 'notice'),
+      button('It was me', async () => { await api('/auth/recovery/ack', {}); await refresh(); }, 'ghost'));
+  }
   const summary = el('div', null, 'allowance');
   const STATE = { trial: 'FREE TRIAL', active: 'SUBSCRIBED', grace: 'RENEWAL DUE', past_due: 'PAYMENT OVERDUE', cancelled: 'CANCELLED', expired: 'EXPIRED' };
   summary.append(el('strong', `${family.activeCount} / ${e.seatLimit}`, 'count'), el('span', 'child slots in use'),

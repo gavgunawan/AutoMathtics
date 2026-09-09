@@ -8,6 +8,7 @@ import { Subscriptions } from './subscription.mjs';
 import { Payments, FakeGateway } from './payments.mjs';
 import { StripeGateway } from './gateways/stripe.mjs';
 import { Support } from './support.mjs';
+import { Recovery } from './recovery.mjs';
 import { createApp } from './http.mjs';
 
 const cfg = config(); // Validate BEFORE loading SDKs or opening network connections.
@@ -16,8 +17,9 @@ const { getAuth } = await import('firebase-admin/auth');
 const { getFirestore, Timestamp } = await import('firebase-admin/firestore');
 const app = initializeApp({ projectId: cfg.projectId, ...(cfg.emulator ? {} : { credential: applicationDefault() }) });
 const store = new FirestoreStore(getFirestore(app), { timestamp: (ms) => Timestamp.fromMillis(ms) });
-const service = new Foundation({ store, identity: new FirebaseIdentity(getAuth(app)),
-  hasher: pinHasher(cfg.pepper, cfg.previousPeppers), secret: cfg.secret });
+const identity = new FirebaseIdentity(getAuth(app));
+const service = new Foundation({ store, identity, hasher: pinHasher(cfg.pepper, cfg.previousPeppers), secret: cfg.secret });
+const recovery = new Recovery({ foundation: service, store, identity, secret: cfg.secret }); // Stage 4.4
 const learning = new Learning({ foundation: service, store });
 const game = new Game({ foundation: service, store });
 const billing = new Subscriptions({ foundation: service, store });
@@ -26,7 +28,7 @@ if (cfg.payments.webhookSecrets.fake) gateways.fake = new FakeGateway({ secret: 
 if (cfg.payments.stripe) gateways.stripe = new StripeGateway({ ...cfg.payments.stripe, origin: cfg.origin });
 const payments = new Payments({ foundation: service, store, billing, provider: cfg.payments.provider, gateways });
 const support = new Support({ foundation: service, store, billing, payments });
-const server = createApp(service, cfg, { reportError: (event) => console.error(JSON.stringify(event)), learning, game, billing, payments, support });
+const server = createApp(service, cfg, { reportError: (event) => console.error(JSON.stringify(event)), learning, game, billing, payments, support, recovery });
 server.listen(cfg.port, cfg.emulator ? '127.0.0.1' : '0.0.0.0', () => {
   console.log(JSON.stringify({ event: 'foundation_ready', mode: cfg.mode, port: cfg.port }));
 });
