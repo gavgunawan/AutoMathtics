@@ -8,6 +8,18 @@ const auth = sdk.initializeAuth(initializeApp(cfg.firebase), { persistence: sdk.
 if (cfg.emulator) sdk.connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
 let resolver = null, verificationId = null, verifier = null, lastSend = 0;
 
+// The number as the provider wants it: E.164, nothing else. Both screens check the string this sends, so what
+// was validated and what goes on the wire are the same characters. They were not: a number typed as
+// "+62 812 3456 7890" passed a check that stripped the spaces and then reached the provider with them still in.
+export const e164 = (value) => String(value || '').replace(/[\s().-]/g, '');
+// One robot check per screen, built once. The SDK un-ticks the widget itself after every attempt — the last thing
+// verifyPhoneNumber does is `finally { verifier?._reset(); }` — and leaves it on the page, ticked off and ready to
+// be ticked again. Clearing and rebuilding it on each send is what made the box vanish after a refusal and come
+// back blank, which reads as "nothing happened, press it again".
+function captcha() { verifier ||= new sdk.RecaptchaVerifier(auth, 'recaptcha', { size: 'normal' }); return verifier; }
+export async function armCaptcha() { try { await captcha().render(); } catch { resetCaptcha(); } } // the box is on screen before Send, not conjured up by it
+export function resetCaptcha() { const stale = verifier; verifier = null; try { stale?.clear(); } catch { /* already destroyed */ } } // clear() twice throws and would strand the screen
+
 async function stage(user) {
   await user.reload();
   if (!user.emailVerified) return { stage: 'verify' };
@@ -44,12 +56,11 @@ export async function resendEmail() {
 export async function sendCode(phoneNumber, consent) {
   if (Date.now() - lastSend < 60_000) throw Error('Wait a minute before requesting another code.');
   if (!resolver && consent !== true) throw Error('Acknowledge the mobile verification notice first.');
-  verifier?.clear();
-  verifier = new sdk.RecaptchaVerifier(auth, 'recaptcha', { size: 'normal' });
+  verificationId = null; // a code from an earlier send must never be verified against this one
   const options = resolver
     ? { multiFactorHint: resolver.hints.find((h) => h.factorId === sdk.PhoneMultiFactorGenerator.FACTOR_ID), session: resolver.session }
-    : { phoneNumber, session: await sdk.multiFactor(auth.currentUser).getSession() };
-  try { verificationId = await new sdk.PhoneAuthProvider(auth).verifyPhoneNumber(options, verifier); }
+    : { phoneNumber: e164(phoneNumber), session: await sdk.multiFactor(auth.currentUser).getSession() };
+  try { verificationId = await new sdk.PhoneAuthProvider(auth).verifyPhoneNumber(options, captcha()); }
   catch (error) { throw providerError(error); }
   lastSend = Date.now();
 }
@@ -65,9 +76,8 @@ export async function changeMobileSend(phoneNumber, consent) {
   if (!auth.currentUser) throw Error('Sign in again first.');
   if (consent !== true) throw Error('Acknowledge the mobile verification notice first.');
   if (Date.now() - lastSend < 60_000) throw Error('Wait a minute before requesting another code.');
-  verifier?.clear();
-  verifier = new sdk.RecaptchaVerifier(auth, 'recaptcha', { size: 'normal' });
-  try { verificationId = await new sdk.PhoneAuthProvider(auth).verifyPhoneNumber({ phoneNumber, session: await sdk.multiFactor(auth.currentUser).getSession() }, verifier); }
+  verificationId = null;
+  try { verificationId = await new sdk.PhoneAuthProvider(auth).verifyPhoneNumber({ phoneNumber: e164(phoneNumber), session: await sdk.multiFactor(auth.currentUser).getSession() }, captcha()); }
   catch (error) { throw providerError(error); }
   lastSend = Date.now();
 }
@@ -84,7 +94,7 @@ export async function confirmCode(code) {
   const assertion = sdk.PhoneMultiFactorGenerator.assertion(sdk.PhoneAuthProvider.credential(verificationId, code));
   if (resolver) {
     const { user } = await resolver.resolveSignIn(assertion);
-    resolver = null; verifier?.clear(); verifier = null;
+    resolver = null; resetCaptcha();
     return stage(user);
   }
   await sdk.multiFactor(auth.currentUser).enroll(assertion, 'Parent mobile');
@@ -104,6 +114,6 @@ export async function resetPassword(email) {
 }
 export async function clear() {
   resolver = null; verificationId = null;
-  verifier?.clear(); verifier = null;
+  resetCaptcha();
   await sdk.signOut(auth);
 }

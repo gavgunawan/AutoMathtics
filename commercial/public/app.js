@@ -45,7 +45,13 @@ const PROVIDER = {
 };
 function providerMessage(error) {
   if (PROVIDER[error.code]) return PROVIDER[error.code];
-  const text = String(error.message || '').replace(/^Firebase:\s*/, '').replace(/\s*\(auth\/[a-z-]+\)\.?$/, '').trim();
+  // [^)] rather than [a-z-]: the provider derives a code from its own error text, so one can carry a full stop or
+  // a digit — auth/internal-error-encountered. is a real one — and the narrower class left the entire message in,
+  // which printed the code twice and ended the sentence with two full stops.
+  const text = String(error.message || '').replace(/^Firebase:\s*/, '').replace(/\s*\(auth\/[^)]+\)\.?$/, '').replace(/^Error\.?$/, '').trim();
+  // An internal error with nothing to read is all the provider says when it will not send an SMS — whether our own
+  // resend ladder refused or the provider itself failed. Say what the parent can do about either.
+  if (!text && /^auth\/internal-error/.test(String(error.code || ''))) return 'The sign-in provider could not send a code just now. If you have asked for one already, the next is spaced out \u2014 wait a few minutes and try again. If this was your first try, tell the operator.';
   return `The sign-in provider refused this step (${error.code})${text ? `: ${text.slice(0, 220)}` : ''}. Tell the operator what it says.`;
 }
 // Text-only DOM construction: user nicknames and family labels are never HTML.
@@ -66,9 +72,14 @@ function field(label, type = 'text', options = {}) {
 // The provider's \u201cI\u2019m not a robot\u201d box renders into #recaptcha. It lives inside the screen that needs it, right under the
 // Send button, and the parent is told to tick it: a widget nobody mentioned, appearing under the panel, read as a dead button.
 function captchaBox() { const c = el('div', null, 'captcha'); c.id = 'recaptcha'; return c; }
-// the number in international form, as the provider wants it (spaces, dashes and brackets are fine)
-const e164 = (value) => /^\+[1-9]\d{6,14}$/.test(String(value || '').replace(/[\s().-]/g, ''));
+// The number in international form. Separators are fine to type, and `tidy` removes them before the check AND
+// before the send, so the string that passed the check is the string the provider is given.
+const tidy = (value) => String(value || '').replace(/[\s().-]/g, '');
+const e164 = (value) => /^\+[1-9]\d{6,14}$/.test(tidy(value));
+// the robot check belongs on the screen from the moment it opens, not only once Send has been pressed
+function armCaptcha() { auth().then((a) => a.armCaptcha?.()).catch(() => {}); }
 function panel(kicker, title, subtitle) {
+  authModule?.resetCaptcha?.(); // the robot check belongs to the screen that built it; one left behind strands its frame
   root.replaceChildren();
   const box = el('section', null, 'panel'); box.setAttribute('data-deck', model?.role === 'child' ? 'GRID // ONLINE' : 'MISSION CONTROL // ONLINE'); // the corner tag every deck carries
   box.append(el('p', kicker, 'kicker'), el('h1', title), el('p', subtitle, 'muted'));
@@ -149,9 +160,10 @@ async function authStep(result, afterReady = null) {
   const otp = field('SMS verification code', 'text', { inputMode: 'numeric', pattern: '[0-9]{6}', maxLength: 6, autocomplete: 'one-time-code' });
   box.append(button('Send verification code', async () => {
     if (enrolling && !e164(phone.input.value)) { note('Enter the number in international form, for example +62 812 3456 7890.'); return; }
-    note('Tick \u201cI\u2019m not a robot\u201d just below, then the code is sent.'); await (await auth()).sendCode(phone.input.value, consent.checked); note('Code sent. Enter it below.');
+    note('Tick \u201cI\u2019m not a robot\u201d just below, then the code is sent.'); await (await auth()).sendCode(tidy(phone.input.value), consent.checked); note('Code sent. Enter it below.');
   }, 'ghost'), captchaBox(), otp.wrap,
     button('Verify code', async () => authStep(await (await auth()).confirmCode(otp.input.value), afterReady), 'primary'));
+  armCaptcha();
   if (!enrolling && result.email) box.append(button('I can\u2019t receive the code', () => recoveryScreen(result.email), 'text-button')); // Stage 4.4
 }
 // Stage 4.4: the lost-phone ceremony (RECOVERY.md). No session exists here; the server answers the same for any email.
@@ -425,13 +437,14 @@ function changeMobileScreen() {
     box.append(phone.wrap, consentLabel,
       button('Send code to the new number', async () => {
         if (!e164(phone.input.value)) { note('Enter the number in international form, for example +62 812 3456 7890.'); return; }
-        note('Tick \u201cI\u2019m not a robot\u201d just below, then the code is sent.'); await (await auth()).changeMobileSend(phone.input.value, consent.checked); note('Code sent to the new number. Enter it below.');
+        note('Tick \u201cI\u2019m not a robot\u201d just below, then the code is sent.'); await (await auth()).changeMobileSend(tidy(phone.input.value), consent.checked); note('Code sent to the new number. Enter it below.');
       }, 'ghost'), captchaBox(), otp.wrap,
       button('Verify new number', async () => {
         const r = await (await auth()).changeMobileConfirm(otp.input.value); keepSdkSession = false;
         await api('/auth/logout', {}); channel?.postMessage('changed'); model = null; signInScreen(); note(r.notice); // the next sign-in carries the new factor
       }, 'primary'),
       button('Cancel', async () => { keepSdkSession = false; if (authModule) await authModule.clear(); await refresh(); }, 'ghost'));
+    armCaptcha();
   });
 }
 function pinFields() {
