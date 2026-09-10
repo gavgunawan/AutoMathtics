@@ -292,10 +292,12 @@ the region policy (section 2) still apply underneath.
 
 The browser shows "Try again in …" only when the provider relays the refusal, which arrives as
 `auth/internal-error` carrying `HTTP Cloud Function returned an error … Message: SMS_WAIT:<seconds>`. Do not
-count on it: on 10 Sep 2026 refusals reached the browser as a bare `auth/internal-error-encountered.` with no
-text at all — which decodes back to the provider's own generic "Internal error encountered.", i.e. the provider
-failing rather than our refusal being forwarded. `public/app.js` therefore also answers a refusal it cannot
-read, with a sentence covering both a spaced-out code and a provider fault.
+count on it: no refusal has yet been seen at a browser. The bare `auth/internal-error-encountered.` of
+10 Sep 2026 belongs to a send the ladder *allowed*, and decodes back to the provider's own generic "Internal
+error encountered.", i.e. the provider failing rather than our refusal being forwarded. `public/auth.js` reads
+the wait from the error's code as well as its message, because a provider string with no ` : ` in it is folded
+whole into the code; `public/app.js` answers a refusal that carries nothing at all with a sentence covering
+both a spaced-out code and a provider fault.
 
 **A rung is spent when the provider asks, not when an SMS arrives.** A blocking function is consulted before
 the send and no hook reports delivery, so codes the provider then fails to send still climb the ladder: a

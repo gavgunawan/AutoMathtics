@@ -60,7 +60,8 @@ test('the wiring: the function counts on the number, refuses with SMS_WAIT, writ
   const pkg = JSON.parse(await read('../functions/package.json')); assert.equal(pkg.type, 'module'); assert.equal(pkg.main, 'index.js'); assert.equal(pkg.engines.node, '22');
   assert.deepEqual(pkg.dependencies, { 'firebase-admin': '14.3.0', 'firebase-functions': '7.3.2' });
   const lock = JSON.parse(await read('../functions/package-lock.json')); assert.equal(lock.packages['node_modules/firebase-functions'].version, '7.3.2'); assert.equal(lock.packages['node_modules/firebase-admin'].version, '14.3.0');
-  const client = await read('../public/auth.js'); assert.match(client, /SMS_WAIT:\(\\d\+\)/); assert.match(client, /Try again in/);
+  const client = await read('../public/auth.js'); assert.match(client, /sms\[_-\]wait:\(\\d\+\)/i); // the wait is read from the error code as well as its message
+  assert.match(client, /error\?\.code[^\n]*error\?\.message/, "the wait is read from the error code as well as its message: a provider string with no \" : \" is folded whole into the code"); assert.match(client, /Try again in/);
   const cfg = JSON.parse(await read('../firebase.staging.json')); assert.deepEqual(cfg.functions.map((c) => [c.source, c.runtime]), [['functions', 'nodejs22']]); assert.ok(cfg.functions[0].ignore.includes('node_modules'));
   const block = await read('../scripts/cloudshell/06-sms-ladder.sh');
   for (const s of ['AM_V3_SMS_PEPPER', '--only functions', '--collection-group=smsLadder', 'SMS_LADDER_SERVICE_ACCOUNT', 'beforeSendSms', 'roles/secretmanager.secretAccessor', 'x-goog-user-project', 'roles/run.invoker', 'updateMask=blockingFunctions.triggers.beforeSendSms']) assert.ok(block.includes(s), s);
