@@ -43,6 +43,20 @@ test('the mobile screen checks the international form before asking the provider
   h.setAuth('parentA', { signIn: async () => ({ stage: 'enroll' }), sendCode: async (phone) => { sends.push(phone); } });
   await h.submitLogin(); h.nodes('INPUT')[0].value = '0812 3456 7890'; await h.click('Send verification code');
   assert.ok(h.message.textContent.includes('international form'), h.message.textContent); assert.deepEqual(sends, [], 'nothing asked of the provider');
-  h.nodes('INPUT')[0].value = '+62 812-3456-7890'; await h.click('Send verification code'); assert.deepEqual(sends, ['+62 812-3456-7890']); assert.ok(h.message.textContent.includes('Code sent'));
+  h.nodes('INPUT')[0].value = '+62 812-3456-7890'; await h.click('Send verification code'); assert.deepEqual(sends, ['+6281234567890'], 'tidied to E.164 before the provider sees it'); assert.ok(h.message.textContent.includes('Code sent'));
   assert.ok(h.nodes('DIV').some((d) => d.id === 'recaptcha'), 'the robot check box is inside the screen, under the button');
+});
+test('the number reaches the provider without the separators the parent typed, the robot check is on screen before Send, and a provider code carrying a full stop is reported once in plain words', async (t) => {
+  const h = await uiFixture(t, { signedIn: false }); const sends = []; let armed = 0, next = null;
+  h.setAuth('parentA', { signIn: async () => ({ stage: 'enroll' }), armCaptcha: async () => { armed++; },
+    sendCode: async (phone) => { if (next) throw next; sends.push(phone); } });
+  await h.submitLogin(); await new Promise((r) => setTimeout(r, 0));
+  assert.equal(armed, 1, 'the robot check is rendered when the screen opens, not when Send is pressed');
+  h.nodes('INPUT')[0].value = '+62 812-3456 7890'; await h.click('Send verification code');
+  assert.deepEqual(sends, ['+6281234567890'], 'the provider is given the number in E.164, not as it was typed');
+  next = Object.assign(Error('Firebase: Error (auth/internal-error-encountered.).'), { code: 'auth/internal-error-encountered.' });
+  await h.click('Send verification code'); const said = h.message.textContent;
+  assert.ok(!said.includes('auth/internal-error-encountered.'), said); // the raw code is not shown, let alone twice
+  assert.ok(!said.includes('..'), said);
+  assert.ok(said.includes('could not send a code'), said);
 });
