@@ -1,9 +1,11 @@
 // The SMS resend ladder at the identity provider. Identity Platform asks this function before every verification
 // SMS it would send for the v3 project — a parent enrolling a mobile, the second factor at sign-in — and sends
 // nothing when it refuses. The rules are in ladder.mjs; the refusal is thrown as `SMS_WAIT:<seconds>` inside the
-// provider's error, which public/auth.js turns into "try again in …" — but only if the provider relays it. On
-// 10 Sep 2026 a refusal reached the browser as a bare auth/internal-error-encountered. with no text at all, so the
-// browser is also written to make sense of a refusal it cannot read (public/app.js, providerMessage). Deployed and registered by
+// provider's error, and public/auth.js turns a relayed refusal into "try again in …". A relayed one arrives as
+// auth/internal-error carrying "HTTP Cloud Function returned an error … Message: …"; on 10 Sep 2026 refusals
+// instead reached the browser as a bare auth/internal-error-encountered. with no text, which decodes to the
+// provider's own generic "Internal error encountered." — the provider failing, not our refusal being relayed.
+// public/app.js (providerMessage) therefore also has to answer a refusal it cannot read. Deployed and registered by
 // scripts/cloudshell/06-sms-ladder.sh (DEPLOY_V3.md → section 5, block F). Nothing here reads or writes anything
 // but the ladder's own records.
 //
@@ -69,9 +71,6 @@ export const smsLadder = beforeSmsSent({ region: 'asia-southeast1', serviceAccou
   if (verdict.allowed) console.info(JSON.stringify({ smsLadder: 'allowed', rung: verdict.rung, smsType: event.smsType || null, ms: Date.now() - started })); // the request log alone says nothing about what was asked
   if (!verdict.allowed) {
     console.info(JSON.stringify({ smsLadder: 'refused', rung: verdict.rung, waitSeconds: Math.ceil(verdict.waitMs / 1000), smsType: event.smsType || null }));
-    // invalid-argument (HTTP 400), not resource-exhausted (429): 429 is also what Cloud Run and the provider's own
-    // quota layer emit, so a refusal sent that way reads as a sick function rather than a decision, and the message
-    // is dropped. No " : " in this text either: the browser SDK splits the provider's message on it.
-    throw new HttpsError('invalid-argument', `SMS_WAIT:${Math.ceil(verdict.waitMs / 1000)}`);
+    throw new HttpsError('resource-exhausted', `SMS_WAIT:${Math.ceil(verdict.waitMs / 1000)}`); // no " : " in this text: the browser SDK splits the provider's message on it
   }
 });
