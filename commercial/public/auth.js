@@ -66,7 +66,11 @@ export async function sendCode(phoneNumber, consent) {
 }
 // the SMS resend ladder at the provider (DEPLOY_V3.md, section 5) refuses with SMS_WAIT:<seconds> inside the provider's error
 function providerError(error) {
-  const wait = /SMS_WAIT:(\d+)/.exec(String(error?.message || ''));
+  // Two shapes, because the SDK splits the provider's string on " : ". With that separator present the payload
+  // lands in error.message under auth/internal-error, intact. Without it the SDK folds the whole server string
+  // into the code itself, lowercased with runs of underscores and whitespace turned into dashes — so SMS_WAIT:729
+  // would arrive as the code sms-wait:729. Read both fields, and accept either separator.
+  const wait = /sms[_-]wait:(\d+)/i.exec(`${error?.code || ''} ${error?.message || ''}`);
   return wait ? Error(`Too many codes were sent to this number recently. Try again in ${waitText(Number(wait[1]))}.`) : error;
 }
 // Stage 4 review: a parent whose old phone still works changes the number here — a code to the new number, the new factor

@@ -276,7 +276,9 @@ Then the SMS resend ladder (`scripts/cloudshell/06-sms-ladder.sh`, block F): an 
 that the provider consults before every verification SMS — a parent enrolling a mobile, the second
 factor at sign-in — and that refuses while the number is on a rung it has not waited out: 2 minutes
 after the first code, then 15 minutes, 1 hour, 6 hours, 12 hours, and a day before the seventh; a day
-without a code to that number starts the ladder over (`functions/ladder.mjs`). The record
+without a code to that number starts the ladder over (`functions/ladder.mjs`). The last rung and the
+quiet period are the same day, so a run holds at most six codes and the seventh, a day later, is the
+first rung of a new run. The record
 (`smsLadder/{hmac}`) holds timestamps under an HMAC of the number (secret `AM_V3_SMS_PEPPER`), never
 the number, and expires by TTL after two days. The block creates the secret; the function's own service
 account `automathtics-v3-sms-ladder@PROJECT_ID.iam.gserviceaccount.com`, holding `roles/datastore.user` on
@@ -285,9 +287,24 @@ account carries `roles/firebaseauth.admin` and every server secret, far more tha
 the identity provider should run as); the TTL policy (verified, section 4b); and `functions/.env.PROJECT_ID`
 (that account, no secrets). It deploys the function with the Firebase CLI — which registers it under
 Authentication → Settings → Blocking functions → *Before SMS is sent* — prints that registration, and only
-then takes back the pepper grant an earlier run gave the runtime account. The browser shows "Try again in …"
-when the provider refuses. The provider's own SMS quota and the region policy (section 2) still apply
-underneath.
+then takes back the pepper grant an earlier run gave the runtime account. The provider's own SMS quota and
+the region policy (section 2) still apply underneath.
+
+The browser shows "Try again in …" only when the provider relays the refusal, which arrives as
+`auth/internal-error` carrying `HTTP Cloud Function returned an error … Message: SMS_WAIT:<seconds>`. Do not
+count on it: no refusal has yet been seen at a browser. The bare `auth/internal-error-encountered.` of
+10 Sep 2026 belongs to a send the ladder *allowed*, and decodes back to the provider's own generic "Internal
+error encountered.", i.e. the provider failing rather than our refusal being forwarded. `public/auth.js` reads
+the wait from the error's code as well as its message, because a provider string with no ` : ` in it is folded
+whole into the code; `public/app.js` answers a refusal that carries nothing at all with a sentence covering
+both a spaced-out code and a provider fault.
+
+**A rung is spent when the provider asks, not when an SMS arrives.** A blocking function is consulted before
+the send and no hook reports delivery, so codes the provider then fails to send still climb the ladder: a
+parent hitting a delivery fault is pushed to 15 minutes, then an hour, by failures alone. When that happens,
+clear the number's record before asking them to try again. The ids in `smsLadder` are opaque HMACs that
+nobody can map back to a number, so during the pilot delete the collection's documents in the Firestore
+console (they hold only timestamps and expire by TTL after two days anyway).
 
 The provider gives a blocking function 7 seconds and treats silence as an error, so the function keeps its own
 clock: no record is written once 4 s have passed (a commit landing after the provider gave up would count a

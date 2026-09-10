@@ -2,10 +2,12 @@
 // SMS it would send for the v3 project — a parent enrolling a mobile, the second factor at sign-in — and sends
 // nothing when it refuses. The rules are in ladder.mjs; the refusal is thrown as `SMS_WAIT:<seconds>` inside the
 // provider's error, and public/auth.js turns a relayed refusal into "try again in …". A relayed one arrives as
-// auth/internal-error carrying "HTTP Cloud Function returned an error … Message: …"; on 10 Sep 2026 refusals
-// instead reached the browser as a bare auth/internal-error-encountered. with no text, which decodes to the
-// provider's own generic "Internal error encountered." — the provider failing, not our refusal being relayed.
-// public/app.js (providerMessage) therefore also has to answer a refusal it cannot read. Deployed and registered by
+// auth/internal-error carrying "HTTP Cloud Function returned an error … Message: …". No refusal has yet been seen
+// at a browser: the bare auth/internal-error-encountered. of 10 Sep 2026 belongs to the send this function
+// ALLOWED at 03:36:53Z (HTTP 200, rung 1), and decodes to the provider's own generic "Internal error
+// encountered." — the provider failing, not our refusal being mistranslated. Whether a beforeSmsSent refusal is
+// relayed at all is untested, so public/app.js (providerMessage) also answers a refusal it cannot read.
+// Deployed and registered by
 // scripts/cloudshell/06-sms-ladder.sh (DEPLOY_V3.md → section 5, block F). Nothing here reads or writes anything
 // but the ladder's own records.
 //

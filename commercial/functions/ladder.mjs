@@ -9,8 +9,14 @@
 //   7th  a day after the 6th
 // The sends to a number form a *run*; a day without a code to that number ends the run, and the next code is
 // the first rung again. Inside a run every send counts, however old — the third code waits its fifteen minutes
-// even when the first was sent yesterday — so the seventh really is a day after the sixth, and that day of quiet
-// is what starts the ladder over. The number itself is never stored: the record key is an HMAC of the E.164
+// even when the first was sent yesterday. The sixth rung and the quiet period are the same day, and `currentRun`
+// ends a run on a gap of exactly that length, so the seventh code arrives a day after the sixth as the policy
+// says but as the FIRST rung of a fresh run: six codes is the most a run ever holds, and the code after the
+// wait starts the ladder over rather than extending it. That is the more forgiving reading of the two rules.
+//
+// A rung is spent when Identity Platform ASKS permission, which is the only moment a blocking function sees.
+// No hook reports delivery, so codes that the provider then fails to send still climb the ladder, and a parent
+// hitting a delivery fault is pushed up the rungs by failures alone (DEPLOY_V3.md says how to clear a record). The number itself is never stored: the record key is an HMAC of the E.164
 // number under a pepper the function reads from Secret Manager. Pure — no I/O and no clock of its own — so the
 // same rules run in the unit tests (tests/sms-ladder.test.mjs).
 import { createHmac } from 'node:crypto';
