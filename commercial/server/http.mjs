@@ -46,6 +46,17 @@ async function body(req) {
   const raw = await rawBody(req, 16_384);
   try { return JSON.parse(raw.toString('utf8')); } catch { fail(400, 'INVALID_JSON'); }
 }
+// RFC 8058 one-click unsubscribe: the mailbox provider POSTs the one field List-Unsubscribe=One-Click, as multipart/form-data
+// (which the RFC prefers) or form-encoded. True when the body says exactly that.
+async function oneClick(req) {
+  const type = (req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+  if (type !== 'application/x-www-form-urlencoded' && type !== 'multipart/form-data') fail(415, 'FORM_REQUIRED');
+  if (req.headers['content-encoding'] && req.headers['content-encoding'] !== 'identity') fail(415, 'ENCODING_UNSUPPORTED');
+  let total = 0; const parts = [];
+  for await (const chunk of req) { total += chunk.length; if (total > 4096) fail(413, 'REQUEST_TOO_LARGE'); parts.push(chunk); }
+  const text = Buffer.concat(parts).toString('utf8');
+  return type === 'multipart/form-data' ? /name="List-Unsubscribe"\r?\n(?:[^\r\n]+\r?\n)*\r?\nOne-Click\r?\n/i.test(text) : new URLSearchParams(text).get('List-Unsubscribe') === 'One-Click';
+}
 export function createApp(service, cfg, { publicDir = new URL('../public/', import.meta.url), reportError = () => {}, learning = null, game = null, billing = null, payments = null, support = null, recovery = null, email = null, peerFactor = 20 } = {}) {
   // A session cookie lives exactly as long as the session row it names (F12), read back from the row the service has just
   // written: 30 minutes for a parent, 12 hours on the launch pad, or what is left of 30 days on a remembered device. The
@@ -125,6 +136,21 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
           throw error;
         }
       }
+      // email-v1 unsubscribe. A GET is a person clicking the List-Unsubscribe link, or a scanner: nothing changes, the app opens
+      // on the same token and asks. A POST is the mailbox provider's RFC 8058 one-click, cross-site with no cookie, Origin or CSRF
+      // token, so it sits here before those checks, like the webhooks: the signed token is its whole authentication, it can only
+      // switch the weekly report off, and a failed token is budgeted per address.
+      if (email && path === '/api/email/unsubscribe') {
+        const t = new URL(req.url, cfg.origin).searchParams.get('t') || '';
+        if (req.method === 'GET') { res.statusCode = 303; res.setHeader('Location', /^v1\.[A-Za-z0-9_-]{1,2048}\.[A-Za-z0-9_-]{43}$/.test(t) ? `/?email=${t}` : '/'); return res.end(); }
+        if (req.method !== 'POST') fail(405, 'METHOD_NOT_ALLOWED');
+        if (!(await oneClick(req))) fail(400, 'ONE_CLICK_REQUIRED');
+        try { const done = await email.unsubscribe(t); res.statusCode = 200; res.setHeader('Content-Type', 'text/plain; charset=utf-8'); return res.end(done.message); }
+        catch (error) {
+          if (error instanceof Fault && error.status < 500) { try { await spend('unsubscribe-fail', req, 60, 10 * 60_000); } catch (limit) { if (limit instanceof Fault && limit.status === 429) throw limit; } }
+          throw error;
+        }
+      }
       if (req.headers['sec-fetch-site'] && !['same-origin', 'none'].includes(req.headers['sec-fetch-site'])) fail(403, 'ORIGIN_DENIED');
       let token = cookieToken(req);
       const stored = /^[A-Za-z0-9_-]{43}$/.test(token || '') ? await service.store.get(`sessions/${sha256(token)}`) : null;
@@ -189,6 +215,14 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
         throttle(`consent:${clientAddress(req, cfg.proxyHops)}`, 20, 60 * 60_000); throttle(`consent:peer:${peerAddress(req)}`, 20 * peerFactor, 60 * 60_000);
         throttle('consent:all', 200, 60 * 60_000);
         return json(200, await email.consent(data));
+      }
+      // email-v1: the app's panel for an email button (/?email=<token>): what the button does, then, on a tap, doing it. Before any
+      // session like recovery, so it works signed in or not: Origin and CSRF as for any POST, budgets per address, per peer and per
+      // instance. The signed token is the authority; the server re-checks the family, its owner and the child every time.
+      if (email && req.method === 'POST' && (path === '/api/email/describe' || path === '/api/email/apply')) {
+        throttle(`email-button:${clientAddress(req, cfg.proxyHops)}`, 20, 60 * 60_000); throttle(`email-button:peer:${peerAddress(req)}`, 20 * peerFactor, 60 * 60_000);
+        throttle('email-button:all', 200, 60 * 60_000);
+        return json(200, path === '/api/email/describe' ? await email.describe(data) : await email.apply(data));
       }
       if (stored) throttle(`session:${sha256(token)}`, 120, 60_000);
       const ctx = await service.authenticate(token);

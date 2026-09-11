@@ -35,6 +35,7 @@ const messages = {
   ITEM_ALREADY_OWNED: 'You already own that item.', SHIELD_LIMIT: 'You can hold at most two streak shields.',
   EGG_ALREADY_WARMING: 'Your Mystery Egg is already warming.', REWARD_DAILY_LIMIT: 'That reward has reached its daily limit.',
   SCAN_ALREADY_DONE: 'System Scan is already complete this week.', SCAN_LOCKED: 'System Scan unlocks in Sector B after the first tier.',
+  LINK_INVALID: 'This link does not work. Nothing was changed.', LINK_EXPIRED: 'This link has expired; the next weekly email brings fresh ones. Nothing was changed.', LINK_GONE: 'The family or child this link was for is no longer there. Nothing was changed.',
 };
 // The sign-in provider's own refusals: in the parent's words where the cause is known, otherwise the provider's code and text,
 // so that a failure can be reported and matched against the provider's own log (the one generic sentence used to hide everything).
@@ -540,6 +541,21 @@ function emailBlock(prefs) {
   }, 'ghost'));
   return wrap;
 }
+// email-v1: a button in the weekly email opens the app with its signed token (?email=). Link scanners and mail previews open it
+// too, so nothing changes on arrival: the server says what the button does, and only Confirm sends it. Works signed in or not.
+async function emailScreen(token) {
+  const d = await api('/email/describe', { t: token });
+  transientView = true;
+  if (!d.valid) {
+    const box = panel('EMAIL BUTTON', 'This link no longer works.', d.reason === 'expired' ? 'Buttons in the weekly email work for 14 days (a year to stop the report); the next email brings fresh ones. Nothing was changed.' : 'The family or child it was for may be gone, or the link was changed on the way. Nothing was changed.');
+    onBack = refresh; box.append(button('Close', refresh, 'ghost')); return;
+  }
+  const what = d.action === 'pace' ? `Set ${d.nickname}’s question time to ${d.value}% (now ${d.current}%).`
+    : d.action === 'focus' ? (d.value ? `Focus ${d.nickname}’s weekly System Scan on the weak spots: about 75% of its questions on what ${d.nickname} gets wrong or slow, 25% recap.` : `Switch ${d.nickname}’s System Scan focus off: back to the normal mix.`)
+    : `Stop the weekly progress report for ${d.email || 'this account'}. Account and security emails still come.`;
+  const box = panel('EMAIL BUTTON', 'Confirm this change', what); onBack = refresh;
+  box.append(button('Confirm', async () => { const r = await api('/email/apply', { t: token }); await refresh(); note(r.message); }, 'primary'), button('Cancel', async () => { await refresh(); note('Nothing was changed.'); }, 'ghost'));
+}
 // Stage 4 review: the parent still has the old phone and wants a new number on the account (RECOVERY.md). A fresh sign-in
 // first — password and a code to the old number — then a code to the new number; the new factor is enrolled before the old
 // one goes, so there is never a moment without a second factor. The server is not involved: its next sign-in sees the new
@@ -846,6 +862,13 @@ if (returned?.get('checkout')) {
   if (typeof history === 'object' && history?.replaceState) history.replaceState(null, '', location.pathname);
   if (returned.get('result') === 'success') { note('Payment received. Your plan updates as soon as the payment provider confirms it; this page checks again in a moment.'); setTimeout(() => { if (!working) run(refresh); }, 4000); }
   else note('Checkout cancelled. Nothing was charged.');
+}
+// email-v1: a button in the weekly email. The address is tidied at once, so a reload or a bookmark made now does not reopen it;
+// the panel asks before anything changes (emailScreen).
+if (returned?.get('email')) {
+  const token = returned.get('email');
+  if (typeof history === 'object' && history?.replaceState) history.replaceState(null, '', location.pathname);
+  await run(() => emailScreen(token));
 }
 // Back stays inside v3, as far as a browser lets a page decide. The owner (11 Sep 2026) pressed Back on the kids' page and landed on the old v2 site: not a
 // link — v3 has none — but the browser's own history, because that tab showed v2 before v3 was opened in it. So

@@ -26,10 +26,12 @@ export function control(root, label) {
 }
 // clock: a function returning the time the page reads from Date.now(), for tests that count down (omit for real time)
 // storage: a stand-in for the page's localStorage (omit: the page has none, as in a browser that blocks site data)
-// location: the page's address, e.g. { search: '?resetsms', pathname: '/' } (omit: no location, as before)
+// location: the page's address, e.g. { search: '?resetsms', pathname: '/' } (omit: no location, as before), or an async
+// function (f, a) → that address, run before the page loads, for an address that needs the fixture's ids (an email button)
 export async function uiFixture(t, { family = true, signedIn = true, clock = null, storage = null, location = null } = {}) {
   const f = fixture();
   const a = signedIn ? (family ? await f.family('parentA', 2) : await f.login('parentA')) : null;
+  if (typeof location === 'function') location = await location(f, a);
   const cfg = { origin: 'http://127.0.0.1', secret, emulator: true, web: { authDomain: 'demo-am-foundation.firebaseapp.com' } };
   const server = createApp(f.service, cfg, { learning: f.learning, game: f.game, billing: f.billing, email: f.email }); server.listen(0, '127.0.0.1'); await once(server, 'listening');
   cfg.origin = `http://127.0.0.1:${server.address().port}`;
