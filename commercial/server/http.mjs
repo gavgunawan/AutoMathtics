@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { Fault, fail, equal, object, preauth, preauthCsrf, sha256 } from './security.mjs';
 import { WEBHOOK_BODY_LIMIT } from './payments.mjs';
+import { REMEMBER_MS } from './service.mjs';
 
 // Firebase Hosting forwards only the specially named __session cookie to Cloud Run.
 const COOKIE = '__session';
@@ -47,10 +48,14 @@ async function body(req) {
 }
 export function createApp(service, cfg, { publicDir = new URL('../public/', import.meta.url), reportError = () => {}, learning = null, game = null, billing = null, payments = null, support = null, recovery = null, peerFactor = 20 } = {}) {
   // A session cookie lives exactly as long as the session row it names (F12), read back from the row the service has just
-  // written: 30 minutes for a parent, 12 hours on the launch pad, or what is left of 30 days on a remembered device.
+  // written: 30 minutes for a parent, 12 hours on the launch pad, or what is left of 30 days on a remembered device. The
+  // rotation has already committed, so a failed read never fails the request (review of PR #44): the cookie then gets the
+  // longest life any session can have, and the row's own expiry still ends the session on time.
   async function sessionCookie(res, token) {
-    const row = await service.store.get(`sessions/${sha256(token)}`);
-    setCookie(res, token, row ? Math.max(1, Math.ceil((row.expiresAt - service.now()) / 1000)) : 0);
+    let row = null;
+    try { row = await service.store.get(`sessions/${sha256(token)}`); } catch { /* committed already: sized by the ceiling */ }
+    const left = row ? Math.ceil((row.expiresAt - service.now()) / 1000) : 0;
+    setCookie(res, token, left > 0 ? left : Math.ceil(REMEMBER_MS / 1000));
   }
   function setCookie(res, value, maxAge) {
     res.setHeader('Set-Cookie', `${COOKIE}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${cfg.emulator ? '' : '; Secure'}`);
