@@ -46,7 +46,7 @@ async function body(req) {
   const raw = await rawBody(req, 16_384);
   try { return JSON.parse(raw.toString('utf8')); } catch { fail(400, 'INVALID_JSON'); }
 }
-export function createApp(service, cfg, { publicDir = new URL('../public/', import.meta.url), reportError = () => {}, learning = null, game = null, billing = null, payments = null, support = null, recovery = null, peerFactor = 20 } = {}) {
+export function createApp(service, cfg, { publicDir = new URL('../public/', import.meta.url), reportError = () => {}, learning = null, game = null, billing = null, payments = null, support = null, recovery = null, email = null, peerFactor = 20 } = {}) {
   // A session cookie lives exactly as long as the session row it names (F12), read back from the row the service has just
   // written: 30 minutes for a parent, 12 hours on the launch pad, or what is left of 30 days on a remembered device. The
   // rotation has already committed, so a failed read never fails the request (review of PR #44): the cookie then gets the
@@ -183,6 +183,13 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
         throttle('recovery:all', 200, 60 * 60_000); // per instance: probing many addresses at once is capped whatever the keys say
         return json(200, path.endsWith('/start') ? await recovery.start(data) : await recovery.complete(data));
       }
+      // email-v1: the sign-up boxes are recorded before any session exists, like recovery: the same Origin and pre-authentication
+      // CSRF checks, budgets per address, per peer and per instance; the new account's own ID token is the proof (server/email.mjs).
+      if (email && req.method === 'POST' && path === '/api/auth/consent') {
+        throttle(`consent:${clientAddress(req, cfg.proxyHops)}`, 20, 60 * 60_000); throttle(`consent:peer:${peerAddress(req)}`, 20 * peerFactor, 60 * 60_000);
+        throttle('consent:all', 200, 60 * 60_000);
+        return json(200, await email.consent(data));
+      }
       if (stored) throttle(`session:${sha256(token)}`, 120, 60_000);
       const ctx = await service.authenticate(token);
       if (req.method === 'GET' && path === '/api/me') return json(200, await service.me(ctx));
@@ -213,6 +220,7 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
       if (support && path === '/api/family/deletion') return json(200, await support.requestDeletion(ctx, data));
       if (support && path === '/api/family/deletion/cancel') return json(200, await support.cancelDeletion(ctx, data));
       if (support && path === '/api/account/deletion') return json(200, await support.deleteAccount(ctx, data)); // Stage 4: the sign-in account, once no family remains
+      if (email && path === '/api/account/email') return json(200, await email.setPrefs(ctx, data)); // email-v1: Mission Control's switches (recent sign-in)
       if (game && path === '/api/game/shop/buy') return json(200, await game.buy(ctx, data));
       if (game && path === '/api/game/shop/equip') return json(200, await game.equip(ctx, data));
       if (game && path === '/api/game/rewards/redeem') return json(200, await game.redeem(ctx, data));

@@ -31,7 +31,7 @@ export async function uiFixture(t, { family = true, signedIn = true, clock = nul
   const f = fixture();
   const a = signedIn ? (family ? await f.family('parentA', 2) : await f.login('parentA')) : null;
   const cfg = { origin: 'http://127.0.0.1', secret, emulator: true, web: { authDomain: 'demo-am-foundation.firebaseapp.com' } };
-  const server = createApp(f.service, cfg, { learning: f.learning, game: f.game, billing: f.billing }); server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const server = createApp(f.service, cfg, { learning: f.learning, game: f.game, billing: f.billing, email: f.email }); server.listen(0, '127.0.0.1'); await once(server, 'listening');
   cfg.origin = `http://127.0.0.1:${server.address().port}`;
   t.after(() => { server.closeAllConnections(); server.close(); });
   let cookie = a ? `__session=${a.cookie}` : '';

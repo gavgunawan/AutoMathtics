@@ -282,10 +282,14 @@ function signInScreen(signup = false, afterReady = null, reauth = false) {
   const email = field('Parent email', 'email', { autocomplete: 'email', maxLength: 254 });
   const password = field('Password', 'password', { autocomplete: signup ? 'new-password' : 'current-password', minLength: signup ? 12 : 1, maxLength: 128 });
   const submit = el('button', signup ? 'Create parent account' : 'Sign in as parent', 'primary'); submit.type = 'submit';
-  form.append(email.wrap, password.wrap, submit);
+  const consent = signup ? consentBoxes() : null; // email-v1: the two sign-up boxes
+  form.append(email.wrap, password.wrap, ...(consent ? consent.labels : []), submit);
   form.onsubmit = (event) => { event.preventDefault(); run(async () => {
+    if (consent && !consent.agreed()) { note('Tick the first box to create the account: account and progress emails are part of the service. News and offers stay optional.'); return; }
     const a = await auth(); const value = password.input.value; password.input.value = '';
-    await authStep(await (signup ? a.signUp(email.input.value, value) : a.signIn(email.input.value, value)), afterReady);
+    const result = await (signup ? a.signUp(email.input.value, value) : a.signIn(email.input.value, value));
+    if (consent) await recordConsent(a, consent.news());
+    await authStep(result, afterReady);
   }); };
   box.append(form);
   if (reauth) box.append(button('Cancel verification', cancelVerification, 'ghost'));
@@ -293,6 +297,20 @@ function signInScreen(signup = false, afterReady = null, reauth = false) {
   if (!signup && !reauth) box.append(button('Forgot password?', async () => { if (!email.input.checkValidity()) { email.input.reportValidity(); return; }
     await (await auth()).resetPassword(email.input.value); note('If this email can receive a reset link, one has been requested. Mobile verification is still required.'); }, 'text-button'));
   box.append(el('p', 'EMAIL VERIFIED  //  MOBILE VERIFIED  //  FAMILY-ONLY ACCESS', 'trust'));
+}
+// email-v1: the sign-up boxes. The first (account, progress and service emails) is required; the second (news and offers) is
+// optional and starts unticked, because consent made a condition of sign-up is not consent. The server records both.
+function consentBoxes() {
+  const box = (words) => { const l = el('label', null, 'check'), i = el('input'); i.type = 'checkbox'; l.append(i, el('span', words)); return { l, i }; };
+  const need = box('Send me emails about my account and my children’s progress: a weekly progress report, security notices and service updates. I can turn the weekly report off at any time.');
+  const news = box('Also send me news and offers from AutoMathtics. Optional; unsubscribe at any time.');
+  return { labels: [need.l, news.l], agreed: () => need.i.checked === true, news: () => news.i.checked === true };
+}
+// The choice is recorded by the server, from the new account's own ID token, the moment the account exists. A failure never
+// blocks the sign-up: the defaults then apply (the weekly report on, news off), and Mission Control can change both later.
+async function recordConsent(a, news) {
+  try { const idToken = await a.idToken?.(); if (!idToken) return; csrf = (await api('/bootstrap')).csrf; await api('/auth/consent', { idToken, news }); }
+  catch { /* the defaults apply */ }
 }
 async function cancelVerification() {
   reauthEpoch++; keepSdkSession = false;
@@ -489,6 +507,7 @@ async function parentScreen() {
   if (family.children.length) row.append(button('Game & progress', parentGameScreen, 'ghost'));
   row.append(button('Sign out', signOut, 'ghost')); box.append(row);
   if (model?.rememberedUntil) box.append(el('p', `This device stays signed in until ${new Date(model.rememberedUntil).toLocaleDateString()}. Sign out to forget it.`, 'notice')); // Remember this device
+  box.append(emailBlock(model.emailPrefs)); // email-v1: the weekly report and news switches
   box.append(button('Change my mobile number', changeMobileScreen, 'text-button')); // Stage 4 review: the old phone still works, the number is changing
   for (const child of family.children) { box.append(button(`Reset ${child.nickname}\u2019s PIN`, () => resetPinScreen(child), 'text-button')); box.append(button(`Change ${child.nickname}\u2019s starting point`, () => startScreen(child), 'text-button')); }
   // Stage 3.5: the family's own data to keep, and the way to leave — 14 days to change your mind
@@ -506,6 +525,20 @@ async function parentScreen() {
   }
   box.append(keep);
   box.append(el('p', `Family reference: ${family.id}`, 'reference'));
+}
+// email-v1: Mission Control's Email updates block, the switches as the server holds them (/api/me). Saving needs a recent sign-in
+// (a child at a remembered, open Mission Control must not switch the report off); after one the parent sets the switches again,
+// because a change is never sent by itself.
+function emailBlock(prefs) {
+  const wrap = el('div', null, 'track'); wrap.append(el('strong', 'Email updates'));
+  const sw = (words, detail, on) => { const l = el('label', null, 'check'), i = el('input'), s = el('span', words); i.type = 'checkbox'; i.checked = on; s.append(el('small', detail)); l.append(i, s); wrap.append(l); return i; };
+  const progress = sw('Weekly progress report', 'Every Monday: what each child got right and fast, right but slow, and wrong again and again, with a suggested pace.', prefs?.progress !== false);
+  const news = sw('News and offers', 'Occasional news and offers from AutoMathtics.', prefs?.news === true);
+  wrap.append(el('span', 'Account and security emails always come.', 'card-meta'), button('Save email settings', async () => {
+    try { await api('/account/email', { progress: progress.checked === true, news: news.checked === true }); await refresh(); note('Email settings saved.'); }
+    catch (error) { if (error.code !== 'REAUTHENTICATE') throw error; reauthenticate(async () => { await refresh(); note('Parent verified. Set the switches again, then save.'); }); }
+  }, 'ghost'));
+  return wrap;
 }
 // Stage 4 review: the parent still has the old phone and wants a new number on the account (RECOVERY.md). A fresh sign-in
 // first — password and a code to the old number — then a code to the new number; the new factor is enrolled before the old

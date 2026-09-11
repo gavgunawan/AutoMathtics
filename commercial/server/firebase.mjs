@@ -48,6 +48,8 @@ export class FirebaseIdentity {
   }
   /** Signature and expiry only, from cached keys — no network: the login route asks this before spending anything on a token. */
   async verifyLocal(idToken) { try { await this.auth.verifyIdToken(idToken, false); return true; } catch { return false; } }
+  /** email-v1: the uid a token proves, from its signature and expiry only — at sign-up no second factor exists yet (server/email.mjs consent). */
+  async verifyUid(idToken) { try { const d = await this.auth.verifyIdToken(idToken, false); return typeof d?.uid === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(d.uid) ? d.uid : null; } catch { return null; } }
   /** Stage 4.4: the one privileged identity change this server makes — Recovery.complete only, after the ceremony (RECOVERY.md). */
   async unenrollFactors(uid) { this.cache.delete(uid); await this.auth.updateUser(uid, { multiFactor: { enrolledFactors: null } }); this.cache.delete(uid); }
   async lookup(uid, fresh = false) {

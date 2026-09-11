@@ -17,6 +17,7 @@ import { reconcile } from './ledger.mjs';
 import { deriveState, effectiveEntitlement } from './subscription.mjs';
 import { sweepSessions, RECOVERY_WINDOW_MS } from './recovery.mjs';
 import { INTENT_INFLIGHT_MS, AWAITING_PAYMENT_MS } from './payments.mjs';
+import { prefsOf, prefsPath } from './email.mjs';
 
 const DAY = 86_400_000, AUDIT_RETENTION_MS = 400 * DAY;
 export const DELETION_GRACE_MS = 14 * DAY;
@@ -79,10 +80,13 @@ export class Support {
     const config = stored ? Object.fromEntries(Object.entries(stored).filter(([k]) => k !== 'rocketMigration')) : null;
     const billing = (await tx.list(`families/${f}/billing`)).sort((a, b) => a.at - b.at)
       .map((e) => ({ id: e.id, type: e.type, plan: e.plan, periodEnd: e.periodEnd, amountCents: e.amountCents ?? null, at: e.at, actor: e.actor, state: e.result?.state || null }));
+    // email-v1: the owner's email choices, with their history; the address itself stays with the identity provider
+    const emailPrefs = [];
+    for (const [owner, m] of await tx.entries(`families/${f}/members`)) if (m.role === 'owner') { const d = await tx.get(prefsPath(owner)); emailPrefs.push({ uid: owner, ...prefsOf(d), version: d?.version || null, updatedAt: d?.updatedAt || null, changes: d?.changes || [] }); }
     const trail = await this.familyAudit(tx, f), audit = trail.rows.map((a) => ({ action: a.action, at: a.at, childId: a.childId || null })); // every row of this family's, in pages (fourth round)
     return { exportedAt: this.now(), exportedBy: uid,
       family: { id: f, label: family.label, createdAt: family.createdAt, timeZone: family.timeZone || null, activeChildIds: family.activeChildIds || [], deletion: family.deletion || null },
-      entitlement: effectiveEntitlement(family, this.now()), subscription: family.subscription || null, billing, gameConfig: config || null, children, audit, auditTruncated: trail.truncated };
+      entitlement: effectiveEntitlement(family, this.now()), subscription: family.subscription || null, billing, gameConfig: config || null, children, emailPrefs, audit, auditTruncated: trail.truncated };
   }
   /** Every audit row of one family, oldest first, read in pages under the reader given (a transaction or the store); `truncated` only past the cap. */
   async familyAudit(reader, familyId) {
@@ -161,6 +165,7 @@ export class Support {
     const now = this.now();
     tx.set(`parents/${uid}`, { ...parent, deleted: true, deletedAt: parent.deletedAt || now, familyId: null, reauthAfter: Math.max(parent.reauthAfter || 0, Math.floor(now / 1000)), phoneKey: parent.phoneKey || null,
       identityDeletion: { requestedAt: parent.identityDeletion?.requestedAt || now, requestedBy: parent.identityDeletion?.requestedBy || actor, deletedAt: parent.identityDeletion?.deletedAt || null } });
+    tx.delete(prefsPath(uid)); // email-v1: the account's email choices go with it; nothing is sent to an account being deleted
     this.audit(tx, 'account.deletion_started', actor, null, { subject: uid });
     return { uid };
   }
