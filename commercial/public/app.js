@@ -99,16 +99,32 @@ const tidy = (value) => String(value || '').replace(/[\s().-]/g, '');
 const e164 = (value) => /^\+[1-9]\d{6,14}$/.test(tidy(value));
 // the robot check belongs on the screen from the moment it opens, not only once Send has been pressed
 function armCaptcha() { auth().then((a) => a.armCaptcha?.()).catch(() => {}); }
+// A child's equipped background dresses that child's screens only (data-bg on <html> and the #decor layer behind #app): the
+// launch pad and every parent screen take it off again.
+function clearLook() { document.documentElement?.removeAttribute('data-bg'); document.getElementById?.('decor')?.replaceChildren(); }
+// The shell follows the role: styles.css hides the parents' masthead from the launch pad and a child's screens, and the footer
+// from those. Set as soon as /me answers, so a kid's device does not show the parents' masthead while its first screen loads.
+function setMode() {
+  const mode = model?.role === 'child' ? 'kid' : model?.role === 'selector' ? 'select' : 'parent';
+  document.documentElement?.setAttribute('data-mode', mode); if (mode !== 'kid') clearLook();
+}
 // variant: one of v2's narrower cards (narrow 420px, w460, w520) or a screen's own class
 function panel(kicker, title, subtitle, variant = '') {
   authModule?.resetCaptcha?.(); // the robot check belongs to the screen that built it; one left behind strands its frame
   stopSendClock(); screenId++; onBack = null; // the same for the Send countdown, and Back is each screen's to set again
-  root.replaceChildren();
-  // the shell follows the role: styles.css hides the parents' masthead from the launch pad and a child's screens, and the footer from those
-  document.documentElement?.setAttribute('data-mode', model?.role === 'child' ? 'kid' : model?.role === 'selector' ? 'select' : 'parent');
+  root.replaceChildren(); setMode();
   const box = el('section', null, variant ? `panel ${variant}` : 'panel');
   box.append(el('p', kicker, 'kicker'), el('h1', title), el('p', subtitle, 'intro muted'));
   root.append(box); return box;
+}
+// The DOM a test runs this page in has no prepend or insertBefore: a node goes first by rebuilding the list.
+const putFirst = (box, node) => box.replaceChildren(node, ...box.children);
+// a phone or tablet: the on-screen keypad is the keyboard, so the system one is not opened over it
+const coarse = () => Boolean(window.matchMedia?.('(pointer: coarse)')?.matches);
+// one key of v2's keypad (st.key 3769): it edits a field, it never submits a form by itself
+function padKey(label, press, extra = '', aria = '') {
+  const b = el('button', label, extra ? `padkey ${extra}` : 'padkey'); b.type = 'button'; b.onclick = press;
+  if (aria) b.setAttribute('aria-label', aria); return b;
 }
 // v2's message colours: mint for a ✓ line, red for a refusal (tone 'bad', from run) or a ✗ or ⚠ line, gold for the rest
 function note(text, tone) {
@@ -183,12 +199,12 @@ async function api(path, payload, requestId) {
 async function refresh() {
   transientView = false;
   csrf = (await api('/bootstrap')).csrf;
-  try { model = await api('/me'); csrf = model.csrf; await renderModel(); }
+  try { model = await api('/me'); csrf = model.csrf; setMode(); await renderModel(); }
   catch (error) {
     if (error.code === 'SIGN_IN_REQUIRED' || error.code === 'SESSION_REVOKED') { model = null; signInScreen(); return; }
     // a child whose seat, PIN or subscription changed under the device goes back to the launch pad — never a dead screen (Stage 4 review, third round)
     if (['CHILD_INACTIVE', 'CHILD_SESSION_REVOKED', 'SUBSCRIPTION_INACTIVE'].includes(error.code)) {
-      try { await api('/session/select', {}); model = await api('/me'); csrf = model.csrf; await renderModel(); }
+      try { await api('/session/select', {}); model = await api('/me'); csrf = model.csrf; setMode(); await renderModel(); }
       catch { model = null; signInScreen(); }
       note(messages[error.code] || 'Please choose an explorer again.'); return;
     }
@@ -370,11 +386,11 @@ function familySetup(draft = {}) {
     }, 'primary'), button('Sign out', signOut, 'ghost'));
   box.append(el('p', 'No family? You can also remove this sign-in account entirely.', 'small muted'), leave);
 }
-function cards(children, action) {
-  const grid = el('div', null, 'player-grid');
+// The parent's crew cards (their v2 rebuild is port plan step 12); v2's .player-card is the launch pad's alone.
+function cards(children) {
+  const grid = el('div', null, 'crew-grid');
   for (const child of children) {
-    const card = el(action ? 'button' : 'div', null, 'player-card');
-    if (action) { card.type = 'button'; card.onclick = () => run(() => action(child)); }
+    const card = el('div', null, 'crew-card');
     const frame = el('span', null, 'avatar-frame'); frame.append(el('span', icons[child.icon] || icons.robot, 'avatar'));
     card.append(frame, el('strong', child.nickname), el('span', child.status === 'active' ? 'READY FOR THE GRID' : 'PROFILE INACTIVE', 'card-meta'));
     if (child.yearLevel) card.append(el('span', `Year ${child.yearLevel}${child.start === 'test' ? ' · placement test' : ''}`, 'card-meta'));
@@ -620,18 +636,64 @@ function resetPinScreen(child) {
     }
   }, 'primary'), button('Back', refresh, 'ghost'), button('Reauthenticate parent', () => reauthenticate(() => resetPinScreen(child)), 'text-button'));
 }
+// ---- the launch pad and the kid's PIN (v2 player selection 2392-2442, kidPin 2445-2465) ----
+// A child's colour is its place in the family (S1 accent, styles.css acc-N: v2's new-player palette).
+const accClass = (child) => `acc-${Number.isInteger(child?.accent) && child.accent >= 0 ? child.accent % 6 : 0}`;
+// A child's avatar: the icon emoji in v2's makeAvatar look (106-107), a dark disc ringed in the child's colour. v3 keeps no
+// photos of children, so the icon stands where v2 showed Allison's and Geralt's (port plan, question 2).
+function avatarBadge(child, size) {
+  const disc = el('span', icons[child?.icon] || icons.robot, `av av-${size} ${accClass(child)}`); disc.setAttribute('aria-hidden', 'true');
+  return disc;
+}
+// v2's player card: the frame with its halo rings, the name in its name effect, and what the child wears (S1: /me sends the
+// look, never the wallet) — the title or MISSION READY, then pet and outfit, then vehicle (v2 2416). The button's class is
+// exactly player-card; the colour rides an inner span, which carries the card's face.
+function playerCard(child, pick) {
+  const a = child.appearance || {}, card = el('button', null, 'player-card'); card.type = 'button';
+  card.onclick = () => run(() => pick(child)); card.setAttribute('aria-label', `Play as ${child.nickname}`);
+  const face = el('span', null, `player-card-face ${accClass(child)}`), frame = el('span', null, 'player-avatar-frame');
+  if (a.ring === 'ring_prestige') frame.append(el('span', null, 'frame-prestige'));
+  frame.append(el('span', icons[child.icon] || icons.robot, 'player-avatar'));
+  const meta = el('span', null, 'player-meta');
+  meta.append(el('span', null, 'status-dot'), `${a.title?.name || 'MISSION READY'}${a.pet ? ` · ${a.pet.emoji}${a.outfit?.emoji || ''}` : ''}${a.vehicle ? ` ${a.vehicle.emoji}` : ''}`);
+  const go = el('span', 'ENTER GRID ', 'player-enter'); go.append(el('span', '→'));
+  face.append(el('span', null, 'player-card-grid'), frame, el('span', child.nickname, `player-name ${lookup(NAMEFX_CLASS, a.nameFx)}`.trim()), meta, go);
+  card.append(face); return card;
+}
 function selectorScreen() {
-  const box = panel('LAUNCH PAD · PARENT ACCESS LOCKED', 'Who is on a mission today?', 'Pick your explorer and enter your PIN. Parent settings stay locked until a parent signs in again.');
-  box.append(cards(model.family.children.filter((c) => c.status === 'active'), (child) => {
-    transientView = true;
-    const pane = panel('YOUR PRIVATE GRID', child.nickname, 'Enter your six-digit PIN.');
-    onBack = refresh; // back to the launch pad, as "Choose another child"
-    const p = field('Child PIN', 'password', { inputMode: 'numeric', maxLength: 6, pattern: '[0-9]{6}', autocomplete: 'off' });
-    const enter = async () => { const code = p.input.value; p.input.value = ''; await api(`/children/${child.id}/enter`, { pin: code }); channel?.postMessage('changed'); await refresh(); };
-    p.input.addEventListener('keydown', (event) => { if (event.key === 'Enter') run(enter); });
-    pane.append(p.wrap, button('Enter my grid', enter, 'primary'), button('Choose another child', refresh, 'ghost'));
-    p.input.focus();
-  }), button('Return to parent sign-in', () => signInScreen(), 'ghost'), button('Sign out', signOut, 'text-button'));
+  const box = panel('AUTOMATHTICS · MATH GRID', 'PLAYER SELECTION', 'who\'s on a mission today?', 'select-shell');
+  const grid = el('div', null, 'player-grid');
+  for (const child of model.family.children.filter((c) => c.status === 'active')) grid.append(playerCard(child, pinPane));
+  const row = el('div', null, 'row-buttons selection-row');
+  row.append(button('🔐 Return to parent sign-in', () => signInScreen(), 'selection-admin'), button('Sign out', signOut, 'text-button'));
+  box.append(grid, row);
+}
+// The PIN is six digits (v2's were four), typed on v2's keypad into a real password field, which a keyboard can use too.
+// The sixth digit on the keypad sends it; the server checks it, counts the misses and locks after five.
+function pinPane(child) {
+  transientView = true;
+  const box = panel(`${child.nickname} · ENTER PIN`, '', '', 'narrow pin-pane');
+  onBack = refresh; // back to the launch pad
+  putFirst(box, avatarBadge(child, 84));
+  const wrap = el('label', null, 'pin-field'), pin = el('input', null, 'pin-box');
+  Object.assign(pin, { type: 'password', inputMode: coarse() ? 'none' : 'numeric', maxLength: 6, pattern: '[0-9]{6}', autocomplete: 'off', required: true, placeholder: 'enter PIN…' });
+  wrap.append(el('span', 'Child PIN', 'sr-only'), pin);
+  const enter = async () => {
+    const code = pin.value; pin.value = '';
+    try { await api(`/children/${child.id}/enter`, { pin: code }); }
+    catch (error) { pin.className = 'pin-box'; void pin.offsetWidth; pin.className = 'pin-box bad shake'; throw error; } // the refusal itself is read from #message
+    channel?.postMessage('changed'); await refresh();
+  };
+  const put = (digit) => { if (pin.value.length >= 6) return; pin.className = 'pin-box'; pin.value += digit; if (pin.value.length === 6) run(enter); };
+  const pad = el('div', null, 'pad pin-pad');
+  for (const d of '123456789') pad.append(padKey(d, () => put(d)));
+  pad.append(padKey('⌫', () => { pin.className = 'pin-box'; pin.value = pin.value.slice(0, -1); }, 'back', 'Delete'), padKey('0', () => put('0')), padKey('✓', () => run(enter), 'ok', 'Enter PIN'));
+  pin.addEventListener('keydown', (event) => { if (event.key === 'Enter') run(enter); });
+  pin.addEventListener('input', () => { pin.className = 'pin-box'; });
+  const row = el('div', null, 'row-buttons');
+  row.append(button('Enter my grid', enter, 'primary'), button('Back', refresh, 'ghost'));
+  box.append(wrap, pad, row);
+  if (!coarse()) pin.focus();
 }
 // ---- secure learning + migrated v2 game layer ----
 const TRACK = { engine: { name: 'ENGINE', emoji: '⚙️' }, nav: { name: 'NAVIGATOR', emoji: '🧭' } };

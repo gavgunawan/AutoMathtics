@@ -106,7 +106,7 @@ test('UI S1-001: handover, child PIN and switch-child refresh CSRF and broadcast
   h.nodes('INPUT')[0].value = '000000'; await h.click('Enter my grid'); assert.ok(h.message.textContent.includes('did not match'));
   h.nodes('INPUT')[0].value = '763829'; await h.click('Enter my grid'); assert.ok(h.root.textContent.includes('Welcome,'));
   assert.ok(h.root.textContent.includes('ENGINE · SECTOR A') && h.root.textContent.includes('⚡ 0'));
-  await h.click('Switch child'); assert.ok(h.root.textContent.includes('Who is on a mission'));
+  await h.click('Switch child'); assert.ok(h.root.textContent.includes("who's on a mission today?"));
   assert.ok(h.broadcasts.length >= 3);
 });
 test('UI Stage 2: a child starts a session, answers what the server asks, and can leave it', async (t) => {

@@ -36,7 +36,7 @@ test('Back from the parent verification of a sensitive action, or from the chang
 
 test('Back on the kids\' side: from the PIN pad to the launch pad, from the shop, the map and a game to the child\'s home with the session kept, and the home screen stays put', async (t) => {
   const h = await uiFixture(t); await h.f.child(h.a.ctx); await h.api.refresh();
-  await h.click('Hand over to kids'); const launchPad = () => h.root.textContent.includes('Who is on a mission');
+  await h.click('Hand over to kids'); const launchPad = () => h.root.textContent.includes("who's on a mission today?");
   await h.back(); assert.ok(launchPad(), 'the launch pad is a top-level screen: Back stays put');
   await h.nodes('BUTTON').find((n) => n.className === 'player-card').onclick(); assert.ok(h.root.textContent.includes('Enter my grid'));
   await h.back(); assert.ok(launchPad(), 'the PIN pad goes back to the launch pad');

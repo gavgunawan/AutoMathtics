@@ -15,7 +15,13 @@
 :root{--void:#0B0E23;--panel:#10142E;--v2line:#2A3170;--gold:#FFB020;--red:#FF3B5C;--txt:#EAF2FF;--dim:#8A93C9;--on-bright:#1B0F2E;--row:#1A1F45;--locked:#5A64A8;--sheet:#0D1130;--mapbg:#070A1E;--unlit:#161C42;--trophy:#FFD54F;--done-fill:#1A2B3F;--jump-fill:#0F2A1E;--alert-text:#FF6B85;--acc0:#FF2DA8;--acc1:#35E0FF;--acc2:#2DFFB3;--acc3:#FFB020;--acc4:#8A5CFF;--acc5:#FF5A2D}
 /* a child's colour is their place in the family (acc-N from /me, v2's new-player palette: 0 is Allison's magenta, 1 Geralt's
    cyan); a section's colour is c-*, which components read as --c */
-.acc-0{--accent:var(--acc0)}.acc-1{--accent:var(--acc1)}.acc-2{--accent:var(--acc2)}.acc-3{--accent:var(--acc3)}.acc-4{--accent:var(--acc4)}.acc-5{--accent:var(--acc5)}
+/* with v2's alpha steps of that colour (2403, 2409, 2447): soft 38, faint 14, shade 22, halo 55, glow 66 */
+.acc-0{--accent:var(--acc0);--accent-soft:#FF2DA838;--accent-faint:#FF2DA814;--accent-shade:#FF2DA822;--accent-halo:#FF2DA855;--accent-glow:#FF2DA866}
+.acc-1{--accent:var(--acc1);--accent-soft:#35E0FF38;--accent-faint:#35E0FF14;--accent-shade:#35E0FF22;--accent-halo:#35E0FF55;--accent-glow:#35E0FF66}
+.acc-2{--accent:var(--acc2);--accent-soft:#2DFFB338;--accent-faint:#2DFFB314;--accent-shade:#2DFFB322;--accent-halo:#2DFFB355;--accent-glow:#2DFFB366}
+.acc-3{--accent:var(--acc3);--accent-soft:#FFB02038;--accent-faint:#FFB02014;--accent-shade:#FFB02022;--accent-halo:#FFB02055;--accent-glow:#FFB02066}
+.acc-4{--accent:var(--acc4);--accent-soft:#8A5CFF38;--accent-faint:#8A5CFF14;--accent-shade:#8A5CFF22;--accent-halo:#8A5CFF55;--accent-glow:#8A5CFF66}
+.acc-5{--accent:var(--acc5);--accent-soft:#FF5A2D38;--accent-faint:#FF5A2D14;--accent-shade:#FF5A2D22;--accent-halo:#FF5A2D55;--accent-glow:#FF5A2D66}
 .c-cyan{--c:var(--cyan)}.c-gold{--c:var(--gold)}.c-magenta{--c:var(--magenta)}.c-violet{--c:var(--violet)}.c-mint{--c:var(--mint)}.c-txt{--c:var(--txt)}.c-red{--c:var(--red)}
 *{box-sizing:border-box}
 html{min-height:100%;background:var(--bg);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
@@ -29,6 +35,8 @@ body:after{content:"";position:fixed;left:50%;top:48%;width:52vw;height:52vw;min
 /* the mode app.js sets on <html>: a child's screens hide the parents' masthead and footer, the launch pad the masthead.
    Hidden, never removed: index.html keeps both for parents */
 html[data-mode=kid] .masthead,html[data-mode=kid] footer,html[data-mode=select] .masthead{display:none}
+/* until /me has said whose device this is, neither shows (a kid's device would flash the parents' masthead); held in place, not removed */
+html:not([data-mode]) .masthead,html:not([data-mode]) footer{visibility:hidden}
 /* the layer an equipped background draws into (falling symbols, stars, a skyline), on a child's screens only */
 #decor{position:fixed;inset:0;z-index:-1;pointer-events:none}
 html:not([data-mode=kid]) #decor{display:none}
@@ -42,7 +50,8 @@ main{max-width:1180px;margin:0 auto;padding:clamp(14px,2vw,28px);display:flex;fl
 /* the card (st.card 3676-3682) on every screen. The narrow ones are v2's PIN (420), new-player (460) and guide (520) cards */
 .panel{position:relative;width:100%;max-width:640px;margin:0 auto;text-align:center;background:linear-gradient(155deg,rgba(16,20,46,.96),rgba(10,13,34,.94));border:1px solid var(--v2line);border-radius:18px;padding:24px 22px;box-shadow:0 22px 70px rgba(0,0,0,.34),0 0 34px rgba(53,224,255,.07),inset 0 1px 0 rgba(255,255,255,.035);animation:screenIn .36s cubic-bezier(.16,1,.3,1) both}
 .panel.narrow{max-width:420px}.panel.w460{max-width:460px}.panel.w520{max-width:520px}
-.panel .muted:empty,.panel .intro:empty{display:none}
+.panel .muted:empty,.panel .intro:empty,.panel h1:empty{display:none}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 .panel .field,.panel .auth-form,.panel .check,.panel .options,.panel .notice{text-align:left;margin-left:auto;margin-right:auto}
 @keyframes screenIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
 /* type (st.kicker, title, introText, subtle, warn, logTitle): kickers are written in capitals; a section title is written
@@ -102,16 +111,79 @@ input:focus,select:focus{outline:none;border-color:var(--cyan);box-shadow:0 0 0 
 .count{font:600 26px var(--mono);letter-spacing:-.02em;color:var(--cyan);text-shadow:0 0 14px #35e0ff44}
 .allowance .badge{margin-left:auto}
 .pending{color:var(--amber);border-color:#ffb02055;background:#ffb0200d}
-.player-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:18px;margin:26px 0}
-.player-card{position:relative;display:flex;flex-direction:column;align-items:center;padding:28px 18px;background:linear-gradient(160deg,#8a5cff26,#0d113066);border:1px solid #8a5cff55;border-radius:22px;min-width:0;margin:0;overflow:hidden;text-transform:none;letter-spacing:0;font:inherit;color:var(--ink)}
-.player-card:nth-child(even){border-color:#35e0ff55;background:linear-gradient(160deg,#35e0ff1f,#0d113066)}
-.player-card:before{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(115deg,transparent 0 43%,#ffffff07 48%,transparent 54%),repeating-linear-gradient(0deg,#ffffff05 0 1px,transparent 1px 5px);opacity:.7}
+/* the parent's crew cards (v3's, until port plan step 12 rebuilds them); v2's .player-card is the launch pad's */
+.crew-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:18px;margin:26px 0}
+.crew-card{position:relative;display:flex;flex-direction:column;align-items:center;padding:28px 18px;background:linear-gradient(160deg,#8a5cff26,#0d113066);border:1px solid #8a5cff55;border-radius:22px;min-width:0;margin:0;overflow:hidden;text-transform:none;letter-spacing:0;font:inherit;color:var(--ink)}
+.crew-card:nth-child(even){border-color:#35e0ff55;background:linear-gradient(160deg,#35e0ff1f,#0d113066)}
+.crew-card:before{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(115deg,transparent 0 43%,#ffffff07 48%,transparent 54%),repeating-linear-gradient(0deg,#ffffff05 0 1px,transparent 1px 5px);opacity:.7}
 .avatar-frame{position:relative;display:grid;place-items:center;width:132px;height:132px;margin:8px 0 20px;border-radius:50%;border:1px solid #ffffff1f;background:#0a1028;box-shadow:0 0 34px #8a5cff22}
 .avatar-frame:before{content:"";position:absolute;inset:-9px;border:2px solid transparent;border-top-color:var(--magenta);border-bottom-color:var(--cyan);border-radius:50%;animation:orbit 14s linear infinite;pointer-events:none}
 .avatar-frame:after{content:"";position:absolute;inset:-16px;border:1px dashed #a0bbd32b;border-radius:50%;pointer-events:none}
 .avatar{font-size:72px;line-height:1}
-.player-card strong{font-family:var(--display);font-size:17px;letter-spacing:.04em;margin-bottom:10px;overflow-wrap:anywhere}
+.crew-card strong{font-family:var(--display);font-size:17px;letter-spacing:.04em;margin-bottom:10px;overflow-wrap:anywhere}
 .card-meta{color:var(--muted);font:600 10px var(--mono);letter-spacing:.12em}
+/* ---- the launch pad: v2's player selection (2392-2442; st.userSelectCard 3683-3692, css 3895-4115) ---- */
+.panel.select-shell{max-width:1180px;min-height:min(800px,calc(100vh - 40px));display:flex;flex-direction:column;justify-content:center;overflow:hidden;border-radius:32px;padding:clamp(28px,4vw,56px);background:linear-gradient(145deg,rgba(16,20,52,.78),rgba(8,11,31,.68));border:1px solid rgba(126,144,255,.24);box-shadow:0 34px 110px rgba(0,0,0,.52),0 0 90px rgba(82,54,188,.14),inset 0 1px 0 rgba(255,255,255,.06);-webkit-backdrop-filter:blur(24px);backdrop-filter:blur(24px)}
+.select-shell:before{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(115deg,transparent 0 43%,rgba(255,255,255,.026) 48%,transparent 54%),repeating-linear-gradient(0deg,rgba(255,255,255,.018) 0 1px,transparent 1px 5px);opacity:.68}
+.select-shell:after{content:"";position:absolute;left:12%;right:12%;top:0;height:1px;pointer-events:none;background:linear-gradient(90deg,transparent,#FF2DA8,#35E0FF,transparent);box-shadow:0 0 28px rgba(53,224,255,.52),0 0 28px rgba(255,45,168,.42)}
+.select-shell>.kicker{position:relative;z-index:2;font-size:clamp(10px,.9vw,13px);letter-spacing:.28em;color:#93A0CF}
+.select-shell>h1{position:relative;z-index:2;margin-top:8px;font-size:clamp(36px,4.2vw,60px);line-height:1;letter-spacing:.055em;color:transparent;background:linear-gradient(92deg,#F5FBFF 0%,#35E0FF 43%,#B9A4FF 70%,#FF75C6 100%);-webkit-background-clip:text;background-clip:text;text-shadow:0 0 34px rgba(53,224,255,.2)}
+.select-shell>.intro{position:relative;z-index:2;margin:12px 0 0;color:#AAB6DB;font-size:clamp(14px,1.25vw,18px);letter-spacing:.055em}
+.player-grid{position:relative;z-index:2;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),460px));justify-content:center;gap:clamp(24px,4vw,56px);width:100%;max-width:1000px;margin:clamp(28px,4vh,44px) auto 22px}
+/* the button carries only the tap and the lift; its face (.player-card-face, which holds the child's colour) draws the card */
+.player-card{position:relative;display:block;width:100%;min-width:0;min-height:0;margin:0;padding:0;border:0;border-radius:32px;background:none;color:var(--txt);font:inherit;letter-spacing:0;text-transform:none;text-align:center;transform:translateZ(0);will-change:transform;animation:cardRise .68s cubic-bezier(.16,1,.3,1) both;transition:transform .42s cubic-bezier(.2,.8,.2,1),filter .32s ease}
+.player-card:nth-child(2){animation-delay:.09s}
+@keyframes cardRise{from{opacity:0;transform:translateY(26px) scale(.97)}to{opacity:1;transform:none}}
+.player-card-face{position:relative;isolation:isolate;overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;height:100%;min-height:clamp(390px,48vh,500px);padding:clamp(30px,4vw,50px);border-radius:32px;border:1.5px solid var(--accent);background:linear-gradient(160deg,rgba(18,23,60,.96),rgba(7,9,28,.96));box-shadow:0 18px 55px var(--accent-shade);transition:box-shadow .42s ease}
+.player-card-face:before{content:"";position:absolute;inset:-35%;z-index:-2;pointer-events:none;background:radial-gradient(circle at 50% 28%,var(--accent-soft),transparent 31%),radial-gradient(circle at 10% 95%,var(--accent-faint),transparent 38%);opacity:.95;transition:transform .7s cubic-bezier(.2,.8,.2,1),opacity .35s ease}
+.player-card-face:after{content:"";position:absolute;inset:-40% auto -40% -55%;width:38%;z-index:4;pointer-events:none;transform:translateX(-120%) rotate(12deg);background:linear-gradient(90deg,transparent,rgba(255,255,255,.14),transparent);filter:blur(2px)}
+.player-card-grid{position:absolute;inset:0;z-index:-1;pointer-events:none;background-image:linear-gradient(var(--accent-faint) 1px,transparent 1px),linear-gradient(90deg,var(--accent-faint) 1px,transparent 1px),linear-gradient(145deg,transparent 66%,var(--accent-faint));background-size:34px 34px,34px 34px,100% 100%;-webkit-mask-image:linear-gradient(to bottom,rgba(0,0,0,.75),transparent 82%);mask-image:linear-gradient(to bottom,rgba(0,0,0,.75),transparent 82%);opacity:.48}
+.player-avatar-frame{position:relative;z-index:2;isolation:isolate;display:block;flex:0 0 auto;width:clamp(174px,16vw,226px);aspect-ratio:1;padding:7px;border:2px solid var(--accent);border-radius:50%;background:rgba(5,7,24,.82);box-shadow:0 0 0 1px var(--accent-glow),0 0 44px var(--accent-halo);transition:transform .5s cubic-bezier(.16,1,.3,1),box-shadow .45s ease}
+.player-avatar-frame:before,.player-avatar-frame:after{content:"";position:absolute;border-radius:50%;pointer-events:none}
+.player-avatar-frame:before{inset:-12px;border:1px solid var(--accent-soft);border-top-color:var(--accent);border-bottom-color:transparent;animation:haloSpin 9s linear infinite}
+.player-avatar-frame:after{inset:-22px;border:1px dashed var(--accent-soft);opacity:.56;animation:haloSpin 15s linear infinite reverse}
+@keyframes haloSpin{to{transform:rotate(360deg)}}
+/* the icon in v2's makeAvatar disc, where v2 showed a photo */
+.player-avatar{display:grid;place-items:center;width:100%;height:100%;border-radius:50%;border:3px solid var(--accent);background:#090C25;font-size:96px;line-height:1;transition:transform .5s cubic-bezier(.2,.8,.2,1),filter .4s ease}
+.player-name{position:relative;z-index:2;max-width:100%;font:700 clamp(26px,3vw,36px)/1.05 var(--display);letter-spacing:.09em;text-transform:uppercase;color:var(--txt);text-shadow:0 0 18px var(--accent-soft),0 2px 0 rgba(0,0,0,.45);overflow-wrap:anywhere}
+.player-meta{position:relative;z-index:2;display:inline-flex;align-items:center;gap:8px;color:#AAB6DB;font:600 clamp(10px,.85vw,12px) var(--mono);letter-spacing:.12em}
+.status-dot{flex:0 0 auto;width:7px;height:7px;border-radius:999px;background:var(--accent);box-shadow:0 0 12px var(--accent);animation:statusPulse 2s ease-in-out infinite}
+@keyframes statusPulse{50%{opacity:.48;transform:scale(.78)}}
+.player-enter{position:relative;z-index:2;display:inline-flex;align-items:center;gap:8px;margin-top:4px;color:var(--accent);font:700 11px var(--display);letter-spacing:.15em;opacity:.82;transition:letter-spacing .32s ease,opacity .32s ease}
+@media(hover:hover) and (pointer:fine){
+  .player-card:hover{transform:translateY(-11px) scale(1.018);filter:saturate(1.08)}
+  .player-card:hover .player-card-face{box-shadow:0 28px 80px rgba(0,0,0,.46),0 0 42px var(--accent-soft),inset 0 1px 0 rgba(255,255,255,.08)}
+  .player-card:hover .player-card-face:before{transform:scale(1.1) rotate(3deg);opacity:1}
+  .player-card:hover .player-card-face:after{transform:translateX(500%) rotate(12deg);transition:transform .9s cubic-bezier(.16,1,.3,1)}
+  .player-card:hover .player-avatar-frame{transform:translateY(-4px) scale(1.035);box-shadow:0 0 0 1px var(--accent),0 0 58px var(--accent-soft)}
+  .player-card:hover .player-avatar{transform:scale(1.035);filter:contrast(1.04) saturate(1.08)}
+  .player-card:hover .player-enter{letter-spacing:.2em;opacity:1}
+}
+.player-card:active{transform:translateY(-2px) scale(.992)}
+.player-card:focus-visible{outline:none}
+.player-card:focus-visible .player-card-face{box-shadow:0 0 0 4px rgba(234,242,255,.92),0 0 0 8px var(--accent),0 24px 70px rgba(0,0,0,.5)}
+.selection-row{position:relative;z-index:2;align-items:center}
+/* v2's 🔐 ADMIN pill (4075-4085), which here opens the parents' own sign-in */
+.selection-admin{min-width:156px;border-radius:999px;padding:9px 20px;background:rgba(8,10,30,.62);border:1.5px solid rgba(138,147,201,.36);color:var(--dim);letter-spacing:.08em;-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
+/* a child's avatar disc, at v2's sizes: 84 on the PIN pane, 40 in the home header, 22 in the play status row */
+.av{display:grid;place-items:center;flex:0 0 auto;border-radius:50%;background:var(--void);border:2px solid var(--accent,var(--cyan));line-height:1}
+.av-84{width:84px;height:84px;margin:4px auto 10px;font-size:48px;border-width:3px;box-shadow:0 0 28px var(--accent-glow)}
+.av-40{width:40px;height:40px;font-size:23px}
+.av-22{width:22px;height:22px;font-size:13px;border-width:1.5px}
+/* the kid's PIN (kidPin 2445-2465): the real field dressed as v2's PIN box (2581), and v2's keypad (st.pad 3768, st.key 3769) */
+.pin-pane>.kicker{text-transform:uppercase}
+.pin-field{display:block;max-width:300px;margin:14px auto 6px}
+input.pin-box{display:block;width:100%;max-width:300px;min-height:52px;margin:0 auto;padding:8px 12px;text-align:center;border:2px dashed var(--cyan);border-radius:10px;background:var(--void);color:var(--mint);font:600 30px var(--mono);letter-spacing:10px}
+input.pin-box::placeholder{color:var(--dim);font-size:14px;letter-spacing:1px}
+input.pin-box:not(:placeholder-shown){border-style:solid;box-shadow:0 0 16px rgba(53,224,255,.32)}
+input.pin-box.bad{border-style:solid;border-color:var(--red);box-shadow:0 0 16px rgba(255,59,92,.3)}
+.pad{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.pin-pad{max-width:260px;margin:8px auto 0}
+.padkey{height:clamp(44px,6.6vh,56px);min-height:0;padding:0;background:var(--void);color:var(--cyan);border:1.5px solid var(--v2line);border-radius:10px;font:600 22px var(--mono);letter-spacing:0;touch-action:manipulation;-webkit-user-select:none;user-select:none}
+.padkey:active{transform:scale(.93)!important;filter:brightness(1.25);transition-duration:.06s}
+.padkey.back{color:var(--magenta);border-color:var(--magenta);font-size:24px}
+.padkey.slash{color:var(--violet);border-color:var(--violet);font-size:24px}
+.padkey.ok{color:var(--mint);border-color:var(--mint)}
 /* an inner box (v2's howBox and rows): dark, a v2 border, the accent down the left edge */
 .notice{font-size:14.5px;line-height:1.55;padding:12px 14px;margin:12px auto;max-width:560px;border-radius:12px;background:var(--void);border:1.5px solid var(--v2line);border-left:3px solid var(--c,var(--cyan));color:#c9dcf0;text-align:left}
 .reference{font:600 11px/1.6 var(--mono);letter-spacing:.04em;color:var(--dim);overflow-wrap:anywhere;margin-top:20px}
@@ -135,8 +207,11 @@ footer{box-sizing:content-box;max-width:640px;margin:8px auto 0;padding:0 clamp(
 @keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-7px)}75%{transform:translateX(7px)}}
 .shake{animation:shake .3s ease}
 @keyframes orbitSpark{from{transform:rotate(0deg) translateY(calc(-1 * var(--orb,26px)))}to{transform:rotate(360deg) translateY(calc(-1 * var(--orb,26px)))}}
-/* v2's phone width (760px). Its selection-shell and short-landscape rules come with the launch pad */
-@media(max-width:760px){.brand{font-size:12px}.pilot{font-size:8px;padding:7px 9px}.allowance{padding:12px;gap:10px;flex-wrap:wrap}.allowance .badge{margin-left:0}.player-grid{grid-template-columns:1fr}.avatar-frame{width:150px;height:150px}.avatar{font-size:82px}footer{flex-direction:column;gap:8px}.actions button{width:100%}}
+/* v2's phone width (760px, 4102-4108; the selection shell drops its blur there, which older iPads draw slowly) and its short
+   tablet or landscape screen (4109-4115) */
+@media(max-width:760px){.brand{font-size:12px}.pilot{font-size:8px;padding:7px 9px}.allowance{padding:12px;gap:10px;flex-wrap:wrap}.allowance .badge{margin-left:0}.crew-grid{grid-template-columns:1fr}.avatar-frame{width:150px;height:150px}.avatar{font-size:82px}footer{flex-direction:column;gap:8px}.actions button{width:100%}
+  .panel.select-shell{min-height:auto;padding:30px 18px 24px;border-radius:24px;-webkit-backdrop-filter:none;backdrop-filter:none}.select-shell>h1{font-size:clamp(30px,9.5vw,44px)}.player-grid{grid-template-columns:1fr;gap:20px;max-width:420px;margin:26px auto 18px}.player-card-face{min-height:360px;padding:30px 22px}.player-avatar-frame{width:min(48vw,190px)}.player-avatar{font-size:min(22vw,88px)}}
+@media(max-height:760px) and (min-width:761px){.panel.select-shell{min-height:auto;padding-top:30px;padding-bottom:28px}.player-grid{margin-top:24px;margin-bottom:14px}.player-card-face{min-height:330px;padding-top:24px;padding-bottom:24px;gap:12px}.player-avatar-frame{width:clamp(142px,19vh,178px)}.player-avatar{font-size:72px}.select-shell>h1{font-size:clamp(34px,5.5vh,50px)}}
 /* no motion: nothing animates, and the decor layer (static columns of symbols would only sit on the screen) is not drawn */
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}html[data-mode] #decor{display:none}}
 

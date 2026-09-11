@@ -23,7 +23,7 @@ test('a kids\' device whose child session was refused goes back to the launch pa
   // the parent, elsewhere, resets the PIN: the child session is revoked under the device
   h.f.advance(2000); const parent = await h.f.login('parentA'); await h.f.service.resetPin(parent.ctx, kid.id, '111111'); // a token minted after the handover
   await h.api.refresh();
-  assert.ok(h.root.textContent.includes('Who is on a mission'), h.root.textContent.slice(0, 300)); assert.ok(h.message.textContent.length > 0, 'the child is told why');
+  assert.ok(h.root.textContent.includes("who's on a mission today?"), h.root.textContent.slice(0, 300)); assert.ok(h.message.textContent.length > 0, 'the child is told why');
   assert.ok(h.nodes('BUTTON').some((n) => n.className === 'player-card'), 'the explorer can be chosen again');
 });
 test('the sign-in provider\'s refusal reaches the parent in words, with its code: an invalid number, a paused device, an unknown refusal with the provider\'s own text', async (t) => {
