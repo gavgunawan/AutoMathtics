@@ -166,8 +166,26 @@ function validateRewards(value, childIds) {
 }
 const defaultConfig = () => ({ rewards: [], rocket: null, rocketHistory: [] });
 const normalizeConfig = (v) => ({ ...defaultConfig(), ...(v && typeof v === 'object' ? v : {}), rewards: Array.isArray(v?.rewards) ? v.rewards : [], rocketHistory: Array.isArray(v?.rocketHistory) ? v.rocketHistory.slice(-20) : [] });
-const rocketFuel = (r) => Object.values(r?.fuel || {}).reduce((a, b) => a + (Number.isSafeInteger(b) ? b : 0), 0);
-const rocketReady = (r) => r?.status === 'fueling' && rocketFuel(r) >= r.goal && (!r.minEach || r.crewChildIds.every((id) => (r.fuel[id] || 0) >= r.minEach));
+// The family's game config is read in exactly one way: its path, then normalised over the defaults, so a
+// family that never configured anything reads as { rewards: [], rocket: null, rocketHistory: [] }. The
+// parent routes use it, and so does the operator's v2 rocket import (server/migrate.mjs) — one code path,
+// so an imported rocket lands in the same document, over the same defaults, as a rocket a parent built.
+export const gameConfigPath = (familyId) => `families/${familyId}/game/config`;
+export async function readGameConfig(tx, familyId) { const configPath = gameConfigPath(familyId); return { configPath, cfg: normalizeConfig(await tx.get(configPath)) }; }
+// What a rocket may be. The parent's build route and the v2 rocket import check the same bounds and clean
+// the prize through the same function, so nothing the importer lets in could not also have been built.
+export const ROCKET_LIMITS = Object.freeze({ currencies: Object.freeze(['gc', 'rp']), goalMin: 50, goalMax: 1_000_000, emojiMax: 12, nameMax: 50 });
+export function rocketPrize(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some((k) => !['emoji', 'name'].includes(k))) fail(400, 'INVALID_REQUEST');
+  // A lone surrogate (half an emoji, cut by an editor or a damaged export) is not text: it cannot be shown,
+  // and it is refused here for both callers, the build route and the v2 rocket import.
+  if (typeof value.emoji !== 'string' || typeof value.name !== 'string' || !value.emoji.isWellFormed() || !value.name.isWellFormed()) fail(400, 'INVALID_REQUEST');
+  const prize = { emoji: text(value.emoji, 1, ROCKET_LIMITS.emojiMax).normalize('NFC'), name: text(value.name, 1, ROCKET_LIMITS.nameMax).normalize('NFC').trim() };
+  if (!prize.name) fail(400, 'INVALID_REQUEST');
+  return prize;
+}
+export const rocketFuel = (r) => Object.values(r?.fuel || {}).reduce((a, b) => a + (Number.isSafeInteger(b) ? b : 0), 0);
+export const rocketReady = (r) => r?.status === 'fueling' && rocketFuel(r) >= r.goal && (!r.minEach || r.crewChildIds.every((id) => (r.fuel[id] || 0) >= r.minEach));
 const publicRocket = (r) => !r ? null : ({ id: r.id, status: r.status, prize: r.prize, currency: r.currency, goal: r.goal, minEach: r.minEach,
   crewChildIds: r.crewChildIds, fuel: r.fuel, totalFuel: rocketFuel(r), createdAt: r.createdAt, launchedAt: r.launchedAt || null });
 const childRocket = (r, childId) => !r ? null : ({ id: r.id, status: r.status, prize: r.prize, currency: r.currency, goal: r.goal, minEach: r.minEach,
@@ -175,14 +193,14 @@ const childRocket = (r, childId) => !r ? null : ({ id: r.id, status: r.status, p
 
 export class Game {
   constructor({ foundation, store, now = Date.now, pickIndex = (n) => randomInt(n) }) { this.foundation = foundation; this.store = store; this.now = now; this.pickIndex = pickIndex; }
-  paths(s) { const base = `families/${s.familyId}/learning/${s.childId}`; return { doc: base, op: (id) => `${base}/operations/${id}`, ledger: (id) => `${base}/ledger/${id}`, config: `families/${s.familyId}/game/config` }; }
+  paths(s) { const base = `families/${s.familyId}/learning/${s.childId}`; return { doc: base, op: (id) => `${base}/operations/${id}`, ledger: (id) => `${base}/ledger/${id}`, config: gameConfigPath(s.familyId) }; }
   async child(tx, ctx) {
     const a = await this.foundation.authorize(tx, ctx, ['child']); const p = this.paths(a.s);
     return { ...a, p, prog: normalizeProgress((await tx.get(p.doc)) || null), cfg: normalizeConfig(await tx.get(p.config)) };
   }
   async parent(tx, ctx, recent = false) {
     const a = await this.foundation.authorize(tx, ctx, ['parent']); if (recent) this.foundation.requireRecent(a.s);
-    const configPath = `families/${a.s.familyId}/game/config`, cfg = normalizeConfig(await tx.get(configPath));
+    const { configPath, cfg } = await readGameConfig(tx, a.s.familyId);
     return { ...a, configPath, cfg };
   }
   publicWallet(w) { return { ...w, inventory: [...w.inventory], purchases: w.purchases.slice(0, 20), redemptions: [...w.redemptions.filter((r) => r.status === 'pending'), ...w.redemptions.filter((r) => r.status !== 'pending').slice(0, 20)] }; } // every pending request reaches the parent
@@ -316,9 +334,9 @@ export class Game {
     if (!['build', 'launch', 'scrap', 'claim'].includes(body.action)) fail(400, 'INVALID_REQUEST');
     return this.store.transaction(async (tx) => { const { s, family, cfg, configPath } = await this.parent(tx, ctx, true); let r = cfg.rocket, history = [...cfg.rocketHistory];
       if (body.action === 'build') {
-        if (r && r.status === 'fueling') fail(409, 'ROCKET_ALREADY_FUELING'); if (!body.prize || typeof body.prize !== 'object' || Array.isArray(body.prize) || Object.keys(body.prize).some((k) => !['emoji', 'name'].includes(k))) fail(400, 'INVALID_REQUEST');
-        const prize = { emoji: text(body.prize.emoji, 1, 12).normalize('NFC'), name: text(body.prize.name, 1, 50).normalize('NFC').trim() };
-        if (!prize.name || !['gc', 'rp'].includes(body.currency) || !Number.isSafeInteger(body.goal) || body.goal < 50 || body.goal > 1_000_000 || !Number.isSafeInteger(body.minEach) || body.minEach < 0 || body.minEach > body.goal || !Array.isArray(body.crewChildIds)) fail(400, 'INVALID_REQUEST');
+        if (r && r.status === 'fueling') fail(409, 'ROCKET_ALREADY_FUELING');
+        const prize = rocketPrize(body.prize);
+        if (!ROCKET_LIMITS.currencies.includes(body.currency) || !Number.isSafeInteger(body.goal) || body.goal < ROCKET_LIMITS.goalMin || body.goal > ROCKET_LIMITS.goalMax || !Number.isSafeInteger(body.minEach) || body.minEach < 0 || body.minEach > body.goal || !Array.isArray(body.crewChildIds)) fail(400, 'INVALID_REQUEST');
         const crew = [...new Set(body.crewChildIds)]; if (!crew.length || crew.some((id) => !family.activeChildIds.includes(id))) fail(400, 'INVALID_REQUEST');
         r = { id: randomUUID(), status: 'fueling', prize, currency: body.currency, goal: body.goal, minEach: body.minEach, crewChildIds: crew, fuel: {}, createdAt: this.now() };
       } else {

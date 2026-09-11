@@ -404,6 +404,97 @@ test('real Auth: lost phone — the factor is removed only after the emailed pas
   const me = await service.me(ctx); assert.equal(me.family.id, fam.id, 'the same family'); assert.equal(me.recovery.status, 'completed');
   const after = (await db.doc(`parents/${p.uid}`).get()).data(); assert.notEqual(after.phoneKey, before.phoneKey, 'the phone key follows the new number'); assert.equal(after.familyId, before.familyId);
 });
+test('real Firestore: two children imported from v2 and then the family rocket — the config, the one-shot marker and one audit row are written, and the ledgers are untouched', async () => {
+  const { importLearning, importRocket } = await import('../server/migrate.mjs');
+  const p = await parent(`rocket-${randomUUID()}@example.test`, '+16505550180');
+  const l = await service.authenticate(await service.login(p.idToken));
+  const fam = await service.createFamily(l, { label: 'Rocket family', adultAttestation: true, consentVersion: 'pilot-v1' });
+  const ctx = await service.authenticate(fam.token);
+  await grantEntitlement(store, { familyId: fam.id, seatLimit: 2, accessUntil: Date.now() + 600000, reason: 'emulator rocket grant', actor: 'integration-test' });
+  const { child: nova } = await service.createChild(ctx, { nickname: 'Nova', icon: 'fox', pin: '763829' }, randomUUID());
+  const { child: orion } = await service.createChild(ctx, { nickname: 'Orion', icon: 'wolf', pin: '763829' }, randomUUID());
+  // synthetic v2 records: `passes` passed papers on one day, and v2 RP spending equal to the child's rocket fuel
+  const record = (passes, rpSpent) => ({ level: 0, paper: 1, bossCleared: 0, nav: { level: 0, paper: 1, bossCleared: 0 }, savedAt: 1788870699017,
+    history: Array.from({ length: passes }, (_, i) => ({ date: '2026-09-01', ts: Date.parse('2026-09-01T04:00:00Z') + i * 60_000, levelIdx: 0, levelId: 'A', papers: '1–5', correct: 25, incorrect: 0, timeout: 0, total: 25, passed: true, mins: '5:12' })),
+    wallet: { gcSpent: 0, rpSpent, shields: 0, shieldDays: [], inventory: [], purchases: [], redemptions: [] } });
+  for (const [child, passes, rpSpent] of [[nova, 70, 6700], [orion, 75, 7100]]) {
+    await importLearning(store, { familyId: fam.id, childId: child.id, record: record(passes, rpSpent), actor: 'integration-test', reason: 'emulator v2 child' });
+  }
+  const snapshot = async () => Promise.all([nova, orion].map(async (c) => ({ doc: (await db.doc(`families/${fam.id}/learning/${c.id}`).get()).data(),
+    ledger: (await db.collection(`families/${fam.id}/learning/${c.id}/ledger`).get()).docs.map((d) => [d.id, d.data()]) })));
+  const before = await snapshot();
+  for (const s of before) { assert.deepEqual(s.ledger.map(([id]) => id), ['migrate-opening']); assert.equal(s.doc.legacy.from, 'v2'); }
+  const v2Rocket = { createdAt: 1788000000000, createdOn: '2026-08-29', crew: ['nova', 'orion'], currency: 'rp', fuel: { nova: 6700, orion: 7100 }, goal: 20000, id: '1788000000000',
+    lastFuel: { amt: 100, at: 1788100000000, by: 'Orion' }, minEach: 10000, prize: { emoji: '🎡', name: 'Theme park day' }, status: 'fueling' };
+  const crewMap = { nova: nova.id, orion: orion.id };
+  const result = await importRocket(store, { familyId: fam.id, crewMap, v2Rocket, actor: 'integration-test', reason: 'emulator v2 rocket' });
+  assert.equal(result.alreadyWritten, false); assert.deepEqual(result.crew.map((c) => [c.name, c.nickname, c.fuel, c.spent]), [['nova', 'Nova', 6700, 6700], ['orion', 'Orion', 7100, 7100]]);
+  const cfg = (await db.doc(`families/${fam.id}/game/config`).get()).data();
+  assert.deepEqual(cfg.rocket, { id: result.rocketId, status: 'fueling', prize: { emoji: '🎡', name: 'Theme park day' }, currency: 'rp', goal: 20000, minEach: 10000,
+    crewChildIds: [nova.id, orion.id], fuel: { [nova.id]: 6700, [orion.id]: 7100 }, createdAt: cfg.rocket.createdAt });
+  assert.deepEqual(cfg.rocketMigration, { v2Id: '1788000000000', rocketId: result.rocketId, at: cfg.rocket.createdAt });
+  assert.deepEqual(cfg.rewards, []); assert.deepEqual(cfg.rocketHistory, []);
+  const audits = (await db.collection('audit').where('familyId', '==', fam.id).get()).docs.map((d) => d.data()).filter((a) => a.action === 'rocket.migrated');
+  assert.equal(audits.length, 1); assert.ok(audits[0].expireAt instanceof Timestamp, 'the audit row carries a real TTL Timestamp');
+  assert.equal(audits[0].childId, null); assert.equal(audits[0].expireAt.toMillis(), audits[0].at + 400 * 24 * 60 * 60_000, 'the audit TTL is 400 days');
+  // ids and numbers only (PRIVACY.md): no crew name, no nickname, no prize text
+  assert.deepEqual(audits[0].summary, { rocketId: result.rocketId, v2Id: '1788000000000', v2CreatedOn: '2026-08-29', v2CreatedAt: 1788000000000, v2HistoryCount: 0,
+    currency: 'rp', goal: 20000, minEach: 10000, totalFuel: 13800,
+    crew: [{ childId: nova.id, fuel: 6700, spent: 6700, otherSpent: 0 }, { childId: orion.id, fuel: 7100, spent: 7100, otherSpent: 0 }] });
+  for (const secret of ['nova', 'Nova', 'orion', 'Orion', 'Theme park', '🎡']) assert.ok(!JSON.stringify(audits[0].summary).includes(secret), `the audit row never holds ${secret}`);
+  assert.deepEqual(await snapshot(), before, 'no learning document and no ledger row changed');
+  const second = await importRocket(store, { familyId: fam.id, crewMap, v2Rocket, actor: 'integration-test', reason: 'emulator second run' }).then(() => null, (e) => e);
+  assert.equal(second?.code, 'V2_ROCKET_ALREADY_IMPORTED'); assert.deepEqual(second.detail, { rocketId: result.rocketId, at: cfg.rocketMigration.at }, 'the detail survives a real Firestore transaction');
+  assert.equal((await db.collection('audit').where('familyId', '==', fam.id).get()).docs.filter((d) => d.data().action === 'rocket.migrated').length, 1);
+});
+test('real Firestore, through the operator tool: a leftover CONFIRM_MIGRATION=write is a dry run, a spending mismatch prints both numbers, declared other spending writes, and a repeat prints the existing import', async () => {
+  const { importLearning } = await import('../server/migrate.mjs');
+  const { spawnSync } = await import('node:child_process');
+  const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os'); const { join } = await import('node:path'); const { fileURLToPath } = await import('node:url');
+  const p = await parent(`rocket-cli-${randomUUID()}@example.test`, '+16505550181');
+  const l = await service.authenticate(await service.login(p.idToken));
+  const fam = await service.createFamily(l, { label: 'Rocket CLI family', adultAttestation: true, consentVersion: 'pilot-v1' });
+  const ctx = await service.authenticate(fam.token);
+  await grantEntitlement(store, { familyId: fam.id, seatLimit: 2, accessUntil: Date.now() + 600000, reason: 'emulator rocket grant', actor: 'integration-test' });
+  const { child: nova } = await service.createChild(ctx, { nickname: 'Nova', icon: 'fox', pin: '763829' }, randomUUID());
+  const { child: orion } = await service.createChild(ctx, { nickname: 'Orion', icon: 'wolf', pin: '763829' }, randomUUID());
+  const record = (passes, rpSpent) => ({ level: 0, paper: 1, bossCleared: 0, nav: { level: 0, paper: 1, bossCleared: 0 }, savedAt: 1788870699017,
+    history: Array.from({ length: passes }, (_, i) => ({ date: '2026-09-01', ts: Date.parse('2026-09-01T04:00:00Z') + i * 60_000, levelIdx: 0, levelId: 'A', papers: '1–5', correct: 25, incorrect: 0, timeout: 0, total: 25, passed: true, mins: '5:12' })),
+    wallet: { gcSpent: 0, rpSpent, shields: 0, shieldDays: [], inventory: [], purchases: [], redemptions: [] } });
+  // orion's v2 spending holds 100 RP of an earlier rocket (the node's history) on top of this rocket's fuel
+  for (const [child, passes, rpSpent] of [[nova, 70, 6700], [orion, 75, 7200]]) {
+    await importLearning(store, { familyId: fam.id, childId: child.id, record: record(passes, rpSpent), actor: 'integration-test', reason: 'emulator v2 child' });
+  }
+  const dir = await mkdtemp(join(tmpdir(), 'am-rocket-cli-'));
+  try {
+    const file = join(dir, 'rocket.json');
+    await writeFile(file, JSON.stringify({ createdAt: 1788000000000, createdOn: '2026-08-29', crew: ['nova', 'orion'], currency: 'rp', fuel: { nova: 6700, orion: 7100 }, goal: 20000, id: '1788000000000',
+      minEach: 10000, prize: { emoji: '🎡', name: 'Theme park day' }, status: 'fueling', history: [{ id: '1780000000000', status: 'claimed' }] }));
+    const script = fileURLToPath(new URL('../scripts/migrate-v2.mjs', import.meta.url));
+    const cli = (token, ...extra) => spawnSync(process.execPath, [script, 'rocket', fam.id, file, `nova=${nova.id}`, `orion=${orion.id}`, ...extra, 'emulator cli rocket'],
+      { encoding: 'utf8', env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, APP_MODE: 'emulator', FIREBASE_PROJECT_ID: projectId, FIRESTORE_EMULATOR_HOST: '127.0.0.1:8088', ...(token ? { CONFIRM_MIGRATION: token } : {}) } });
+    const configDoc = db.doc(`families/${fam.id}/game/config`);
+    const leftover = cli('write');
+    assert.equal(leftover.status, 0, leftover.stderr); assert.match(leftover.stdout, /Nothing was written/); assert.match(leftover.stderr, /WARNING: this v2 rocket lists 1 earlier rocket/);
+    assert.equal((await configDoc.get()).exists, false, 'CONFIRM_MIGRATION=write wrote no rocket');
+    const mismatch = cli('rocket');
+    assert.notEqual(mismatch.status, 0); assert.match(mismatch.stderr, /V2_ROCKET_FUEL_SPENT_MISMATCH:orion/);
+    assert.match(mismatch.stderr, /rpSpent 7200; fuel 7100 \+ declared other spending 0 = 7100/, 'both numbers for the operator');
+    assert.equal((await configDoc.get()).exists, false);
+    const written = cli('rocket', 'other.orion=100');
+    assert.equal(written.status, 0, written.stderr); assert.match(written.stdout, /"event":"rocket_migration_written"/);
+    const cfg = (await configDoc.get()).data();
+    assert.deepEqual(cfg.rocket.fuel, { [nova.id]: 6700, [orion.id]: 7100 });
+    const audit = (await db.collection('audit').where('familyId', '==', fam.id).get()).docs.map((d) => d.data()).filter((a) => a.action === 'rocket.migrated');
+    assert.equal(audit.length, 1); assert.equal(audit[0].actor, 'emulator-operator'); assert.equal(audit[0].summary.v2HistoryCount, 1);
+    assert.deepEqual(audit[0].summary.crew, [{ childId: nova.id, fuel: 6700, spent: 6700, otherSpent: 0 }, { childId: orion.id, fuel: 7100, spent: 7200, otherSpent: 100 }]);
+    const repeat = cli('rocket', 'other.orion=100');
+    assert.notEqual(repeat.status, 0); assert.match(repeat.stderr, /V2_ROCKET_ALREADY_IMPORTED/);
+    assert.ok(repeat.stderr.includes(`rocketId ${cfg.rocketMigration.rocketId}`) && repeat.stderr.includes(String(cfg.rocketMigration.at)), 'the existing import is named');
+    assert.equal((await configDoc.get()).data().rocket.id, cfg.rocket.id);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
 test('a filtered page after a document id (queryAfter) on real Firestore: id order, only the filtered rows, inside and outside a transaction', async () => {
   const col = `qa-${randomUUID()}`;
   await store.transaction(async (tx) => { for (let i = 0; i < 7; i++) tx.set(`${col}/d${i}`, { familyId: i % 2 ? 'odd' : 'even', n: i }); });

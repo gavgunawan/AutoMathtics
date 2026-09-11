@@ -113,3 +113,6 @@ for development by the review team on 9 Sep 2026). Order agreed with the team:
 
 - An unfinished Mystery Egg at cutover: refund its 900 ⚡ as a `migrate.opening` component, or start fresh. **Proposed: refund.**
 - Family-level Reward Store and Rocket configuration: re-enter in the parent workspace (a few items) or extend the importer. **Proposed: re-enter.**
+  *Rocket: superseded (11 Sep 2026) by the rocket import* — the parent route cannot open a rocket with fuel in it, so the
+  v2 `rocket` node is carried by the operator tool's rocket form (`importRocket` in `server/migrate.mjs`; `PILOT.md`,
+  decision 2 and cutover step 7). The Reward Store is still re-entered by hand.
