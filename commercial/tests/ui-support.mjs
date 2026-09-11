@@ -88,7 +88,10 @@ export async function uiFixture(t, { family = true, signedIn = true, clock = nul
   return { f, a, root, message, api, requests, broadcasts, nodes: tag => nodes(root, tag), click: label => control(root, label).onclick(),
     idle, setAuth, submitLogin, draft, cookie: () => cookie, setCookie: value => { cookie = `__session=${value}`; },
     visibility: () => documentEvents.visibilitychange?.(), sessionChange: () => channelHandler?.(),
-    history, intervals: () => intervals.size, tick: () => { for (const fn of [...intervals.values()]) fn(); },
+    // the release check (app.js releaseTick) lives as long as the page: ticked with the other clocks, never counted among them;
+    // tick's promise settles once every clock has done its work (the check's question to the server included)
+    history, intervals: () => [...intervals.values()].filter((fn) => fn.name !== 'releaseTick').length, tick: () => Promise.all([...intervals.values()].map((fn) => fn())),
+    setRelease: (release) => { cfg.releaseSha = release; }, // a deploy, as the running server would report it
     // the browser's Back: one entry down, popstate with that entry's state, or out of the page from the first entry
     back: async () => { if (history.index === 0) { history.left++; return; } history.index--; windowEvents.popstate?.({ state: history.state }); await idle(); },
     popstate: async (state) => { windowEvents.popstate?.({ state }); await idle(); } };

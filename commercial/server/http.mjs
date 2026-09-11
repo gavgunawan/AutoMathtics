@@ -170,7 +170,7 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
           csrf = preauthCsrf(cfg.secret, token, service.now());
           if (!csrf) { token = preauth(cfg.secret, service.now()); csrf = preauthCsrf(cfg.secret, token, service.now()); setCookie(res, token, 600); }
         }
-        return json(200, { csrf });
+        return json(200, { csrf, release: cfg.releaseSha || VERSION }); // the running release (as /api/health): the app offers Update now when it changes
       }
       if (req.method !== 'GET' && req.method !== 'POST') fail(405, 'METHOD_NOT_ALLOWED');
       let data;

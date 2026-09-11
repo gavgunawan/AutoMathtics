@@ -89,5 +89,12 @@ account owner's own address receives mail (`DEPLOY_V3.md` → Email).
 | F3 | Wrong origin (open the API host directly) | the API refuses browser calls without the app's origin |
 | F4 | Old bookmark to the v2 game | v2 still works and is unaffected (PR #1 is draft) |
 
+## A new version
+
+| # | Do | Expect |
+|---|---|---|
+| U1 | Keep a tab open on the phone (Mission Control) and on the kids' tablet (a child's home), then deploy any change (block C). Switch back to each tab, or leave it in view for up to five minutes | the bar *A new version of AutoMathtics is ready.* with *Update now*; nothing reloads by itself; tapping it loads the new version (`/api/health` shows the new `release`) and the bar is gone. Tabs opened before the first release that contains this checker cannot know of it: they need one manual reload |
+| U2 | On the kids' tablet start a paper, deploy a change while it runs, and answer on | no bar while the questions run; it appears on the summary or the child's home once the paper ends or is left, and nothing of the paper is lost |
+
 Sign-off: date, devices, rows failed, tickets opened. The pilot (`PILOT.md`) starts only with every
 row green on every device.

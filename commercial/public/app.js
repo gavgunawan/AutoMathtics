@@ -97,7 +97,7 @@ const tidy = (value) => String(value || '').replace(/[\s().-]/g, '');
 const e164 = (value) => /^\+[1-9]\d{6,14}$/.test(tidy(value));
 // the robot check belongs on the screen from the moment it opens, not only once Send has been pressed
 function armCaptcha() { auth().then((a) => a.armCaptcha?.()).catch(() => {}); }
-function panel(kicker, title, subtitle) {
+function panel(kicker, title, subtitle, play = false) {
   authModule?.resetCaptcha?.(); // the robot check belongs to the screen that built it; one left behind strands its frame
   stopSendClock(); screenId++; onBack = null; // the same for the Send countdown, and Back is each screen's to set again
   root.replaceChildren();
@@ -105,6 +105,7 @@ function panel(kicker, title, subtitle) {
   box.append(el('p', kicker, 'kicker'), el('h1', title), el('p', subtitle, 'muted'));
   root.append(box);
   if (!kidMode) root.append(feedbackFoot(kicker)); // under the sign-in screen and every parent screen; never in kid mode
+  inPlay = play; showUpdate(); // a newer release's bar goes on every screen but a running question session (playView)
   return box;
 }
 function note(text) { status.textContent = text || ''; }
@@ -124,13 +125,32 @@ function feedbackFoot(kicker) {
       const text = words.value.trim(), contact = reply ? reply.input.value.trim() : '';
       if (!text || text.length > 2000) { note(messages.FEEDBACK_TEXT); return; }
       if (contact && (contact.length > 254 || !EMAIL_ADDRESS.test(contact))) { note(messages.FEEDBACK_CONTACT); return; }
-      if (!model) csrf = (await api('/bootstrap')).csrf; // signed out, the pre-authentication token lives ten minutes: a fresh one
+      if (!model) csrf = (await bootstrap()).csrf; // signed out, the pre-authentication token lives ten minutes: a fresh one
       await api('/feedback', { text, page, ...(contact ? { contact } : {}) });
       closed(); note('Thank you: your feedback was sent.');
     }, 'primary'), button('Cancel', closed, 'ghost'));
   }
   closed(); return foot;
 }
+// ---- Update now (the owner's request of 12 Sep 2026): every bootstrap names the release the server runs (RELEASE_SHA, else the
+// version). The first one this page saw is its own; any other means a newer app is live, and a bar offers Update now. It never
+// reloads by itself, and in kid mode it waits for the end of a question session (panel's `play`). Asked on every bootstrap (so on
+// every refresh), when the tab comes back into view, and every five minutes while it is in view (releaseTick, at the end). A page
+// opened before this checker existed cannot know: it needs one manual reload.
+const RELEASE_CHECK_MS = 5 * 60_000, updateBar = el('div', null, 'update-bar');
+let firstRelease = null, newRelease = false, inPlay = false;
+function sawRelease(release) {
+  if (typeof release !== 'string' || !release) return;
+  if (firstRelease === null) firstRelease = release;
+  if (release !== firstRelease && !newRelease) { newRelease = true; showUpdate(); }
+}
+function showUpdate() {
+  if (!newRelease || inPlay || [...root.children].includes(updateBar)) return;
+  if (!updateBar.children.length) { const go = el('button', 'Update now', 'primary'); go.type = 'button'; go.onclick = () => { if (typeof location === 'object' && location) location.reload(); }; updateBar.append(el('span', 'A new version of AutoMathtics is ready.'), go); }
+  root.append(updateBar);
+}
+async function bootstrap() { const b = await api('/bootstrap'); sawRelease(b.release); return b; }
+const checkRelease = () => api('/bootstrap').then((b) => sawRelease(b.release), () => {}); // in the background: never touches csrf, never shows an error
 // ---- the Send countdown (the SMS resend ladder, DEPLOY_V3.md section 5) ----
 // H:MM:SS with the hours unbounded, so a day's wait reads 24:00:00 rather than a clock that wrapped to 0:00:00.
 function hms(seconds) {
@@ -198,7 +218,7 @@ async function api(path, payload, requestId) {
 }
 async function refresh() {
   transientView = false;
-  csrf = (await api('/bootstrap')).csrf;
+  csrf = (await bootstrap()).csrf;
   try { model = await api('/me'); csrf = model.csrf; await renderModel(); }
   catch (error) {
     if (error.code === 'SIGN_IN_REQUIRED' || error.code === 'SESSION_REVOKED') { model = null; signInScreen(); return; }
@@ -220,7 +240,7 @@ async function authStep(result, afterReady = null) {
   if (result.stage === 'ready') {
     try {
       // Reauthentication can outlast the old cookie/preauthentication CSRF lifetime.
-      csrf = (await api('/bootstrap')).csrf;
+      csrf = (await bootstrap()).csrf;
       if (afterReady?.valid && !afterReady.valid()) return;
       await api('/auth/session', { idToken: result.idToken, ...(typeof rememberChoice === 'boolean' ? { remember: rememberChoice } : {}) });
     }
@@ -339,7 +359,7 @@ function consentBoxes() {
 // Both boxes are recorded by the server, from the new account's own ID token, the moment the account exists. A failure never
 // blocks the sign-up: the defaults then apply (the weekly report on, news off), and Mission Control can change both later.
 async function recordConsent(a, progress, news) {
-  try { const idToken = await a.idToken?.(); if (!idToken) return; csrf = (await api('/bootstrap')).csrf; await api('/auth/consent', { idToken, progress, news }); }
+  try { const idToken = await a.idToken?.(); if (!idToken) return; csrf = (await bootstrap()).csrf; await api('/auth/consent', { idToken, progress, news }); }
   catch { /* the defaults apply */ }
 }
 async function cancelVerification() {
@@ -790,7 +810,7 @@ async function mapScreen() {
 }
 function displayText(d) { if (d.layout === 'stack') return `${d.top} ${d.sym} ${d.bottom} =`; if (d.layout === 'frac') return `${d.pre ? `${d.pre} ` : ''}${d.parts.map((p) => (p.sym ? p.sym : `${p.n}/${p.d}`)).join(' ')} =`; return d.text; }
 function playView(session, q) {
-  stopTimer(); transientView = true; const t = TRACK[q.track || session.track], box = panel(`${t.emoji} ${t.name} · SECTOR ${q.levelId || session.levelId}`, runLabel(session), `Question ${q.index + 1} of ${session.count}${session.mode === 'placement' ? '' : ` · paper ${q.paper}`}`);
+  stopTimer(); transientView = true; const t = TRACK[q.track || session.track], box = panel(`${t.emoji} ${t.name} · SECTOR ${q.levelId || session.levelId}`, runLabel(session), `Question ${q.index + 1} of ${session.count}${session.mode === 'placement' ? '' : ` · paper ${q.paper}`}`, true);
   onBack = refresh; // to the child's home: the session stays open there under "Continue", nothing is quit or lost
   const shout = gameModel?.wallet?.activeShout, tier = playStreak >= 18 ? 3 : playStreak >= 14 ? 2 : playStreak >= 9 ? 1 : playStreak >= 4 ? 0 : -1;
   if (tier >= 0) box.append(el('p', (SHOUTS[shout] || ['COMBO!', 'SUPER COMBO!', 'HYPER COMBO!', 'ULTRA COMBO!!'])[tier], 'combo'));
@@ -874,9 +894,12 @@ channel?.addEventListener('message', () => {
   run(async () => { if (authModule) await authModule.clear(); await refresh(); });
 });
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && model && !working && !transientView) run(refresh);
+  if (document.visibilityState !== 'visible') return;
+  if (model && !working && !transientView) run(refresh); // refresh bootstraps, which compares the release
+  else checkRelease(); // a draft, a game or the sign-in screen stays as it is: only the release is asked for
 });
 await run(refresh);
+setInterval(function releaseTick() { return document.visibilityState === 'visible' ? checkRelease() : undefined; }, RELEASE_CHECK_MS); // Update now: every five minutes in view
 // Back from a hosted checkout (Stage 4.1). The redirect proves nothing: the provider's signed webhook
 // is what changes the plan, so tell the parent what to expect and look again shortly.
 const returned = typeof location === 'object' && location?.search ? new URLSearchParams(location.search) : null;
