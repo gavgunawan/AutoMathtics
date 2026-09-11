@@ -365,11 +365,17 @@ unadvertised and configure/test that protection before broad registration.
 ## 5b. Email: the weekly progress report (email-v1)
 
 Every Monday at 07:00 Singapore time a Cloud Run job (`node scripts/report.mjs send`, from the service's own image) sends each
-family one email about its last complete week in the family's time zone: per child what was right and fast, right but slow,
-and wrong again and again, the totals, a goldilocks pace and a System Scan focus offer. It goes to the owner's current address
-at the identity provider, and only if that address is verified and the account not disabled. There is no email for a week
-without play, with the weekly report switched off, or without an active entitlement. `reports/{familyId}:{week}` holds one
-claim and its outcome per family and week (status only, TTL 400 days), so overlapping or repeated runs never send twice.
+family one email about the last complete ISO week in Singapore, the same week for every family: per child what was right and
+fast, right but slow, and wrong again and again, the totals, a goldilocks pace and a System Scan focus offer. It goes to the
+owner's current address at the identity provider, and only if that address is verified and the account not disabled; if the
+identity provider cannot be asked, the family fails and the next run tries again. There is no email for a week without play,
+with the weekly report switched off, or without an active entitlement. `reports/{familyId}:{week}` holds one claim and its
+outcome per family and week (status only, TTL 400 days), so overlapping or repeated runs never send twice.
+
+**The time-zone edge.** Each family's answers count by the family's own local dates, but the week is Singapore's. A family
+west of Singapore is still in its Sunday at Monday 07:00 Singapore time: answers it gives later that Sunday are dated in the
+reported week, arrive after its email, and no report counts them. One week per run is deliberate: computed family by family,
+a run near a daylight-saving change or a midnight could report two different weeks, and never the same one twice.
 
 The buttons in an email open the app, which says what the button does and changes nothing until the parent taps Confirm.
 Mail apps get RFC 8058 one-click unsubscribe at `https://PROJECT_ID.web.app/api/email/unsubscribe`. The web service needs
@@ -400,8 +406,15 @@ Block G (`scripts/cloudshell/07-report-job.sh`) is a copy of block E. It sets TT
 `node scripts/report.mjs send` with `APP_MODE`, `FIREBASE_PROJECT_ID`, `CONFIRM_PROJECT`, `OPERATOR_ID=scheduler@PROJECT_ID`,
 `APP_ORIGIN`, `EMAIL_PROVIDER` and `EMAIL_FROM`, the secret `SESSION_SECRET=am-v3-session:1` and, with Resend only,
 `EMAIL_API_KEY=am-v3-email-key:1`. It schedules `automathtics-v3-report-weekly` at `0 7 * * 1` Asia/Singapore, then does a dry
-run. A run in which any send fails exits 2, so Cloud Run shows it failed. Executing the job again retries what failed, and
-Resend's Idempotency-Key (`report:FAMILY:WEEK`, kept 24 hours) makes a retry after a lost answer the same email, not a second one.
+run. A run in which any family fails exits 2, so Cloud Run shows it failed; one family's failure never stops the others.
+Executing the job again retries what failed. Each send carries the Idempotency-Key `report:FAMILY:WEEK`, which Resend keeps for
+24 hours: a retry inside them with the same bytes gets the first answer back and no second email, and the same report does
+render the same bytes, because every button's expiry follows from the week and nothing else in the email moves with the clock.
+If the email changed meanwhile (the parent changed a pace between the attempts, say), Resend refuses the key as reused with
+another body (409 `invalid_idempotent_request`), as it does a key whose first request is still in flight (409
+`concurrent_idempotent_requests`): either means an email under that key reached Resend already, so the family is recorded as
+`sent_unconfirmed` and never sent again. A retry more than 24 hours after a first attempt whose answer was lost can deliver a
+second email.
 
 ```bash
 source <(curl -fsSL https://raw.githubusercontent.com/gavgunawan/AutoMathtics/release/v3.0/commercial/scripts/cloudshell/07-report-job.sh)
@@ -409,8 +422,10 @@ source <(curl -fsSL https://raw.githubusercontent.com/gavgunawan/AutoMathtics/re
 
 To see every family's decision without sending anything, execute the job with overrides:
 `gcloud run jobs execute automathtics-v3-report --region asia-southeast1 --args scripts/report.mjs,send,--dry-run --wait`, then
-read its log (one line per family: `sent`, `skipped` with the reason, or `failed`; never an address or a token).
-`--family FAMILY_UUID` and `--week 2026-W36` narrow a run; `preview FAMILY_UUID` prints one family's email with inert links.
+read its log (one line per family: `sent`, `sent_unconfirmed`, `skipped` with the reason, or `failed` with its code; never an
+address or a token). `--family FAMILY_UUID` and `--week 2026-W36` narrow a run; `preview FAMILY_UUID` prints one family's email
+with inert links. The arguments are strict: an unknown word, a repeated option or an option without its value exits 64 with the
+usage, so a slip can never widen a run to every family.
 
 ## 6. Activate your test family
 

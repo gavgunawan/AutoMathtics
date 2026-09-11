@@ -1,10 +1,13 @@
 // The mailer (email-v1): one send() over two providers.
 //  • fake: records the rendered email instead of sending it, in memory (`sent`, for tests) and, when a store is given, in
 //    outbox/{id} for 14 days by TTL: the staging preview until the owner has a Resend account (only the owner can open one).
-//  • resend: POST https://api.resend.com/emails with the account key as a bearer token and an Idempotency-Key (Resend keeps a key
-//    for 24 hours, so a retry inside them is the same email), within 10 seconds. A network failure or the timeout is
-//    PROVIDER_UNREACHABLE, a refusal PROVIDER_ERROR with the provider's status and error name; neither carries the key, the
-//    address or the email (the pattern of gateways/stripe.mjs api()).
+//  • resend: POST https://api.resend.com/emails with the account key as a bearer token and an Idempotency-Key, within 10 seconds.
+//    Resend keeps a key for 24 hours: the same key with the same body gets the first answer back (no second email); the same key
+//    with another body is refused (409 invalid_idempotent_request), and so is one still being handled (409
+//    concurrent_idempotent_requests). Either 409 means an email under that key reached Resend already, so it comes back as sent
+//    but unconfirmed, never as a failure to retry. A network failure or the timeout is PROVIDER_UNREACHABLE, any other refusal
+//    PROVIDER_ERROR with the provider's status and error name; none carries the key, the address or the email (the pattern of
+//    gateways/stripe.mjs api()).
 import { randomUUID } from 'node:crypto';
 import { Fault, fail } from './security.mjs';
 
@@ -51,6 +54,7 @@ export function createMailer({ provider = 'fake', apiKey = null, from = DEFAULT_
         body: JSON.stringify({ from, to: [to], subject, html, text, headers, tags }) });
     } catch { fail(502, 'PROVIDER_UNREACHABLE'); }
     const json = await res.json().catch(() => ({}));
+    if (res.status === 409 && ['invalid_idempotent_request', 'concurrent_idempotent_requests'].includes(json?.name)) return { id: null, provider, unconfirmed: json.name };
     if (!res.ok || typeof json?.id !== 'string') { const e = new Fault(502, 'PROVIDER_ERROR'); e.provider = { status: res.status, name: typeof json?.name === 'string' ? json.name.slice(0, 64) : null }; throw e; }
     return { id: json.id, provider };
   }

@@ -9,12 +9,13 @@ import { readFile } from 'node:fs/promises';
 import { fixture, rejected, secret } from './support.mjs';
 import { uiFixture } from './ui-support.mjs';
 import { createApp } from '../server/http.mjs';
-import { signEmailToken, readEmailToken, LINK_ACTIONS } from '../server/email.mjs';
+import { signEmailToken, readEmailToken, LINK_ACTIONS, linkExpiry } from '../server/email.mjs';
 import { DELETION_GRACE_MS } from '../server/support.mjs';
 
 const DAY = 86_400_000, WEEK = '2026-W35';
-const token = (f, a, more = {}) => signEmailToken(secret, { a: 'pace', u: 'parentA', f: a.familyId, c: a.childId, v: 75, w: WEEK, e: f.now() + 14 * DAY, ...more });
-const unsubToken = (f, a, more = {}) => signEmailToken(secret, { a: 'unsub', u: 'parentA', f: a.familyId, v: 'progress', w: WEEK, e: f.now() + 365 * DAY, ...more });
+// a button's token as the job signs it: the expiry follows from its action and its week (linkExpiry); `more` may change either
+const token = (f, a, more = {}) => { const p = { a: 'pace', u: 'parentA', f: a.familyId, c: a.childId, v: 75, w: WEEK, ...more }; return signEmailToken(secret, { e: linkExpiry(p.a, p.w), ...p }); };
+const unsubToken = (f, a, more = {}) => { const p = { a: 'unsub', u: 'parentA', f: a.familyId, v: 'progress', w: WEEK, ...more }; return signEmailToken(secret, { e: linkExpiry(p.a, p.w), ...p }); };
 async function setup(f, uid = 'parentA') { const a = await f.family(uid, 2); const { child } = await f.child(a.ctx, 'Allison'); return { ...a, childId: child.id }; }
 const prog = (f, a) => f.store.get(`families/${a.familyId}/learning/${a.childId}`);
 const applied = async (f) => (await f.store.list('audit')).filter((x) => x.action === 'email.action_applied');
@@ -27,21 +28,26 @@ async function listen(t, f) {
   return { base, call: (path, data, more = {}) => fetch(`${base}${path}`, { method: 'POST', headers: { Cookie: cookie, Origin: cfg.origin, 'X-CSRF-Token': csrf, 'Content-Type': 'application/json', ...more }, body: JSON.stringify(data) }) };
 }
 
-test('a token is signed with its own key and read back only unchanged, only with what this server signs, and only until it expires', () => {
-  const now = Date.parse('2026-09-07T00:00:00Z'), base = { a: 'pace', u: 'parentA', f: randomUUID(), c: randomUUID(), v: 75, w: WEEK, e: now + 14 * DAY };
+test('a token is signed with its own key and read back only unchanged, only with what this server signs, and only until the expiry its week gives it', () => {
+  const now = Date.parse('2026-09-07T00:00:00Z'), base = { a: 'pace', u: 'parentA', f: randomUUID(), c: randomUUID(), v: 75, w: WEEK, e: linkExpiry('pace', WEEK) };
   const t = signEmailToken(secret, base), [v, body, sig] = t.split('.');
   assert.match(t, /^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/); assert.deepEqual(readEmailToken(secret, t, now), base); assert.deepEqual(LINK_ACTIONS, { focus: 14, pace: 14, unsub: 365 });
+  // the expiry follows from the week alone: the Monday after it (00:00 UTC), plus the kind's days
+  assert.equal(linkExpiry('pace', WEEK), Date.UTC(2026, 7, 31) + 14 * DAY); assert.equal(linkExpiry('focus', WEEK), linkExpiry('pace', WEEK)); assert.equal(linkExpiry('unsub', WEEK), Date.UTC(2026, 7, 31) + 365 * DAY);
+  for (const [a, w] of [['pace', '2025-W53'], ['pace', 'soon'], ['pace', null], ['toString', WEEK], ['__proto__', WEEK], ['constructor', WEEK]]) assert.equal(linkExpiry(a, w), null, `${a} ${w}`);
   const bad = (x, code = 'LINK_INVALID') => assert.throws(() => readEmailToken(secret, x, now), (e) => e.code === code, String(x).slice(0, 80));
   // tampering: a new payload under the old signature, a new signature, another version, another secret, cut short, junk
   bad(`${v}.${Buffer.from(JSON.stringify({ ...base, v: 200 })).toString('base64url')}.${sig}`); bad(`${v}.${body}.${sig.slice(0, -1)}${sig.at(-1) === 'A' ? 'B' : 'A'}`);
   bad(`v2.${body}.${sig}`); bad(signEmailToken('b3'.repeat(32), base)); bad(`${v}.${body}`); for (const junk of ['', 'v1..', null, 42, `${t}.x`]) bad(junk);
-  // only what this server signs: known actions, the value each takes, a child for pace and focus and none for unsub, nothing extra
+  // only what this server signs: known actions, the value each takes, a child for pace and focus and none for unsub, nothing extra, and exactly the week's expiry
   for (const p of [{ a: 'delete' }, { v: 5 }, { v: 201 }, { v: '75' }, { v: 7.5 }, { c: undefined }, { c: 'not-a-child' }, { f: 'not-a-family' }, { u: 'bad uid' }, { w: 'soon' }, { e: 'later' }, { extra: 1 },
-    { a: 'focus', v: 'yes' }, { a: 'unsub', v: 'progress' }, { a: 'unsub', c: undefined, v: 'news' }]) bad(signEmailToken(secret, { ...base, ...p }));
+    { a: 'focus', v: 'yes' }, { a: 'unsub', v: 'progress' }, { a: 'unsub', c: undefined, v: 'news' }, { e: base.e + DAY }, { e: now + 14 * DAY }, { w: '2026-W36' }]) bad(signEmailToken(secret, { ...base, ...p }));
+  // an action is an own property of the table: nothing Object.prototype carries passes for one
+  for (const a of ['constructor', 'toString', '__proto__', 'hasOwnProperty', 'valueOf']) { bad(signEmailToken(secret, { ...base, a })); bad(signEmailToken(secret, { a, u: 'parentA', f: base.f, v: 'progress', w: WEEK, e: linkExpiry('unsub', WEEK) })); }
   assert.equal(readEmailToken(secret, signEmailToken(secret, { ...base, a: 'focus', v: false }), now).v, false);
-  assert.equal(readEmailToken(secret, signEmailToken(secret, { a: 'unsub', u: 'parentA', f: base.f, v: 'progress', w: WEEK, e: now + 365 * DAY }), now).a, 'unsub');
-  // time: dead at its expiry, and never longer-lived than its kind allows (a day of slack)
-  bad(signEmailToken(secret, { ...base, e: now }), 'LINK_EXPIRED'); bad(signEmailToken(secret, { ...base, e: now + 16 * DAY })); assert.ok(readEmailToken(secret, signEmailToken(secret, { ...base, e: now + 15 * DAY }), now));
+  assert.equal(readEmailToken(secret, signEmailToken(secret, { a: 'unsub', u: 'parentA', f: base.f, v: 'progress', w: WEEK, e: linkExpiry('unsub', WEEK) }), now).a, 'unsub');
+  // alive until its expiry, dead from it
+  assert.ok(readEmailToken(secret, t, base.e - 1)); assert.throws(() => readEmailToken(secret, t, base.e), (e) => e.code === 'LINK_EXPIRED');
 });
 
 test('describe says what a button does and changes nothing; apply does it and audits it, and a second tap sets the same value', async () => {
@@ -68,7 +74,7 @@ test('describe says what a button does and changes nothing; apply does it and au
 
 test('a button stops working when its link is spoiled or has expired, or what it was about has gone: another family, a child not in it, another parent, a family being deleted or deleted', async () => {
   const f = fixture(), a = await setup(f), b = await setup(f, 'parentB');
-  const old = token(f, a, { e: f.now() + 1000 }); f.advance(1000);
+  const old = token(f, a, { w: '2026-W30' }); // its week ended in July, and its 14 days after that are over
   assert.deepEqual(await f.email.describe({ t: old }), { valid: false, reason: 'expired' }); await assert.rejects(f.email.apply({ t: old }), rejected('LINK_EXPIRED'));
   assert.deepEqual(await f.email.describe({ t: 'v1.junk.sig' }), { valid: false, reason: 'invalid' }); await assert.rejects(f.email.apply({ t: 'nope' }), rejected('LINK_INVALID'));
   await assert.rejects(f.email.describe({ t: token(f, a), extra: 1 }), rejected('INVALID_REQUEST'));
@@ -81,7 +87,7 @@ test('a button stops working when its link is spoiled or has expired, or what it
   await gone(token(f, a), 'a deletion under way'); await gone(unsubToken(f, a), 'the unsubscribe too');
   const { status, ...requested } = (await f.store.get(`families/${a.familyId}`)).deletion; void status; await setFamily(f, a.familyId, { deletion: requested }); // back to requested, for the real execution below
   f.advance(DELETION_GRACE_MS); await f.support.executeDeletion(a.familyId, { operator: 'ops@example.test' });
-  await gone(token(f, a), 'a tombstone'); assert.equal(await f.store.get('emailPrefs/parentA'), null, 'and no record resurrected');
+  await gone(token(f, a, { w: '2026-W37' }), 'a tombstone'); assert.equal(await f.store.get('emailPrefs/parentA'), null, 'and no record resurrected'); // a later week's button: still in date after the 14 days
 });
 
 test('the routes: describe and apply before any session with the pre-authentication CSRF token, or inside one; Origin, CSRF and fetch metadata enforced; budgeted per address; names that pass the no-transfer rule', async (t) => {
@@ -131,7 +137,7 @@ test('UI: an email button opens a panel that says exactly what it will do; Cance
   const u = await uiFixture(t, { signedIn: false, location: async (f) => ({ search: `?email=${unsubToken(f, await f.family('parentA', 2))}`, pathname: '/' }) });
   assert.ok(u.root.textContent.includes('Stop the weekly progress report for p…@example.test. Account and security emails still come.'), u.root.textContent.slice(0, 300));
   await u.click('Confirm'); assert.equal((await u.f.store.get('emailPrefs/parentA')).progress, false); assert.ok(u.root.textContent.includes('Sign in as parent'), 'back at sign-in, signed out as before');
-  const d = await uiFixture(t, { location: async (f, parent) => ({ search: `?email=${signEmailToken(secret, { a: 'unsub', u: 'parentA', f: parent.familyId, v: 'progress', w: WEEK, e: f.now() - 1 })}`, pathname: '/' }) });
+  const d = await uiFixture(t, { location: async (f, parent) => ({ search: `?email=${unsubToken(f, parent, { w: '2025-W30' })}`, pathname: '/' }) }); // a year and a week ago: expired
   assert.ok(d.root.textContent.includes('This link no longer works.') && d.root.textContent.includes('work for 14 days')); await d.click('Close'); assert.ok(d.root.textContent.includes('Email updates'));
   const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8'), boot = app.slice(app.indexOf("if (returned?.get('email'))"));
   assert.ok(boot.indexOf("history.replaceState(null, '', location.pathname)") < boot.indexOf('emailScreen(token)'), 'the address is tidied first'); assert.ok(app.indexOf("if (returned?.get('email'))") < app.indexOf('\nguardBack();'));

@@ -247,6 +247,12 @@ export function weekISO(ms, timeZone) {
   const y0 = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
   return `${t.getUTCFullYear()}-W${String(Math.ceil(((t - y0) / 86_400_000 + 1) / 7)).padStart(2, '0')}`;
 }
+/** The Monday of an ISO week as a UTC midnight, or null for a week that does not exist (2025-W53, 2026-W00): weekISO's inverse. */
+export function weekStart(week) {
+  const m = /^(\d{4})-W(\d{2})$/.exec(typeof week === 'string' ? week : ''); if (!m) return null;
+  const jan4 = Date.UTC(Number(m[1]), 0, 4), start = jan4 - ((new Date(jan4).getUTCDay() || 7) - 1) * 86_400_000 + (Number(m[2]) - 1) * 7 * 86_400_000;
+  return weekISO(start, 'UTC') === week ? start : null;
+}
 // one unlock rule for the scan itself, the weekly report and its email (server/report.mjs): Engine Sector B, papers 1-20 clear
 export const scanUnlocked = (engine) => engine.level >= 1 && engine.paper > 20;
 export function scanState(prog, now, timeZone) {

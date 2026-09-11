@@ -11,7 +11,7 @@
 // identity provider and is read when a report is sent. Deleting the sign-in account deletes the record (server/support.mjs).
 import { createHmac } from 'node:crypto';
 import { Fault, fail, object, text, equal, uuid } from './security.mjs';
-import { normalizeProgress } from './progress.mjs';
+import { normalizeProgress, weekStart } from './progress.mjs';
 import { maskAddress } from './mailer.mjs';
 
 export const EMAIL_VERSION = 'email-v1';
@@ -19,26 +19,33 @@ export const EMAIL_VERSION = 'email-v1';
 // f: family, c: child, v: value, w: ISO week, e: expiry }. The key is an HMAC of SESSION_SECRET under its own label, so a
 // token can never pass for a session, a CSRF token or a pre-authentication cookie, all of which the same secret signs.
 export const LINK_ACTIONS = Object.freeze({ focus: 14, pace: 14, unsub: 365 }); // how many days each kind of button works
+/**
+ * When a button stops working: the Monday after its report week (00:00 UTC) plus its kind's days. It follows from the week alone,
+ * so the same report renders the same links at any hour, which a retry needs to be byte-identical for Resend's Idempotency-Key.
+ * null for a week that does not exist or an action this server does not sign (own properties only).
+ */
+export const linkExpiry = (action, week) => { const s = weekStart(week); return s !== null && Object.hasOwn(LINK_ACTIONS, action) ? s + (7 + LINK_ACTIONS[action]) * 86_400_000 : null; };
 const linkKey = (secret) => createHmac('sha256', secret).update('email-links-v1').digest();
 export function signEmailToken(secret, payload) {
   const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
   return `v1.${body}.${createHmac('sha256', linkKey(secret)).update(`v1.${body}`).digest('base64url')}`;
 }
-const TOKEN = /^v1\.([A-Za-z0-9_-]{1,2048})\.([A-Za-z0-9_-]{43})$/, UID = /^[A-Za-z0-9_-]{1,128}$/, KEYS = ['a', 'u', 'f', 'c', 'v', 'w', 'e'], DAY = 86_400_000;
+const TOKEN = /^v1\.([A-Za-z0-9_-]{1,2048})\.([A-Za-z0-9_-]{43})$/, UID = /^[A-Za-z0-9_-]{1,128}$/, KEYS = ['a', 'u', 'f', 'c', 'v', 'w', 'e'];
 const isUuid = (v) => { try { uuid(v); return true; } catch { return false; } };
 /**
  * A button's token back to its payload: the signature first (constant time) and nothing parsed before it holds; then only what
- * this server signs passes, an action it knows, the value that action takes, a child for pace and focus, none for unsub, and an
- * expiry no later than the action allows. LINK_INVALID for all of that, LINK_EXPIRED once the expiry has passed.
+ * this server signs passes: an action of its own (never one inherited from Object: 'constructor', '__proto__' and the like), the
+ * value that action takes, a child for pace and focus, none for unsub, and exactly the expiry its week gives it (linkExpiry).
+ * LINK_INVALID for all of that, LINK_EXPIRED once the expiry has passed.
  */
 export function readEmailToken(secret, token, now) {
   const m = typeof token === 'string' ? TOKEN.exec(token) : null;
   if (!m || !equal(m[2], createHmac('sha256', linkKey(secret)).update(`v1.${m[1]}`).digest('base64url'))) fail(400, 'LINK_INVALID');
   let p = null; try { p = JSON.parse(Buffer.from(m[1], 'base64url').toString('utf8')); } catch { fail(400, 'LINK_INVALID'); }
-  const days = p && typeof p === 'object' && !Array.isArray(p) ? LINK_ACTIONS[p.a] : undefined;
-  if (!days || Object.keys(p).some((k) => !KEYS.includes(k)) || typeof p.u !== 'string' || !UID.test(p.u) || !isUuid(p.f) || typeof p.w !== 'string' || !/^\d{4}-W\d{2}$/.test(p.w) || !Number.isSafeInteger(p.e)) fail(400, 'LINK_INVALID');
+  const known = !!p && typeof p === 'object' && !Array.isArray(p) && typeof p.a === 'string' && Object.hasOwn(LINK_ACTIONS, p.a);
+  if (!known || Object.keys(p).some((k) => !KEYS.includes(k)) || typeof p.u !== 'string' || !UID.test(p.u) || !isUuid(p.f) || typeof p.w !== 'string' || !/^\d{4}-W\d{2}$/.test(p.w) || !Number.isSafeInteger(p.e)) fail(400, 'LINK_INVALID');
   const value = p.a === 'pace' ? Number.isInteger(p.v) && p.v >= 10 && p.v <= 200 : p.a === 'focus' ? typeof p.v === 'boolean' : p.v === 'progress';
-  if (!value || (p.a === 'unsub' ? p.c !== undefined : !isUuid(p.c)) || p.e > now + (days + 1) * DAY) fail(400, 'LINK_INVALID');
+  if (!value || (p.a === 'unsub' ? p.c !== undefined : !isUuid(p.c)) || p.e !== linkExpiry(p.a, p.w)) fail(400, 'LINK_INVALID');
   if (p.e <= now) fail(410, 'LINK_EXPIRED');
   return p;
 }
