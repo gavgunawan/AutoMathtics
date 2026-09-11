@@ -148,16 +148,23 @@ export function applyGameDerived(value, now, timeZone, pickIndex = (n) => random
   return { progress: { ...p, wallet: w }, events };
 }
 
+// The fluency grid (the map's heatmap, v2 3352-3364 and 3453-3471): per track, sector and tier, how many answers, how many right,
+// the seconds taken, and the pace — the seconds taken over the seconds allowed. The pace counts only the questions whose
+// allowance was logged (`timed`): a row carried over from v2 has seconds but no allowance, and its seconds against the newer
+// rows' allowances alone would make a quick child read as slow. A question without its own sector takes its session's, except
+// on a scan, whose questions come from several sectors: v2 left those out rather than skew a tier, and so does this.
 export function heatmap(progress) {
   const cells = {};
   for (const h of progress.history || []) for (const q of h.qlog || []) {
-    const track = q.track || h.track || 'engine', level = Number.isInteger(q.l) ? q.l : h.level, tier = q.t;
+    const track = q.track || h.track || 'engine', level = Number.isInteger(q.l) ? q.l : h.mode === 'scan' ? null : h.level, tier = q.t;
     if (!['engine', 'nav'].includes(track) || !Number.isInteger(level) || !Number.isInteger(tier)) continue;
-    const key = `${track}:${level}:${tier}`, c = cells[key] || { track, level, levelId: LEVELS[level]?.id || '?', tier, attempts: 0, correct: 0, secs: 0, allowed: 0 };
-    c.attempts++; c.correct += q.ok ? 1 : 0; if (Number.isFinite(q.s)) c.secs += q.s; if (Number.isFinite(q.a)) c.allowed += q.a; cells[key] = c;
+    const key = `${track}:${level}:${tier}`, c = cells[key] || { track, level, levelId: LEVELS[level]?.id || '?', tier, attempts: 0, correct: 0, secs: 0, allowed: 0, timed: 0, timedSecs: 0 };
+    c.attempts++; c.correct += q.ok ? 1 : 0; if (Number.isFinite(q.s)) c.secs += q.s;
+    if (Number.isFinite(q.a) && Number.isFinite(q.s)) { c.allowed += q.a; c.timed++; c.timedSecs += q.s; }
+    cells[key] = c;
   }
-  return Object.values(cells).map((c) => ({ ...c, accuracy: c.attempts ? Math.round(c.correct * 1000 / c.attempts) / 10 : 0,
-    avgSeconds: c.attempts ? Math.round(c.secs * 10 / c.attempts) / 10 : null, pace: c.allowed ? Math.round(c.secs * 100 / c.allowed) / 100 : null }));
+  return Object.values(cells).map(({ timedSecs, ...c }) => ({ ...c, accuracy: c.attempts ? Math.round(c.correct * 1000 / c.attempts) / 10 : 0,
+    avgSeconds: c.attempts ? Math.round(c.secs * 10 / c.attempts) / 10 : null, pace: c.allowed ? Math.round(timedSecs * 100 / c.allowed) / 100 : null }));
 }
 
 const rewardPublic = (r) => ({ id: r.id, emoji: r.emoji, name: r.name, cost: r.cost, hidden: r.hidden, cap: r.cap, childIds: r.childIds });

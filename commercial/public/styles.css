@@ -322,8 +322,42 @@ html[data-mode=kid][data-bg] body:after,html[data-mode=kid][data-bg=bg_space] bo
 @keyframes crateShake{0%,100%{transform:rotate(0)}20%{transform:rotate(-14deg)}40%{transform:rotate(12deg)}60%{transform:rotate(-10deg)}80%{transform:rotate(8deg)}}
 @keyframes cratePop{from{transform:scale(.2);opacity:0}70%{transform:scale(1.3);opacity:1}to{transform:scale(1);opacity:1}}
 /* the route map's panel, its grid in the map theme's colour (--grid from MAP_THEMES through setVar; 3383, 4307-4309) */
-.tronmap{position:relative;overflow:hidden;background:var(--mapbg);border:1px solid var(--v2line);border-radius:14px;padding:16px 10px 10px}
+.tronmap{position:relative;overflow:hidden;margin:12px 0 0;background:var(--mapbg);border:1px solid var(--v2line);border-radius:14px;padding:16px 10px 10px;--lit:var(--accent,var(--cyan))}
 .tronmap:before{content:"";position:absolute;inset:0;pointer-events:none;opacity:.5;background-image:linear-gradient(var(--grid,rgba(53,224,255,.06)) 1px,transparent 1px),linear-gradient(90deg,var(--grid,rgba(53,224,255,.06)) 1px,transparent 1px);background-size:22px 22px;-webkit-mask-image:linear-gradient(to top,#000 30%,transparent);mask-image:linear-gradient(to top,#000 30%,transparent)}
+/* ---- the map (v2 3350-3515): the route drawn as the sector's letter, the check-point strip, the heatmap and the trophies. The
+   lit route reads --lit (the child's colour, or the map theme's through setVar); an open check point's colours are custom
+   properties on its cell; the heatmap's colours are classes, and every cell also says its state in numbers and a word ---- */
+.map-tabs{display:flex;gap:6px;justify-content:center;margin:8px 0 2px}
+.tiny.map-tab{padding:5px 12px;background:transparent}
+.tiny.map-tab.on{background:var(--c);color:var(--void)}
+.map-tab.on.c-cyan{box-shadow:0 0 14px #35E0FF66}.map-tab.on.c-gold{box-shadow:0 0 14px #FFB02066}
+.route-svg{position:relative;display:block;width:100%;max-width:320px;margin:0 auto}
+.route-lit{stroke:var(--lit)}
+@keyframes gatePulse{0%,100%{transform:scale(1)}50%{transform:scale(1.12)}}
+.cpdue{transform-box:fill-box;transform-origin:center;animation:gatePulse 1.6s ease-in-out infinite}
+.route-text{margin:12px 0 0;padding:12px;border:1px solid var(--v2line);border-radius:14px;background:var(--mapbg);font:600 13px/1.5 var(--mono);color:var(--txt)}
+.cp-strip{display:grid;grid-template-columns:repeat(5,1fr);gap:4px;margin-top:12px}
+.cp-cell{padding:6px 2px;border-radius:8px;background:var(--void);box-shadow:inset 0 0 0 1.5px var(--v2line);text-align:center;font:600 10px var(--mono);color:var(--dim)}
+.cp-cell.open{background:var(--c-soft);box-shadow:inset 0 0 0 1.5px var(--c),0 0 12px var(--c-glow);color:var(--c)}
+.cp-icon{display:block;font-size:12px;line-height:1.4}
+.map-title{margin:16px 0 6px;text-align:left}
+.heat-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:4px}
+.heat-cell{padding:8px 2px;border-radius:8px;text-align:center;font:600 10.5px/1.35 var(--mono);color:var(--c);background:var(--c-bg);box-shadow:inset 0 0 0 1.5px var(--c),0 0 12px var(--c-glow);overflow-wrap:anywhere}
+.heat-cell.grey{--c:var(--dim);--c-bg:var(--void);box-shadow:inset 0 0 0 1.5px var(--v2line)}
+.heat-cell.red{--c:var(--red);--c-bg:#FF3B5C22;--c-glow:#FF3B5C55}.heat-cell.gold{--c:var(--gold);--c-bg:#FFB02022;--c-glow:#FFB02055}.heat-cell.mint{--c:var(--mint);--c-bg:#2DFFB322;--c-glow:#2DFFB355}
+.heat-cell b,.heat-nums,.heat-sub,.heat-word{display:block}
+.heat-sub{font-size:9px;opacity:.75}
+.heat-word{margin-top:2px;font:700 9.5px var(--ui);letter-spacing:.03em}
+.trophies{display:flex;gap:6px;justify-content:center;flex-wrap:wrap}
+.trophy{width:50px;padding:7px 2px 6px;border-radius:10px;text-align:center;background:var(--void);box-shadow:inset 0 0 0 1.5px var(--v2line)}
+.trophy.done{background:#FFD54F18;box-shadow:inset 0 0 0 1.5px var(--trophy),0 0 14px #FFD54F55}
+.trophy.cur{background:var(--accent-faint);box-shadow:inset 0 0 0 1.5px var(--accent),0 0 14px var(--accent-halo)}
+.trophy-icon{display:block;font-size:15px;line-height:1.2}
+.trophy-id{display:block;font:700 15px var(--display);color:var(--dim)}
+.trophy.done .trophy-id{color:var(--trophy)}.trophy.cur .trophy-id{color:var(--accent)}
+.box.scan-card{margin:16px 0 0}
+.scan-text{margin:4px 0 8px;font-size:13.5px;color:var(--txt)}
+.scan-state{margin:0;font-size:12.5px;font-weight:700;color:var(--dim)}
 /* ---- the child's home (v2 2859-3073): the header above the card, the card, the log below ---- */
 .home-header{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;width:100%;max-width:640px;margin:0 auto 12px;animation:screenIn .36s cubic-bezier(.16,1,.3,1) both}
 .home-who{display:flex;align-items:center;gap:10px;min-width:0}
@@ -509,10 +543,9 @@ input.answer-box:not(:placeholder-shown){border-style:solid;box-shadow:0 0 16px 
    coin burst is drawn; the crate's prize shows at once */
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}html[data-mode] #decor,.splash{display:none}.crate-item,.crate-name{opacity:1}}
 
-/* ---- learning engine (Stage 2): the map's and the parent's track rows, until steps 10 and 12 rebuild them ---- */
+/* ---- learning engine (Stage 2): the parent's track rows, until step 12 rebuilds them ---- */
 .track { display: grid; gap: 0.35rem; padding: 0.9rem 1rem; margin: 0.6rem 0; border: 1px solid rgba(255,255,255,0.12); border-radius: 12px; }
 
 /* ---- migrated v2 game layer ---- */
 .approval{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:10px;margin:8px 0;padding:11px 13px;border:1px solid #8aa0ef22;border-radius:12px;background:#081126aa}.approval button{margin:0;min-height:38px;padding:8px 11px;font-size:11px}
-.heat-row{display:flex;justify-content:space-between;gap:16px;align-items:center;margin:6px 0;padding:10px 12px;border-left:3px solid #57e8f8;background:#57e8f808;border-radius:8px}@media(max-width:760px){.approval{grid-template-columns:1fr auto}.approval button{grid-column:1/-1;width:100%}.heat-row{align-items:flex-start;flex-direction:column;gap:3px}}
-.map_lava{background:linear-gradient(145deg,#2b0e1d,#0d1027)!important;border-color:#ff5a2d55!important}.map_ice{background:linear-gradient(145deg,#102b42,#0d1027)!important;border-color:#35e0ff66!important}.map_matrix{background:repeating-linear-gradient(90deg,#2dffb307 0 1px,transparent 1px 22px),#07150f!important;border-color:#2dffb355!important}.map_gold{background:linear-gradient(145deg,#2c2410,#101225)!important;border-color:#ffb02066!important}
+@media(max-width:760px){.approval{grid-template-columns:1fr auto}.approval button{grid-column:1/-1;width:100%}}

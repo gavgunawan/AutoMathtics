@@ -1153,13 +1153,156 @@ async function shopScreen(after = {}) {
   const row = el('div', null, 'row-buttons'); row.append(button('Back', childScreen, 'ghost'));
   box.append(rewardStore(g), purchaseLog(w), row);
 }
-async function mapScreen() {
-  transientView = true; const [st, g] = await Promise.all([api('/learn/state'), api('/game/state')]); gameModel = g; const box = panel('MISSION MAP', 'Progress & fluency', 'Your map is calculated from server-recorded sessions. Accuracy and time cannot be edited by the browser.'); if (g.wallet.activeMap) box.className += ` ${g.wallet.activeMap}`;
-  onBack = childScreen; applyLook(g.wallet);
-  for (const t of ['engine', 'nav']) { const p = st[t], card = el('div', null, 'track'); card.append(el('strong', `${TRACK[t].emoji} ${TRACK[t].name} · Sector ${p.levelId}`), el('span', `${Math.min(100, p.paper - 1)} papers · ${p.bossCleared} crowns`, 'card-meta')); box.append(card); }
-  if (!g.heatmap.length) box.append(el('p', 'Complete some sessions to light up the fluency grid.', 'muted'));
-  for (const c of g.heatmap.sort((a,b) => a.track.localeCompare(b.track) || a.level-b.level || a.tier-b.tier)) { const row = el('div', null, 'heat-row'); row.append(el('strong', `${TRACK[c.track].emoji} ${c.levelId} · Tier ${c.tier}`), el('span', `${c.accuracy}% · ${c.avgSeconds ?? '—'} s avg · ${c.attempts} questions`, 'card-meta')); box.append(row); }
-  box.append(button('Back to my grid', childScreen, 'primary'));
+// ---- the map (v2 3350-3515): the sector's route drawn as its letter, the check-point strip, the fluency heatmap, the trophy
+// case and the weekly scan. All of it is the learning state the server keeps; nothing on this screen can move it ----
+// the route through each sector's letter (LETTER_ROUTES 220-227): one polyline in a 200×240 box. The five check points ride it
+// at 1/6…5/6 of its length, or where `at` puts them on a lopsided letter; the 🔓 exit is its end; `extra` finishes the letter
+const LETTER_ROUTES = {
+  A: { route: [[36, 226], [68, 128], [100, 16], [132, 128], [164, 226]], extra: [[[59, 156], [141, 156]]] },
+  B: { route: [[56, 226], [56, 14], [110, 14], [136, 26], [146, 50], [138, 82], [112, 100], [56, 100], [122, 100], [156, 116], [168, 152], [160, 196], [126, 226], [56, 226]], extra: [], at: [0.09, 0.33, 0.44, 0.66, 0.85] },
+  C: { route: [[156, 54], [136, 28], [108, 16], [76, 22], [52, 44], [40, 80], [38, 120], [44, 164], [62, 198], [92, 222], [124, 224], [150, 206], [158, 186]], extra: [] },
+  D: { route: [[56, 226], [56, 14], [104, 14], [136, 28], [156, 60], [162, 120], [156, 180], [136, 212], [104, 226], [56, 226]], extra: [] },
+  E: { route: [[158, 16], [56, 16], [56, 226], [158, 226]], extra: [[[56, 121], [140, 121]]] },
+  F: { route: [[158, 16], [56, 16], [56, 226]], extra: [[[56, 126], [138, 126]]], at: [0.05, 0.26, 0.48, 0.7, 0.91] },
+};
+const CP_COLORS = ['#35E0FF', '#2DFFB3', '#FFB020', '#FF2DA8', '#8A5CFF']; // each check point's own neon (229) where no map theme recolours them
+const cpAt = (g, t) => (g.at ? g.at[t - 1] : t / 6);
+// how much of the route is lit (233-240): check point t is reached at paper t×20, the last stretch only once all five are cleared
+function energyFor(g, papers, allCleared) {
+  if (allCleared) return 1;
+  const p = Math.max(0, Math.min(100, papers)), i = Math.floor(p / 20), a = i === 0 ? 0 : cpAt(g, i), b = i >= 5 ? 1 : cpAt(g, i + 1);
+  return a + (b - a) * ((p % 20) / 20);
+}
+const routeLen = (r) => r.reduce((s, p, i) => (i ? s + Math.hypot(p[0] - r[i - 1][0], p[1] - r[i - 1][1]) : 0), 0);
+const routeD = (r) => r.map((p, i) => `${i ? 'L' : 'M'}${p[0]} ${p[1]}`).join(' ');
+// the point at fraction f of a polyline's length (244-256)
+function pointAt(r, f) {
+  const segs = r.slice(1).map((p, i) => Math.hypot(p[0] - r[i][0], p[1] - r[i][1]));
+  let want = Math.max(0, Math.min(1, f)) * segs.reduce((a, b) => a + b, 0);
+  for (let i = 0; i < segs.length; i++) {
+    if (want <= segs[i] || i === segs.length - 1) { const k = segs[i] ? Math.min(1, want / segs[i]) : 0; return [r[i][0] + (r[i + 1][0] - r[i][0]) * k, r[i][1] + (r[i + 1][1] - r[i][1]) * k]; }
+    want -= segs[i];
+  }
+  return r[r.length - 1];
+}
+// a check point as v2 draws it (3415-3425): 👑 once cleared, ⚡ once its tier is reached, 🔒 ahead
+const cpState = (p, t) => { const cleared = p.bossCleared >= t, due = !cleared && p.paper > (t - 1) * 20; return { cleared, due, open: cleared || due, icon: cleared ? '👑' : due ? '⚡' : '🔒', word: cleared ? 'cleared' : due ? 'reached' : 'locked' }; };
+const SVG_NS = 'http://www.w3.org/2000/svg', r1 = (x) => Math.round(x * 10) / 10;
+const canDraw = () => typeof document.createElementNS === 'function'; // the test harness has no SVG: the map then says the route in words
+const reducedMotion = () => Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches);
+// an SVG node: its attributes are the drawing (a colour here is an attribute or a class, never a style)
+function svgEl(tag, attrs = {}, text) {
+  const n = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, String(v));
+  if (text !== undefined) n.textContent = text; return n;
+}
+// the route (3384-3431): the whole letter unlit, the stretch driven so far lit in the child's colour or the map theme's (.route-lit
+// reads --lit), a white core, a packet of light running it, the exit, the five check points in their colours, and the vehicle
+function routeSvg(glyph, p, energy, cps, veh, label) {
+  const len = routeLen(glyph.route), d = routeD(glyph.route), lit = `${r1(len * energy)} ${r1(len)}`, line = { fill: 'none', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' };
+  const svg = svgEl('svg', { viewBox: '-18 -18 236 276', role: 'img', 'aria-label': label, class: 'route-svg' }), defs = svgEl('defs'), merge = svgEl('feMerge');
+  const neon = svgEl('filter', { id: 'amNeon', x: '-70%', y: '-70%', width: '240%', height: '240%' });
+  merge.append(svgEl('feMergeNode', { in: 'b' }), svgEl('feMergeNode', { in: 'b' }), svgEl('feMergeNode', { in: 'SourceGraphic' }));
+  neon.append(svgEl('feGaussianBlur', { stdDeviation: 4.5, result: 'b' }), merge); defs.append(neon); svg.append(defs);
+  for (const s of glyph.extra) svg.append(svgEl('path', { d: routeD(s), stroke: '#161C42', 'stroke-width': 9, ...line }));
+  svg.append(svgEl('path', { d, stroke: '#161C42', 'stroke-width': 9, ...line }),
+    svgEl('path', { d, class: 'route-lit', 'stroke-width': 9, filter: 'url(#amNeon)', opacity: 0.55, 'stroke-dasharray': lit, ...line }),
+    svgEl('path', { d, stroke: '#EAF2FF', 'stroke-width': 2.4, 'stroke-dasharray': lit, ...line }));
+  if (energy > 0.03 && !reducedMotion()) { // no running light for someone who asked for no motion (CSS cannot stop an SVG animate)
+    const packet = svgEl('path', { d, stroke: '#FFFFFF', 'stroke-width': 4, filter: 'url(#amNeon)', 'stroke-dasharray': `8 ${r1(len)}`, ...line });
+    packet.append(svgEl('animate', { attributeName: 'stroke-dashoffset', from: 0, to: r1(-len * energy), dur: `${Math.max(1.8, (len * energy) / 60).toFixed(1)}s`, repeatCount: 'indefinite' }));
+    svg.append(packet);
+  }
+  const [ex, ey] = pointAt(glyph.route, 1), exit = svgEl('g'), through = energy >= 1;
+  exit.append(svgEl('circle', { cx: r1(ex), cy: r1(ey), r: 12, fill: '#0B0E23', stroke: '#8A5CFF', 'stroke-width': 2, opacity: through ? 1 : 0.7, ...(through ? { filter: 'url(#amNeon)' } : {}) }),
+    svgEl('text', { x: r1(ex), y: r1(ey + 4), 'text-anchor': 'middle', 'font-size': 11 }, through ? '🔓' : '🔒'), svgEl('title', {}, 'next level'));
+  svg.append(exit);
+  for (let t = 1; t <= 5; t++) {
+    const [cx, cy] = pointAt(glyph.route, cpAt(glyph, t)), s = cpState(p, t), g = svgEl('g', s.due ? { class: 'cpdue' } : {});
+    g.append(svgEl('circle', { cx: r1(cx), cy: r1(cy), r: 14.5, fill: '#0B0E23', stroke: s.open ? cps[t - 1] : '#2A3170', 'stroke-width': s.open ? 2.5 : 2, ...(s.open ? { filter: 'url(#amNeon)' } : {}) }),
+      svgEl('text', { x: r1(cx), y: r1(cy + 5), 'text-anchor': 'middle', 'font-size': 14 }, s.icon), svgEl('title', {}, `Check point ${t} — papers ${t * 20 - 19}–${t * 20}`));
+    svg.append(g);
+  }
+  if (veh) { // it rides a touch ahead of the lit tip, so it never sits on a check point's crown
+    const [vx, vy] = pointAt(glyph.route, Math.min(0.985, Math.max(0.03, energy) + 0.04));
+    svg.append(svgEl('text', { x: r1(vx), y: r1(vy + 8), 'text-anchor': 'middle', 'font-size': 22, class: 'mapveh', filter: 'url(#amNeon)', 'aria-hidden': 'true' }, veh.emoji));
+  }
+  return svg;
+}
+// the fluency heatmap (3453-3471), a cell per tier of the track's sector from the server's heatmap: grey under five answers, red
+// under 90% right, gold when the answers took more than ¾ of the time they were allowed, mint otherwise. Each cell says it in
+// numbers and in a word as well, never by colour alone.
+const HEAT_WORD = { mint: '✓ fast', gold: '⏳ slow', red: '✗ practise', grey: 'play more' };
+function heatCell(c, t, levelId) {
+  const n = c?.attempts || 0, tone = n < 5 ? 'grey' : c.accuracy < 90 ? 'red' : c.pace > 0.75 ? 'gold' : 'mint', each = c?.timed ? Math.round(c.allowed / c.timed) : null;
+  const cell = el('div', null, `heat-cell ${tone}`);
+  cell.setAttribute('title', n ? `Tier ${t} · ${n} question${n === 1 ? '' : 's'} logged in Sector ${levelId}${each ? ` · ${each}s allowed each, aiming under ${Math.round(each * 0.75)}s` : ''}` : `Tier ${t} · nothing logged yet in Sector ${levelId}`);
+  cell.append(el('b', `T${t}`), el('span', n >= 5 ? `${Math.round(c.accuracy)}% · ${Math.round(c.avgSeconds)}s` : 'no data', 'heat-nums'),
+    el('span', n >= 5 && each ? `${n}q / ${each}s` : n ? `${n}q` : '—', 'heat-sub'), el('span', HEAT_WORD[tone], 'heat-word'));
+  return cell;
+}
+// the trophy case (3472-3496): a trophy for each sector both tracks have left behind (the last one once both have finished it),
+// and each track's marker where it is now, in the child's colour
+function trophyCase(st, child) {
+  const e = st.engine, n = st.nav, finished = e.done && n.done && e.level === LAST_LEVEL && n.level === LAST_LEVEL, cleared = finished ? LAST_LEVEL + 1 : Math.min(e.level, n.level);
+  const wrap = el('div', null, `trophies ${accClass(child)}`);
+  for (let i = 0; i <= LAST_LEVEL; i++) {
+    const done = i < cleared, here = `${i === e.level ? '⚙️' : ''}${i === n.level ? '🧭' : ''}`, now = !done && here !== '', id = LEVEL_IDS[i];
+    const tile = el('div', null, `trophy${done ? ' done' : now ? ' cur' : ''}`);
+    tile.setAttribute('title', `Sector ${id} — ${LEVEL_NAMES[i]}${done ? ' · cleared by both tracks' : now ? ` · in progress (${here})` : ' · locked'}`);
+    tile.append(el('span', done ? '🏆' : now ? here : '🔒', 'trophy-icon'), el('span', id, 'trophy-id'), el('span', done ? ' cleared' : now ? ' in progress' : ' locked', 'sr-only'));
+    wrap.append(tile);
+  }
+  return [wrap, el('p', cleared ? `${cleared} of ${LAST_LEVEL + 1} sectors cleared · ${[...LEVEL_IDS].slice(0, cleared).join(' ')} banked`
+    : `no trophies yet — take both tracks through all 5 check points of Sector ${LEVEL_IDS[0]} to win your first`, 'subtle')];
+}
+// the weekly System Scan (3497-3509), once Engine has left Sector A; whether it is open, and when, is the server's (scanState)
+function scanCard(st) {
+  if (st.engine.level < 1) return null;
+  const s = st.scan || {}, card = el('div', null, 'box c-violet scan-card');
+  card.append(el('p', '🧠 SYSTEM SCAN · WEEKLY', 'section-label'), el('p', '25 questions from everything learnt so far. Double loot: ⚡100 + 🏆200.', 'scan-text'));
+  if (!s.unlocked) card.append(el('p', `🔒 unlocks after ${st.engine.levelId} 16–20 — clear the first tier of this sector first`, 'scan-state'));
+  else if (s.doneThisWeek) card.append(el('p', '✓ done this week — resets Monday', 'scan-state'));
+  else if (st.active) card.append(el('p', 'a session is open — finish it from your home screen first', 'scan-state'));
+  else if (s.available) card.append(button('START SCAN ▶', () => startRun({ track: 'engine', mode: 'scan' }), 'primary violet'));
+  return card;
+}
+async function mapScreen(track = 'engine') {
+  transientView = true; const [st, g] = await Promise.all([api('/learn/state'), api('/game/state')]); gameModel = g;
+  drawMap(st, g, track === 'nav' ? 'nav' : 'engine');
+}
+// the map of one track (a tab switches it, from what was fetched): the route, the strip, the heatmap, the trophies, the scan
+function drawMap(st, g, mt) {
+  const child = model.child, w = g.wallet, p = st[mt], glyph = lookup(LETTER_ROUTES, p.levelId, LETTER_ROUTES.A), passed = Math.min(p.paper - 1, 100);
+  const theme = lookup(MAP_THEMES, w.activeMap, null), cps = theme ? theme.cps : CP_COLORS, veh = gameItem(w.activeVehicle)?.kind === 'vehicle' ? gameItem(w.activeVehicle) : null;
+  const box = panel(`🗺 SECTOR ${p.levelId} ROUTE · ${child.nickname.toUpperCase()}`, '', '', 'map');
+  onBack = childScreen; applyLook(w);
+  const tabs = el('div', null, 'map-tabs'); tabs.setAttribute('role', 'tablist'); tabs.setAttribute('aria-label', 'track');
+  for (const t of ['engine', 'nav']) {
+    const T = TRACK[t], on = t === mt, tab = button(`${T.emoji} ${T.name}${st[t].done ? ' ✓' : ''}`, () => drawMap(st, g, t), `tiny map-tab ${T.c}${on ? ' on' : ''}`);
+    tab.setAttribute('role', 'tab'); tab.setAttribute('aria-selected', String(on)); tabs.append(tab);
+  }
+  box.append(tabs);
+  const label = `Sector ${p.levelId} route: ${p.bossCleared} of 5 check points cleared, ${passed} of 100 papers passed`;
+  if (canDraw()) {
+    const map = el('div', null, `tronmap ${accClass(child)}`);
+    if (theme) { setVar(map, '--lit', theme.lit); setVar(map, '--grid', theme.grid); }
+    map.append(routeSvg(glyph, p, energyFor(glyph, passed, p.bossCleared >= 5), cps, veh, label)); box.append(map);
+  } else box.append(el('p', `🗺 ${label}`, 'route-text'));
+  const strip = el('div', null, 'cp-strip'); // the check points again in a row (3434-3451), with their paper ranges
+  for (let t = 1; t <= 5; t++) {
+    const s = cpState(p, t), col = cps[t - 1], cell = el('div', null, s.open ? 'cp-cell open' : 'cp-cell');
+    cell.setAttribute('title', `Check point ${t} — papers ${t * 20 - 19}–${t * 20}`);
+    if (s.open) { setVar(cell, '--c', col); setVar(cell, '--c-soft', `${col}18`); setVar(cell, '--c-glow', `${col}44`); }
+    cell.append(el('span', s.icon, 'cp-icon'), `${t * 20 - 19}–${t * 20}`, el('span', ` ${s.word}`, 'sr-only')); strip.append(cell);
+  }
+  box.append(strip, el('p', `paper ${Math.min(p.paper, 100)} of 100 · the route is the letter ${p.levelId} · 👑 check point every 20 papers gates the next tier · 🔓 next level`, 'subtle'));
+  const heat = el('div', null, 'heat-grid');
+  for (let t = 1; t <= 5; t++) heat.append(heatCell((st.heatmap || []).find((c) => c.track === mt && c.level === p.level && c.tier === t), t, p.levelId));
+  box.append(el('p', 'FLUENCY HEATMAP', 'log-title map-title'), heat, el('p', '✓ fast + right · ⏳ right but slow · ✗ under 90% right · play more: under 5 answers yet', 'subtle'),
+    el('p', '🏆 TROPHY CASE', 'log-title map-title'), ...trophyCase(st, child));
+  const scan = scanCard(st); if (scan) box.append(scan);
+  const row = el('div', null, 'row-buttons'); row.append(button('Back', childScreen, 'ghost')); box.append(row);
 }
 // ---- a session (v2 3110-3208): the status row, the timer bar, the flash, the question sheet, and v2's keypad beside Go,
 // Restart and Quit. The browser only sends the answer: the server marks it, rules on the time and pays for it. ----

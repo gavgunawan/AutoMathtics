@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { fixture, rejected, canonical } from './support.mjs';
 import { freshProgress, normalizeProgress } from '../server/progress.mjs';
-import { applyGameDerived, SHOP_ITEMS } from '../server/game.mjs';
+import { applyGameDerived, SHOP_ITEMS, heatmap } from '../server/game.mjs';
 import { bootstrap } from '../server/ledger.mjs';
 
 const progPath = (k) => `families/${k.p.familyId}/learning/${k.child.id}`;
@@ -162,4 +162,19 @@ test('S3-F1: once the 24-hour operation receipt is gone, a reused operation id i
   assert.equal((await f.game.state(k.childCtx)).wallet.gc, fueled.wallet.gc);
   // a different item under the old id is not a replay but a conflict
   await assert.rejects(f.game.buy(k.childCtx, { itemId: 'fit_hat', operationId: op }), rejected('LEDGER_CONFLICT'));
+});
+
+test('the heatmap\'s pace sets time against the allowance only where both were logged (a row carried over from v2 has none), and a scan\'s questions without their own sector are left out, as v2 left them', () => {
+  const p = freshProgress(), qs = (n, q) => Array.from({ length: n }, () => ({ ...q }));
+  p.history = [
+    { track: 'engine', mode: 'paper', level: 1, qlog: qs(10, { t: 1, l: 1, track: 'engine', s: 5, a: 30, ok: 1 }) },
+    { track: 'engine', mode: 'paper', level: 1, qlog: qs(5, { t: 1, s: 40, ok: 1 }) }, // carried over from v2: seconds, no allowance
+    { track: 'engine', mode: 'scan', level: 1, qlog: qs(5, { t: 2, s: 9, ok: 0 }) }, // a v2 scan: which sector each question came from is unknown
+  ];
+  const cells = heatmap(p); assert.equal(cells.length, 1, 'the scan\'s questions are not put in a tier of Sector B');
+  const [c] = cells;
+  assert.deepEqual({ levelId: c.levelId, tier: c.tier, attempts: c.attempts, correct: c.correct, timed: c.timed, allowed: c.allowed, accuracy: c.accuracy, avgSeconds: c.avgSeconds, pace: c.pace },
+    { levelId: 'B', tier: 1, attempts: 15, correct: 15, timed: 10, allowed: 300, accuracy: 100, avgSeconds: 16.7, pace: 0.17 }, 'quick where it was timed: the v2 seconds do not count against the v3 allowance');
+  assert.ok(!('timedSecs' in c));
+  assert.equal(heatmap({ history: [{ track: 'nav', mode: 'paper', level: 0, qlog: qs(6, { t: 1, s: 20, ok: 1 }) }] })[0].pace, null, 'no allowance logged at all: no pace to judge');
 });

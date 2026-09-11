@@ -44,7 +44,7 @@ test('Back on the kids\' side: from the PIN pad to the launch pad, from the shop
   h.nodes('INPUT')[0].value = '763829'; await h.click('Enter my grid');
   const home = () => h.root.textContent.includes('grid coins · spend in 🛒'); assert.ok(home());
   await h.click('🛒 Shop'); assert.ok(h.root.textContent.includes('GRID SHOP')); await h.back(); assert.ok(home(), 'from the shop');
-  await h.click('🗺 Map'); assert.ok(h.root.textContent.includes('MISSION MAP')); await h.back(); assert.ok(home(), 'from the map');
+  await h.click('🗺 Map'); assert.ok(h.root.textContent.includes('🗺 SECTOR A ROUTE')); await h.back(); assert.ok(home(), 'from the map');
   await h.click('⚙️ Start Engine ▶'); assert.ok(h.root.textContent.includes('Paper 1 · 1/25')); assert.equal(h.intervals(), 1, 'the question clock runs');
   await h.back(); assert.ok(home(), 'from a game'); assert.ok(h.root.textContent.includes('Continue'), 'the session is kept, not quit'); assert.equal(h.intervals(), 0, 'and its clock stopped');
   for (let i = 0; i < 5; i++) { await h.back(); assert.ok(home(), `press ${i + 1} on the home screen`); }

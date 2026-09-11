@@ -30,7 +30,8 @@ export function control(root, label) {
 // storage: a stand-in for the page's localStorage (omit: the page has none, as in a browser that blocks site data)
 // location: the page's address, e.g. { search: '?resetsms', pathname: '/' } (omit: no location, as before)
 // recordBodies: routes whose request bodies the test may read back from requests; only routes that carry no credential, such as '/api/learn/answer'
-export async function uiFixture(t, { family = true, signedIn = true, clock = null, storage = null, location = null, recordBodies = [] } = {}) {
+// svg: a DOM that makes SVG nodes (document.createElementNS), as a browser does (omit: it cannot, and the page must manage without)
+export async function uiFixture(t, { family = true, signedIn = true, clock = null, storage = null, location = null, recordBodies = [], svg = false } = {}) {
   const f = fixture();
   const a = signedIn ? (family ? await f.family('parentA', 2) : await f.login('parentA')) : null;
   const cfg = { origin: 'http://127.0.0.1', secret, emulator: true, web: { authDomain: 'demo-am-foundation.firebaseapp.com' } };
@@ -49,7 +50,8 @@ export async function uiFixture(t, { family = true, signedIn = true, clock = nul
   // html: the page's root element, which carries data-mode (and data-bg on kid screens); decor: the #decor layer behind #app
   const html = new Element('html'), decor = new Element('div'); decor.id = 'decor';
   const document = { visibilityState: 'visible', querySelector: sel => sel === '#app' ? root : message, documentElement: html,
-    getElementById: id => id === 'decor' ? decor : null, createElement: tag => new Element(tag), addEventListener: (name, fn) => { documentEvents[name] = fn; } };
+    getElementById: id => id === 'decor' ? decor : null, createElement: tag => new Element(tag),
+    ...(svg ? { createElementNS: (ns, tag) => Object.assign(new Element(tag), { namespaceURI: ns }) } : {}), addEventListener: (name, fn) => { documentEvents[name] = fn; } };
   const fetchForPage = async (path, options = {}) => {
     requests.push({ path, method: options.method || 'GET', ...(recordBodies.includes(path) && options.body ? { body: JSON.parse(options.body) } : {}) }); // never retain request credentials
     const r = await fetch(cfg.origin + path, { ...options, headers: { ...options.headers, Cookie: cookie, Origin: cfg.origin } });
