@@ -22,7 +22,7 @@
 .acc-3{--accent:var(--acc3);--accent-soft:#FFB02038;--accent-faint:#FFB02014;--accent-shade:#FFB02022;--accent-halo:#FFB02055;--accent-glow:#FFB02066}
 .acc-4{--accent:var(--acc4);--accent-soft:#8A5CFF38;--accent-faint:#8A5CFF14;--accent-shade:#8A5CFF22;--accent-halo:#8A5CFF55;--accent-glow:#8A5CFF66}
 .acc-5{--accent:var(--acc5);--accent-soft:#FF5A2D38;--accent-faint:#FF5A2D14;--accent-shade:#FF5A2D22;--accent-halo:#FF5A2D55;--accent-glow:#FF5A2D66}
-.c-cyan{--c:var(--cyan)}.c-gold{--c:var(--gold)}.c-magenta{--c:var(--magenta)}.c-violet{--c:var(--violet)}.c-mint{--c:var(--mint)}.c-txt{--c:var(--txt)}.c-red{--c:var(--red)}
+.c-cyan{--c:var(--cyan)}.c-gold{--c:var(--gold)}.c-magenta{--c:var(--magenta)}.c-violet{--c:var(--violet)}.c-mint{--c:var(--mint)}.c-txt{--c:var(--txt)}.c-red{--c:var(--red)}.c-dim{--c:var(--dim)}
 *{box-sizing:border-box}
 html{min-height:100%;background:var(--bg);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
 /* v2's page (st.page 3662-3669). isolation makes body a stacking context, so the grid, the aurora and the #decor layer
@@ -193,11 +193,16 @@ input.pin-box.bad{border-style:solid;border-color:var(--red);box-shadow:0 0 16px
 .message:not(:empty){animation:screenIn .3s ease-out}
 /* the provider's "I'm not a robot" box sits under the Send button it belongs to, centred like it */
 .captcha{display:flex;justify-content:center;margin:10px 0 4px;min-height:0}.captcha:empty{display:none}
-.feedback{max-width:850px;margin:6px auto 0;padding:0 26px}.feedback .field{max-width:560px}
-.feedback textarea{width:100%;min-height:120px;border:1px solid #35e0ff40;border-radius:12px;background:#080b21;color:var(--ink);padding:12px 15px;font:600 17px/1.45 var(--ui);letter-spacing:.02em;resize:vertical}
+/* Send feedback under the card (never in kid mode): a quiet link, and once opened a small card of its own */
+.feedback{width:100%;max-width:640px;margin:10px auto 0;text-align:center}
+.feedback.open{padding:14px 16px 12px;text-align:left;background:linear-gradient(155deg,rgba(16,20,46,.96),rgba(10,13,34,.94));border:1px solid var(--v2line);border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.28);animation:fadeSlide .25s ease-out}
+.feedback .field{max-width:none;margin:4px 0 10px}
+.feedback textarea{display:block;width:100%;min-height:110px;padding:10px 12px;border:1.5px solid var(--v2line);border-radius:12px;background:var(--panel);color:var(--txt);font:600 16px/1.45 var(--ui);letter-spacing:.02em;resize:vertical}
 .feedback textarea:focus{outline:none;border-color:var(--cyan);box-shadow:0 0 0 3px #35e0ff2b,0 0 22px #35e0ff33}
-.update-bar{position:fixed;top:0;left:0;right:0;z-index:50;display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:6px 14px;padding:10px 16px;background:#10153af2;border-bottom:1px solid #ff2da880;box-shadow:0 6px 24px #0008;color:var(--ink);font:600 16px var(--ui)}
-.update-bar button{margin:0;min-height:40px;padding:8px 16px}
+.feedback .row-buttons{margin-top:4px}
+/* Update now: a bar across the top in the card's colours, edged in magenta */
+.update-bar{position:fixed;top:0;left:0;right:0;z-index:50;display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:6px 14px;padding:10px 16px;background:linear-gradient(155deg,rgba(16,20,46,.97),rgba(10,13,34,.97));border-bottom:1.5px solid var(--magenta);box-shadow:0 8px 28px rgba(0,0,0,.45),0 0 22px rgba(255,45,168,.22);color:var(--txt);font:700 15px var(--ui);letter-spacing:.02em;animation:fadeSlide .25s ease-out}
+.update-bar .primary{min-height:36px;padding:7px 16px;font-size:13px}
 footer{box-sizing:content-box;max-width:640px;margin:8px auto 0;padding:0 clamp(14px,2vw,28px) 26px;display:flex;justify-content:space-between;gap:20px;color:var(--dim);font:600 9px var(--mono);letter-spacing:.12em}
 [aria-busy=true]{cursor:progress}[aria-busy=true] button{opacity:.65;pointer-events:none}
 @keyframes orbit{to{transform:rotate(360deg)}}
@@ -556,6 +561,97 @@ input.answer-box:not(:placeholder-shown){border-style:solid;box-shadow:0 0 16px 
 .guide-dots .dot.seen{background:var(--accent)}.guide-dots .dot.on{width:22px;background:var(--accent)}
 .guide-emoji{margin:4px 0 6px;font-size:46px;line-height:1.1}
 .guide-title{margin:0 0 10px;font-size:22px;letter-spacing:.04em;text-transform:none}
+/* ---- the parent's screens as v2's admin panel (2614-2856; port plan section 5): one card, left-aligned blocks under titles in their
+   colours, compact rows with tiny buttons at the right edge, the plan and the rocket in v2's featured box, and v2's footer ---- */
+.admin-sec{margin:20px 0 0;text-align:left}
+.admin-sec>h2.log-title{margin:0 0 8px}
+.admin-intro{margin:0 0 10px;font-size:14px;line-height:1.5;color:var(--txt)}
+.admin-sec .subtle{margin:4px 0 0}
+.admin-sec .notice{max-width:none;margin:0 0 8px}
+.row{display:flex;align-items:center;flex-wrap:wrap;gap:6px 8px;margin:0 0 8px;padding:8px 10px;border:1.5px solid var(--accent,var(--v2line));border-radius:12px;background:var(--void);text-align:left}
+.row.dashed{border-width:1px;border-style:dashed}
+.row-words{flex:1 1 160px;min-width:0;font-size:13.5px;line-height:1.4;color:var(--txt)}
+.row-name{font:700 12px var(--display);letter-spacing:.06em;text-transform:uppercase;color:var(--accent,var(--txt))}
+.row-cost{font:600 12px var(--mono);color:var(--gold)}
+.row-acts,.gate-acts,.data-acts,.plan-acts,.pace-acts{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.row-acts{margin-left:auto}
+.acc-tint{--c:var(--accent)}
+input.admin-inp,select.admin-inp{width:auto;min-width:0;max-width:100%;min-height:38px;padding:6px 8px;border:1px solid var(--v2line);border-radius:8px;background:var(--panel);color:var(--txt);font:600 13px var(--mono);letter-spacing:0}
+input.admin-inp.grow{flex:1 1 150px}
+input.admin-inp.emoji-in{width:52px;text-align:center;font-size:16px}
+input.admin-inp.num-in{width:78px}
+input.admin-inp.cap-in{width:48px}
+.inline-num{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:700;color:var(--dim)}
+/* 🔐 Account & security: v2's ADMIN GATE box, red while a recovery waits for the parent */
+.gate{padding:10px 12px;border:1.5px solid var(--v2line);border-radius:12px;background:var(--void)}
+.gate.alert{border-color:var(--red);box-shadow:0 0 18px rgba(255,59,92,.18)}
+.gate-alert{margin:0 0 8px;font-size:13.5px;font-weight:700;line-height:1.5;color:var(--alert-text)}
+.gate-line{margin:0 0 8px;font:600 11.5px/1.5 var(--mono);color:var(--dim)}
+.gate .row-buttons{justify-content:flex-start;margin:0 0 8px}
+/* 👥 Your crew: the slots, a row per child in the child's colour, the dashed row that adds one */
+.seat-line{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;margin:0 0 10px}
+.seat-count{font:600 20px var(--mono);color:var(--cyan);text-shadow:0 0 12px rgba(53,224,255,.3)}
+.seat-words{font:600 10.5px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+.state-chip{margin-left:auto;padding:3px 10px;border:1px solid var(--cyan);border-radius:999px;font:700 9px var(--display);letter-spacing:.16em;color:var(--cyan);box-shadow:0 0 10px rgba(53,224,255,.25);white-space:nowrap}
+.state-chip.due{border-color:var(--gold);color:var(--gold);box-shadow:0 0 10px rgba(255,176,32,.25)}
+.kid-row{gap:8px 10px}
+.kid-words{display:flex;flex-direction:column;gap:2px;flex:1 1 160px;min-width:0}
+.kid-name{font:700 13px var(--display);letter-spacing:.08em;text-transform:uppercase;color:var(--accent);overflow-wrap:anywhere}
+.kid-meta{font:600 10.5px/1.4 var(--mono);letter-spacing:.08em;color:#AAB6DB}
+.kid-seat{font-size:11.5px;font-weight:700;color:var(--mint)}.kid-seat.off{color:var(--dim)}
+.kid-acts{display:flex;flex-wrap:wrap;gap:6px;margin-left:auto}
+.kid-acts .tiny{--c:var(--accent)}
+.add-row{--accent:var(--mint)}
+.add-icon{font-size:15px;line-height:1}
+/* 💳 Plan & seats and the Family Rocket: v2's featured box */
+.feature-box{margin-top:20px;padding:12px 14px;border:1.5px solid var(--violet);border-radius:12px;background:var(--void);box-shadow:0 0 18px rgba(138,92,255,.12);--c:var(--violet)}
+.feature-box.launched{border-color:var(--gold);box-shadow:0 0 22px rgba(255,176,32,.25);--c:var(--gold)}
+.plan-line{margin:0 0 8px;font-size:14px;line-height:1.5;color:var(--txt)}
+.feature-box .row-buttons{justify-content:flex-start;margin:8px 0 0}
+.feature-box .reference{margin-top:10px}
+/* ⏱ Time control: a card per child, v2's slider in the child's colour */
+.pace-card{margin:0 0 12px;padding:12px 14px;border:1.5px solid var(--accent);border-radius:12px;background:var(--void)}
+.pace-head{display:flex;align-items:center;gap:10px}
+.pace-name{font:700 14px var(--display);letter-spacing:.06em;text-transform:uppercase;color:var(--accent);overflow-wrap:anywhere}
+.pace-val{margin-left:auto;font:600 20px var(--mono);color:var(--accent)}
+.pace-meta{margin:6px 0 2px;font:600 11px var(--mono);letter-spacing:.04em;color:var(--dim)}
+.pace-label{display:block;margin:6px 0 0}
+.pace-label>span{display:block;margin:0 0 2px;font:600 10.5px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+input.pace-range{display:block;width:100%;min-height:30px;margin:0;padding:0;border:0;background:none;accent-color:var(--accent)}
+input.pace-range:focus{border:0;box-shadow:none}
+input.pace-range:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.pace-example{margin:0 0 8px;font-size:12px;color:var(--dim)}.pace-example b{color:var(--accent)}
+.pace-note{margin:8px 0;font-size:12.5px;line-height:1.45;color:var(--txt)}
+/* ⏳ Approvals, 🎁 the Reward Store editor, 🚀 the rocket's form, ✍️ Coins */
+.wait-row{--accent:var(--mint)}
+.rw-row{padding:6px 10px;border-width:1px;border-radius:10px}
+.rw-emoji{font-size:16px;line-height:1}
+.rw-name{font-size:13px;font-weight:700;color:var(--txt);overflow-wrap:anywhere}
+.rw-cost{font:600 12px var(--mono);color:var(--gold)}
+.rw-tag{font-size:10.5px;color:var(--dim)}
+.rw-ticks{display:inline-flex;flex-wrap:wrap;gap:4px 10px;margin-left:auto}
+.rw-tick,.rw-check{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:700;color:var(--dim);cursor:pointer}
+.rw-tick.on{color:var(--accent)}
+.rw-tick input,.rw-check input{width:17px;height:17px;min-height:0;margin:0;padding:0;accent-color:var(--accent,var(--gold))}
+.rw-add{--accent:var(--gold);border-radius:10px}
+.rw-save{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}
+.rw-save .warn{margin:0}
+.rk-line{margin:0 0 4px;font-size:13.5px;font-weight:700;line-height:1.45;color:var(--txt)}.rk-line.lift{color:var(--gold)}
+.rk-fuel{margin:0 0 8px;font:600 12px/1.5 var(--mono);color:var(--dim)}
+.rk-about{margin:0 0 8px}
+.rk-form{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.rk-crew{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;margin:10px 0 0;font-size:12px;color:var(--txt)}
+.rk-crew-label{font-weight:700;color:var(--dim)}
+.adj-row{--accent:var(--mint)}
+.email-save{margin-top:4px}
+.admin-sec .check{max-width:none;margin:0 0 8px;padding:8px 10px;border:1.5px solid var(--v2line);border-radius:12px;background:var(--void)}
+.admin .logbox{max-width:none;margin:0 0 10px;padding:12px 10px}
+.admin .logbox .log-title{font-size:12px}
+.admin-foot{margin-top:24px}
+.email-what{font-size:15px;line-height:1.55;color:var(--txt)}
+.stack{display:flex;flex-direction:column;align-items:center;gap:8px;margin:14px 0 0}
+/* the sign-up boxes stand in the form like v2's inner boxes */
+.auth-form .check{padding:10px 12px;border:1.5px solid var(--v2line);border-radius:12px;background:var(--void);font-size:13.5px;color:#C9D3F0}
 /* no motion: nothing animates, and neither the decor layer (static columns of symbols would only sit on the screen) nor a
    coin burst is drawn; the crate's prize shows at once */
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}html[data-mode] #decor,.splash{display:none}.crate-item,.crate-name{opacity:1}}

@@ -40,6 +40,10 @@ const messages = {
   INVALID_ANSWER: 'The grid could not read that answer. Check it, then tap Go again.',
   LINK_INVALID: 'This link does not work. Nothing was changed.', LINK_EXPIRED: 'This link has expired; the next weekly email brings fresh ones. Nothing was changed.', LINK_GONE: 'The family or child this link was for is no longer there. Nothing was changed.',
   FEEDBACK_TEXT: 'Write your feedback first (up to 2000 characters).', FEEDBACK_CONTACT: 'That email address does not look right. Fix it, or leave it empty.',
+  // Game & progress: what the server refuses in the parent's own words
+  INSUFFICIENT_BALANCE: 'That would take the balance below zero. Nothing was changed.', INVALID_REWARDS: 'The Reward Store could not take that list: check each reward’s name, its cost (1 to 100000) and its daily limit (0 to 20).',
+  INVALID_TIME_ZONE: 'That is not a time zone name the server knows. Try one such as Asia/Jakarta.', INVALID_PACE: 'The pace goes from 10% to 200%.',
+  ROCKET_ALREADY_FUELING: 'A rocket is already fuelling. Launch, scrap or clear it first.',
 };
 // The sign-in provider's own refusals: in the parent's words where the cause is known, otherwise the provider's code and text,
 // so that a failure can be reported and matched against the provider's own log (the one generic sentence used to hide everything).
@@ -95,6 +99,17 @@ function field(label, type = 'text', options = {}) {
   wrap.append(el('span', label)); Object.assign(input, { type, required: true, ...options }); wrap.append(input);
   return { wrap, input };
 }
+// v2's row of buttons (the centred flex row under every card, 2839): a screen's actions stand in one, never loose in the card
+function actionRow(...buttons) { const r = el('div', null, 'row-buttons'); r.append(...buttons.filter(Boolean)); return r; }
+// one block of v2's admin panel (2614-2856): left-aligned under a title in the section's colour, written mixed-case and drawn in
+// capitals (.log-title), so the words a test reads are the words on the screen
+function adminSection(title, tone = 'c-cyan', extra = '') {
+  const s = el('section', null, `admin-sec ${tone}${extra ? ` ${extra}` : ''}`); s.append(el('h2', title, 'log-title')); return s;
+}
+// the admin panel's compact field (ADMIN_INP 1191), named by its aria-label; the sign-in forms keep their 52px .field instead
+function adminInput(type, aria, options = {}, extra = '') {
+  const i = el('input', null, extra ? `admin-inp ${extra}` : 'admin-inp'); Object.assign(i, { type, autocomplete: 'off', ...options }); i.setAttribute('aria-label', aria); return i;
+}
 // The provider's \u201cI\u2019m not a robot\u201d box renders into #recaptcha. It lives inside the screen that needs it, right under the
 // Send button, and the parent is told to tick it: a widget nobody mentioned, appearing under the panel, read as a dead button.
 function captchaBox() { const c = el('div', null, 'captcha'); c.id = 'recaptcha'; return c; }
@@ -146,19 +161,20 @@ let kidMode = false;
 const EMAIL_ADDRESS = /^[^\s@<>"]{1,64}@[^\s@<>"]{1,190}\.[^\s@<>"]{2,}$/;
 function feedbackFoot(kicker) {
   const foot = el('div', null, 'feedback'), page = String(kicker || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'screen';
-  const closed = () => foot.replaceChildren(button('Send feedback', open, 'text-button'));
-  function open() {
+  const closed = () => { foot.className = 'feedback'; foot.replaceChildren(button('Send feedback', open, 'text-button')); };
+  function open() { // opened, it is a small card of its own under the screen's card
     const words = el('textarea'); Object.assign(words, { maxLength: 2000, rows: 4, required: true });
     const label = el('label', null, 'field'); label.append(el('span', 'Your feedback (up to 2000 characters)'), words);
     const reply = model ? null : field('Your email, if you would like an answer (optional)', 'email', { required: false, maxLength: 254, autocomplete: 'email' });
-    foot.replaceChildren(label, ...(reply ? [reply.wrap] : []), button('Send', async () => {
+    foot.className = 'feedback open';
+    foot.replaceChildren(label, ...(reply ? [reply.wrap] : []), actionRow(button('Send', async () => {
       const text = words.value.trim(), contact = reply ? reply.input.value.trim() : '';
       if (!text || text.length > 2000) { note(messages.FEEDBACK_TEXT); return; }
       if (contact && (contact.length > 254 || !EMAIL_ADDRESS.test(contact))) { note(messages.FEEDBACK_CONTACT); return; }
       if (!model) csrf = (await bootstrap()).csrf; // signed out, the pre-authentication token lives ten minutes: a fresh one
       await api('/feedback', { text, page, ...(contact ? { contact } : {}) });
       closed(); note('Thank you: your feedback was sent.');
-    }, 'primary'), button('Cancel', closed, 'ghost'));
+    }, 'primary'), button('Cancel', closed, 'ghost')));
   }
   closed(); return foot;
 }
@@ -283,8 +299,8 @@ async function authStep(result, afterReady = null) {
   if (result.stage === 'verify') {
     const box = panel('STEP 1 OF 3 · EMAIL', 'Check your inbox.', 'Open the verification email, then come back here. Nothing about your family exists until this is done.', 'w460');
     if (afterReady) onBack = cancelVerification;
-    box.append(rail(1), button('I have verified my email', async () => authStep(await (await auth()).checkEmail(), afterReady), 'primary'),
-      button('Resend verification email', async () => { await (await auth()).resendEmail(); note('Verification email requested.'); }, 'ghost'));
+    box.append(rail(1), actionRow(button('I have verified my email', async () => authStep(await (await auth()).checkEmail(), afterReady), 'primary'),
+      button('Resend verification email', async () => { await (await auth()).resendEmail(); note('Verification email requested.'); }, 'ghost')));
     return;
   }
   const enrolling = result.stage === 'enroll';
@@ -316,13 +332,13 @@ async function authStep(result, afterReady = null) {
     words.append(el('small', 'Opening the app again from a bookmark or home-screen shortcut skips signing in. Tick it only on a device you trust. \u201cHand over to kids\u201d still locks parent access, and changing your password signs every remembered device out.'));
     rememberLabel.append(remember, words);
   }
-  box.append(send.button, captchaBox(), otp.wrap, ...(rememberLabel ? [rememberLabel] : []),
-    button('Verify code', async () => {
+  box.append(actionRow(send.button), captchaBox(), otp.wrap, ...(rememberLabel ? [rememberLabel] : []),
+    actionRow(button('Verify code', async () => {
       if (remember) { rememberChoice = remember.checked; const tag = await accountTag(result.email); try { if (remember.checked && tag) localStorage.setItem(REMEMBER_PREF, tag); else localStorage.removeItem(REMEMBER_PREF); } catch { /* no storage */ } }
       return authStep(await (await auth()).confirmCode(otp.input.value), afterReady);
-    }, 'primary'));
+    }, 'primary')));
   armCaptcha();
-  if (!enrolling && result.email) box.append(button('I can\u2019t receive the code', () => recoveryScreen(result.email), 'text-button')); // Stage 4.4
+  if (!enrolling && result.email) box.append(actionRow(button('I can\u2019t receive the code', () => recoveryScreen(result.email), 'text-button'))); // Stage 4.4
 }
 // Stage 4.4: the lost-phone ceremony (RECOVERY.md). No session exists here; the server answers the same for any email.
 function recoveryScreen(email) {
@@ -331,14 +347,15 @@ function recoveryScreen(email) {
   onBack = () => signInScreen();
   box.append(el('p', `1. Start recovery for ${email}.  2. Reset your password from the emailed link \u2014 that proves the inbox is yours.  3. After the waiting period, complete recovery here, then sign in and verify your new mobile.`, 'notice'));
   const when = (ms) => new Date(ms).toLocaleString();
-  box.append(button('1. Start recovery', async () => { const r = await api('/auth/recovery/start', { email }); note(`Recovery requested. If this account exists, it can be completed from ${when(r.readyAt)} at the earliest. Now reset your password from the email link.`); }, 'primary'),
+  const steps = el('div', null, 'stack'); // the three steps in their order, one under the other
+  steps.append(button('1. Start recovery', async () => { const r = await api('/auth/recovery/start', { email }); note(`Recovery requested. If this account exists, it can be completed from ${when(r.readyAt)} at the earliest. Now reset your password from the email link.`); }, 'primary'),
     button('2. Send password reset email', async () => { await (await auth()).resetPassword(email); note('If this email can receive a reset link, one has been requested. Set a new password, then come back after the waiting period.'); }, 'ghost'),
     button('3. Complete recovery', async () => {
       const r = await api('/auth/recovery/complete', { email });
       if (r.completed) { signInScreen(); note('Recovery complete. Sign in with your password, then verify your new mobile number.'); return; }
       note('Not completed yet. Recovery needs a request for this email, the password reset from the emailed link, and the waiting period to have passed. Try again later.');
-    }, 'ghost'),
-    button('Back to sign-in', () => signInScreen(), 'text-button'));
+    }, 'ghost'));
+  box.append(steps, actionRow(button('Back to sign-in', () => signInScreen(), 'text-button')));
 }
 // the three steps a parent walks to the grid: lit = here, done = behind
 function rail(current) {
@@ -372,10 +389,10 @@ function signInScreen(signup = false, afterReady = null, reauth = false) {
     await authStep(result, afterReady);
   }); };
   box.append(form);
-  if (reauth) box.append(button('Cancel verification', cancelVerification, 'ghost'));
-  if (!reauth) box.append(button(signup ? 'Already registered? Sign in' : 'New here? Create a parent account', () => signInScreen(!signup), 'ghost'));
-  if (!signup && !reauth) box.append(button('Forgot password?', async () => { if (!email.input.checkValidity()) { email.input.reportValidity(); return; }
-    await (await auth()).resetPassword(email.input.value); note('If this email can receive a reset link, one has been requested. Mobile verification is still required.'); }, 'text-button'));
+  if (reauth) box.append(actionRow(button('Cancel verification', cancelVerification, 'ghost')));
+  else box.append(actionRow(button(signup ? 'Already registered? Sign in' : 'New here? Create a parent account', () => signInScreen(!signup), 'ghost'),
+    signup ? null : button('Forgot password?', async () => { if (!email.input.checkValidity()) { email.input.reportValidity(); return; }
+      await (await auth()).resetPassword(email.input.value); note('If this email can receive a reset link, one has been requested. Mobile verification is still required.'); }, 'text-button')));
   box.append(el('p', 'EMAIL VERIFIED  //  MOBILE VERIFIED  //  FAMILY-ONLY ACCESS', 'trust'));
 }
 // email-v1: the sign-up boxes. The first (account, progress and service emails) is required; the second (news and offers) is
@@ -439,14 +456,14 @@ function familySetup(draft = {}) {
   check.checked = draft.attested === true;
   wrap.append(check, el('span', 'I am an adult responsible for the children I add. I acknowledge this private test stores family profiles and account security events. Use synthetic child data during testing.'));
   // Stage 4: a parent with no family (deleted, or never created) may delete the sign-in account itself
-  const leave = el('div', null, 'actions');
+  const leave = el('div', null, 'row-buttons');
   const accountOp = crypto.randomUUID();
   leave.append(button('Delete my sign-in account', async () => {
     if (!window.confirm('Delete your AutoMathtics sign-in account? Your email and mobile number are removed from sign-in. A used free trial stays used.')) return;
     await api('/account/deletion', { operationId: accountOp }); if (authModule) await authModule.clear(); note('Your sign-in account has been deleted.'); await refresh();
-  }, 'text-button'));
+  }, 'tiny c-red'));
   box.append(label.wrap, wrap, el('p', 'Pilot acknowledgement only. Final privacy and parental-consent terms must be reviewed before public launch.', 'small muted'),
-    button('Create family workspace', async () => {
+    actionRow(button('Create family workspace', async () => {
       if (!check.checked) { note('Please acknowledge the pilot notice.'); return; }
       try {
         await api('/family', { label: label.input.value, adultAttestation: true, consentVersion: 'pilot-v1' }); await refresh();
@@ -455,27 +472,26 @@ function familySetup(draft = {}) {
         const saved = { label: label.input.value, attested: check.checked };
         reauthenticate(() => familySetup(saved));
       }
-    }, 'primary'), button('Sign out', signOut, 'ghost'));
+    }, 'primary'), button('Sign out', signOut, 'ghost')));
   box.append(el('p', 'No family? You can also remove this sign-in account entirely.', 'small muted'), leave);
 }
-// The parent's crew cards (their v2 rebuild is port plan step 12); v2's .player-card is the launch pad's alone.
-function cards(children) {
-  const grid = el('div', null, 'crew-grid');
-  for (const child of children) {
-    const card = el('div', null, 'crew-card');
-    const frame = el('span', null, 'avatar-frame'); frame.append(el('span', icons[child.icon] || icons.robot, 'avatar'));
-    card.append(frame, el('strong', child.nickname), el('span', child.status === 'active' ? 'READY FOR THE GRID' : 'PROFILE INACTIVE', 'card-meta'));
-    if (child.yearLevel) card.append(el('span', `Year ${child.yearLevel}${child.start === 'test' ? ' · placement test' : ''}`, 'card-meta'));
-    grid.append(card);
-  }
-  return grid;
+// A child in Mission Control's crew: v2's PLAYER DATA row (2658-2667) with the player card's look (S1 sends what each child
+// wears, never a balance): the face in its ring, the name in its effect and colour, the title, pet and vehicle, the seat and
+// the year, and the parent's two actions for this child in the child's colour at the right edge.
+function kidRow(child) {
+  const a = child.appearance || {}, row = el('div', null, `row kid-row ${accClass(child)}`), words = el('div', null, 'kid-words'), acts = el('div', null, 'kid-acts');
+  words.append(el('b', child.nickname, `kid-name ${lookup(NAMEFX_CLASS, a.nameFx)}`.trim()),
+    el('span', `${a.title?.name || 'MISSION READY'}${a.pet ? ` · ${a.pet.emoji}${a.outfit?.emoji || ''}` : ''}${a.vehicle ? ` ${a.vehicle.emoji}` : ''}`, 'kid-meta'),
+    el('span', `${child.status === 'active' ? 'READY FOR THE GRID' : 'PROFILE INACTIVE'}${child.yearLevel ? ` · Year ${child.yearLevel}${child.start === 'test' ? ' · placement test' : ''}` : ''}`, child.status === 'active' ? 'kid-seat' : 'kid-seat off'));
+  acts.append(button(`Reset ${child.nickname}’s PIN`, () => resetPinScreen(child), 'tiny'), button(`Change ${child.nickname}’s starting point`, () => startScreen(child), 'tiny'));
+  row.append(avatarBadge(child, { ring: a.ring }, 40), words, acts); return row;
 }
 // Stage 3.3: a plan choice starts a checkout on the server. With the pilot's fake provider no money
 // moves: the server returns a payment reference the operator completes; a real provider (Stage 4)
 // returns a URL to go to. Nothing about the plan or the family is decided in the browser.
 function planButtons(box, billing) {
   if (!billing?.plans?.length) return;
-  const row = el('div', null, 'actions');
+  const row = el('div', null, 'row-buttons plan-acts');
   for (const plan of billing.plans) {
     const op = crypto.randomUUID();
     row.append(button(`${plan.name}: ${plan.seats} child slots`, async () => {
@@ -494,9 +510,9 @@ function planChangeControls(box, billing, e, family) {
   if (e.scheduled) {
     const keepOp = crypto.randomUUID();
     box.append(el('p', `Switching to ${e.scheduled.planName} (${e.scheduled.seats} child slots) on ${new Date(e.scheduled.at).toLocaleDateString()}.`, 'notice'),
-      button('Keep my current plan instead', async () => { await api('/billing/plan', { plan: e.plan, operationId: keepOp }); await refresh(); }, 'text-button'));
+      actionRow(button('Keep my current plan instead', async () => { await api('/billing/plan', { plan: e.plan, operationId: keepOp }); await refresh(); }, 'tiny c-mint')));
   }
-  const row = el('div', null, 'actions');
+  const row = el('div', null, 'row-buttons plan-acts');
   for (const plan of billing.plans.filter((p) => p.id !== e.plan)) {
     const op = crypto.randomUUID();
     if (plan.seats > e.seatLimit) row.append(button(`Upgrade to ${plan.name} now (${plan.seats} slots)`, async () => {
@@ -522,104 +538,124 @@ function downgradeScreen(plan, family, op) {
     const label = el('label', null, 'check'), input = document.createElement('input'); input.type = 'checkbox';
     label.append(input, el('span', ` ${c.nickname}`)); picks.set(c.id, input); box.append(label);
   }
-  box.append(button(`Switch to ${plan.name} at renewal`, async () => {
+  box.append(actionRow(button(`Switch to ${plan.name} at renewal`, async () => {
     const seatChildIds = [...picks].filter(([, i]) => i.checked).map(([id]) => id);
     await api('/billing/plan', { plan: plan.id, ...(choose ? { seatChildIds } : {}), operationId: op }); note('Plan change scheduled for the next renewal.'); await refresh();
-  }, 'primary'), button('Back', refresh, 'ghost'));
+  }, 'primary'), button('Back', refresh, 'ghost')));
 }
 function deletionScreen(family) {
   transientView = true;
   const box = panel('DELETE FAMILY', family.label, 'The children\u2019s profiles, progress, coins and this family\u2019s settings will be removed after 14 days. Payment records and the security audit trail are kept as required. A used free trial stays used. Your sign-in account itself is separate and is not deleted here.', 'w460');
   const op = crypto.randomUUID(); onBack = refresh;
   box.append(el('p', 'You can cancel any time in the next 14 days from the parent workspace. Download your data first if you want to keep it.', 'notice'),
-    button('Delete after 14 days', async () => { await api('/family/deletion', { operationId: op }); note('Deletion scheduled.'); await refresh(); }, 'primary'), button('Back', refresh, 'ghost'));
+    actionRow(button('Delete after 14 days', async () => { await api('/family/deletion', { operationId: op }); note('Deletion scheduled.'); await refresh(); }, 'primary'), button('Back', refresh, 'ghost')));
 }
+// Mission Control as v2's admin panel (2614-2856): one card, a block per concern under its title in the block's colour, each
+// child's actions in the child's own row, and v2's footer with Hand over to kids where v2 had Done. Every label is v3's, and
+// every change is the server's to make.
 async function parentScreen() {
   const family = model.family, e = family.entitlement || { status: 'inactive', seatLimit: 0, accessUntil: 0 };
   const billing = await api('/billing'); // plans, trial eligibility and the payment reference come from the server, never guessed from /me
   const active = e.status === 'active' && e.accessUntil > Date.now(); // Display only; API is authoritative.
-  const box = panel('MISSION CONTROL', family.label, 'Your explorers, your grid. Hand the device over when it\u2019s time to play; parent access stays locked until you sign in again.');
-  if (model.recovery && model.recovery.status !== 'pending' && !model.recovery.acknowledgedAt) { // Stage 4.4: a finished recovery request is shown until the parent acknowledges it
-    const r = model.recovery, when = new Date(r.requestedAt).toLocaleDateString();
-    box.append(el('p', r.status === 'completed' ? `Account recovery requested on ${when} was completed and a new mobile was verified. If that wasn\u2019t you, reset your password now and contact support.`
-      : `Account recovery was requested on ${when} and ${r.status === 'cancelled_by_operator' ? 'cancelled by support' : 'cancelled by your sign-in'}. If you didn\u2019t request it, reset your password now.`, 'notice'),
-      button('It was me', async () => { try { await api('/auth/recovery/ack', {}); } catch (error) { if (error.code !== 'REAUTHENTICATE') throw error; reauthenticate(async () => { await api('/auth/recovery/ack', {}); await refresh(); }); return; } await refresh(); }, 'ghost')); // a fresh sign-in first: a remembered device must not let anyone hide this
+  const box = panel('MISSION CONTROL', family.label, 'Your explorers, your grid. Hand the device over when it’s time to play; parent access stays locked until you sign in again.', 'admin');
+  // 🔐 Account & security, as v2's ADMIN GATE block (2617-2627): red while a finished recovery request waits for the parent (Stage 4.4)
+  const r = model.recovery, alert = Boolean(r && r.status !== 'pending' && !r.acknowledgedAt);
+  const account = adminSection('🔐 Account & security', alert ? 'c-red' : 'c-dim'), gate = el('div', null, alert ? 'gate alert' : 'gate');
+  if (alert) { // shown until the parent acknowledges it, and only after a fresh sign-in: a remembered device must not let anyone hide it
+    const when = new Date(r.requestedAt).toLocaleDateString();
+    gate.append(el('p', r.status === 'completed' ? `Account recovery requested on ${when} was completed and a new mobile was verified. If that wasn’t you, reset your password now and contact support.`
+      : `Account recovery was requested on ${when} and ${r.status === 'cancelled_by_operator' ? 'cancelled by support' : 'cancelled by your sign-in'}. If you didn’t request it, reset your password now.`, 'gate-alert'),
+    actionRow(button('It was me', async () => { try { await api('/auth/recovery/ack', {}); } catch (error) { if (error.code !== 'REAUTHENTICATE') throw error; reauthenticate(async () => { await api('/auth/recovery/ack', {}); await refresh(); }); return; } await refresh(); }, 'tiny c-mint')));
   }
-  const summary = el('div', null, 'allowance');
+  if (model?.rememberedUntil) gate.append(el('p', `This device stays signed in until ${new Date(model.rememberedUntil).toLocaleDateString()}. Sign out to forget it.`, 'gate-line')); // Remember this device
+  const gateActs = el('div', null, 'gate-acts'); // Stage 4 review: the old phone still works, the number is changing
+  gateActs.append(button('Change my mobile number', changeMobileScreen, 'tiny c-cyan'), button('Sign out', signOut, 'tiny c-dim'));
+  gate.append(gateActs); account.append(gate); box.append(account);
+  // 👥 Your crew: the slots in use and the plan's state, a row per child, and a dashed row to add one while a slot is free
+  const crew = adminSection('👥 Your crew', 'c-cyan'), seats = el('div', null, 'seat-line');
   const STATE = { trial: 'FREE TRIAL', active: 'SUBSCRIBED', grace: 'RENEWAL DUE', past_due: 'PAYMENT OVERDUE', cancelled: 'CANCELLED', expired: 'EXPIRED' };
-  summary.append(el('strong', `${family.activeCount} / ${e.seatLimit}`, 'count'), el('span', 'child slots in use'),
-    el('span', e.state ? STATE[e.state] || e.state : (active ? 'PILOT ACCESS ACTIVE' : 'AWAITING ACTIVATION'), active ? 'badge' : 'badge pending'));
-  box.append(summary, cards(family.children));
-  if (e.state) { // a subscription: what it is and when it turns (dates are the server's; the browser only shows them)
+  seats.append(el('b', `${family.activeCount} / ${e.seatLimit}`, 'seat-count'), el('span', 'child slots in use', 'seat-words'),
+    el('span', e.state ? STATE[e.state] || e.state : (active ? 'PILOT ACCESS ACTIVE' : 'AWAITING ACTIVATION'), active ? 'state-chip' : 'state-chip due'));
+  crew.append(seats, ...family.children.map(kidRow));
+  if (active && family.activeCount < e.seatLimit) {
+    const free = e.seatLimit - family.activeCount, add = el('div', null, 'row dashed add-row'), plus = el('span', '➕', 'add-icon'); plus.setAttribute('aria-hidden', 'true');
+    add.append(plus, el('span', `${free} free child slot${free === 1 ? '' : 's'}`, 'row-words'), button('Add a child', addChildScreen, 'tiny c-mint')); crew.append(add);
+  }
+  box.append(crew);
+  // 💳 Plan & seats in v2's featured box (the rocket's, 2786): the plan and when it turns, cancel or keep, a free seat, a change of
+  // plan, checkout or the trial (Stages 3.3-3.5). The dates are the server's; the browser only shows them.
+  const plan = el('section', null, 'admin-sec feature-box'); plan.append(el('h2', '💳 Plan & seats', 'log-title'));
+  if (e.state) { // a subscription: what it is and when it turns
     const when = e.accessUntil ? new Date(e.accessUntil).toLocaleDateString() : null;
     const line = e.state === 'trial' ? `${e.planName}${e.cancelAtPeriodEnd ? ', ending' : ', ends'} ${when}. Subscribe before then to keep going.`
       : e.state === 'active' ? `${e.planName} plan, ${e.seatLimit} child slots. ${e.cancelAtPeriodEnd ? `Ends ${when}.` : `Renews ${when}.`}`
       : e.state === 'grace' ? `${e.planName} plan. The renewal payment has not arrived; access continues until ${when}.`
       : e.state === 'past_due' ? `${e.planName} plan. Access is paused until a payment goes through.`
       : e.state === 'cancelled' ? 'The subscription has ended. Subscribe again to reopen the grid.' : 'The subscription expired. Subscribe again to reopen the grid.';
-    box.append(el('p', line, 'notice'));
+    plan.append(el('p', line, 'plan-line'));
     if (['trial', 'active', 'grace'].includes(e.state)) {
-      const cancelOp = crypto.randomUUID(); // one id per rendered button: a retried click is the same event
-      box.append(button(e.cancelAtPeriodEnd ? 'Keep my subscription' : 'Cancel at the end of the period', async () => { await api('/billing/cancel', { undo: e.cancelAtPeriodEnd, operationId: cancelOp }); await refresh(); }, 'text-button'));
+      const cancelOp = crypto.randomUUID(), acts = el('div', null, 'plan-acts'); // one id per rendered button: a retried click is the same event
+      acts.append(button(e.cancelAtPeriodEnd ? 'Keep my subscription' : 'Cancel at the end of the period', async () => { await api('/billing/cancel', { undo: e.cancelAtPeriodEnd, operationId: cancelOp }); await refresh(); }, e.cancelAtPeriodEnd ? 'tiny c-mint' : 'tiny c-red'));
       // a child without a seat can be given a free one (adding only; a downgrade is the only way a seat is taken away)
       const seated = family.children.filter((c) => c.status === 'active').map((c) => c.id);
       if (active && seated.length < e.seatLimit) for (const c of family.children.filter((c) => c.status !== 'active')) {
         const seatOp = crypto.randomUUID();
-        box.append(button(`Give ${c.nickname} a seat`, async () => { await api('/billing/seats', { childIds: [...seated, c.id], operationId: seatOp }); await refresh(); }, 'ghost'));
+        acts.append(button(`Give ${c.nickname} a seat`, async () => { await api('/billing/seats', { childIds: [...seated, c.id], operationId: seatOp }); await refresh(); }, 'tiny'));
       }
-      if (['active', 'grace'].includes(e.state)) planChangeControls(box, billing, e, family);
+      plan.append(acts);
+      if (['active', 'grace'].includes(e.state)) planChangeControls(plan, billing, e, family);
     }
-    if (!['active', 'grace'].includes(e.state)) planButtons(box, billing);
+    if (!['active', 'grace'].includes(e.state)) planButtons(plan, billing);
   } else if (!active) {
-    planButtons(box, billing);
+    planButtons(plan, billing);
     if (billing?.trial?.eligible) {
       const trialOp = crypto.randomUUID();
-      box.append(el('p', 'Your parent account is ready. Start the free trial to open two child slots for seven days.', 'notice'),
-        button('Start the 7-day free trial', async () => { await api('/billing/trial', { operationId: trialOp }); note('Trial started.'); await refresh(); }, 'primary'));
+      plan.append(el('p', 'Your parent account is ready. Start the free trial to open two child slots for seven days.', 'notice'),
+        actionRow(button('Start the 7-day free trial', async () => { await api('/billing/trial', { operationId: trialOp }); note('Trial started.'); await refresh(); }, 'primary')));
     } else {
-      box.append(el('p', `${messages[billing?.trial?.reason] || 'The free trial is not available for this family.'} Ask the pilot operator to activate child slots.`, 'notice'));
+      plan.append(el('p', `${messages[billing?.trial?.reason] || 'The free trial is not available for this family.'} Ask the pilot operator to activate child slots.`, 'notice'));
     }
+  } else plan.append(el('p', `Pilot access: ${e.seatLimit} child slot${e.seatLimit === 1 ? '' : 's'} until ${new Date(e.accessUntil).toLocaleDateString()}.`, 'plan-line')); // an operator's grant: no plan to change
+  box.append(plan);
+  // 🎮 Game & progress: pace and scan focus, approvals, the Reward Store, the Family Rocket, coins and the logs, on their own screen
+  if (family.children.length) {
+    const game = adminSection('🎮 Game & progress', 'c-gold'), go = el('div', null, 'row');
+    go.append(el('span', 'Pace and scan focus, approvals, the Reward Store, the Family Rocket, coins and each explorer’s log.', 'row-words'), button('Game & progress', parentGameScreen, 'tiny'));
+    game.append(go); box.append(game);
   }
-  const row = el('div', null, 'actions');
-  if (active && family.activeCount < e.seatLimit) row.append(button('Add a child', addChildScreen, 'primary'));
-  if (family.children.length) row.append(button('Hand over to kids', async () => {
-    if (authModule) await authModule.clear(); await api('/session/lock', {}); channel?.postMessage('changed'); await refresh();
-  }, 'primary'));
-  if (family.children.length) row.append(button('Game & progress', parentGameScreen, 'ghost'));
-  row.append(button('Sign out', signOut, 'ghost')); box.append(row);
-  if (model?.rememberedUntil) box.append(el('p', `This device stays signed in until ${new Date(model.rememberedUntil).toLocaleDateString()}. Sign out to forget it.`, 'notice')); // Remember this device
   box.append(emailBlock(model.emailPrefs)); // email-v1: the weekly report and news switches
-  box.append(button('Change my mobile number', changeMobileScreen, 'text-button')); // Stage 4 review: the old phone still works, the number is changing
-  for (const child of family.children) { box.append(button(`Reset ${child.nickname}\u2019s PIN`, () => resetPinScreen(child), 'text-button')); box.append(button(`Change ${child.nickname}\u2019s starting point`, () => startScreen(child), 'text-button')); }
-  // Stage 3.5: the family's own data to keep, and the way to leave — 14 days to change your mind
-  const keep = el('div', null, 'actions');
-  keep.append(button('Download my family\u2019s data', async () => {
+  // 🗄 Data & deletion (Stage 3.5): the family's own data to keep, and the way to leave — 14 days to change your mind
+  const leave = adminSection('🗄 Data & deletion', 'c-red'), keep = el('div', null, 'data-acts');
+  keep.append(button('Download my family’s data', async () => {
     const data = await api('/family/export'); const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `automathtics-family-${family.id.slice(0, 8)}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
-  }, 'text-button'));
+  }, 'tiny c-cyan'));
   if (family.deletion) {
     const cancelOp = crypto.randomUUID();
-    box.append(el('p', `This family is scheduled for deletion on ${new Date(family.deletion.effectiveAt).toLocaleDateString()}. Everything except the payment records and the security audit trail will be removed.`, 'notice'));
-    keep.append(button('Keep my family', async () => { await api('/family/deletion/cancel', { operationId: cancelOp }); note('Deletion cancelled.'); await refresh(); }, 'primary'));
-  } else {
-    keep.append(button('Delete this family', () => deletionScreen(family), 'text-button'));
-  }
-  box.append(keep);
-  box.append(el('p', `Family reference: ${family.id}`, 'reference'));
+    leave.append(el('p', `This family is scheduled for deletion on ${new Date(family.deletion.effectiveAt).toLocaleDateString()}. Everything except the payment records and the security audit trail will be removed.`, 'notice'));
+    keep.append(button('Keep my family', async () => { await api('/family/deletion/cancel', { operationId: cancelOp }); note('Deletion cancelled.'); await refresh(); }, 'tiny c-mint'));
+  } else keep.append(button('Delete this family', () => deletionScreen(family), 'tiny c-red'));
+  leave.append(keep, el('p', `Family reference: ${family.id}`, 'reference')); box.append(leave);
+  // v2's footer (2839-2853): Hand over to kids in Done's place, and Sign out
+  const foot = actionRow(family.children.length ? button('Hand over to kids', async () => {
+    if (authModule) await authModule.clear(); await api('/session/lock', {}); channel?.postMessage('changed'); await refresh();
+  }, 'primary') : null, button('Sign out', signOut, 'ghost'));
+  foot.className = 'row-buttons admin-foot'; box.append(foot);
 }
 // email-v1: Mission Control's Email updates block, the switches as the server holds them (/api/me). Saving needs a recent sign-in
 // (a child at a remembered, open Mission Control must not switch the report off); after one the parent sets the switches again,
 // because a change is never sent by itself.
 function emailBlock(prefs) {
-  const wrap = el('div', null, 'track'); wrap.append(el('strong', 'Email updates'));
+  const wrap = adminSection('📧 Email updates', 'c-violet');
   const sw = (words, detail, on) => { const l = el('label', null, 'check'), i = el('input'), s = el('span', words); i.type = 'checkbox'; i.checked = on; s.append(el('small', detail)); l.append(i, s); wrap.append(l); return i; };
   const progress = sw('Weekly progress report', 'Every Monday: what each child got right and fast, right but slow, and wrong again and again, with a suggested pace.', prefs?.progress !== false);
   const news = sw('News and offers', 'Occasional news and offers from AutoMathtics.', prefs?.news === true);
-  wrap.append(el('span', 'Account and security emails always come.', 'card-meta'), button('Save email settings', async () => {
+  const save = el('div', null, 'row email-save');
+  save.append(el('span', 'Account and security emails always come.', 'row-words'), button('Save email settings', async () => {
     try { await api('/account/email', { progress: progress.checked === true, news: news.checked === true }); await refresh(); note('Email settings saved.'); }
     catch (error) { if (error.code !== 'REAUTHENTICATE') throw error; reauthenticate(async () => { await refresh(); note('Parent verified. Set the switches again, then save.'); }); }
-  }, 'ghost'));
-  return wrap;
+  }, 'tiny'));
+  wrap.append(save); return wrap;
 }
 // email-v1: a button in the weekly email opens the app with its signed token (#email=). Link scanners and mail previews open it
 // too, so nothing changes on arrival: the server says what the button does, and only Confirm sends it. Works signed in or not.
@@ -627,14 +663,15 @@ async function emailScreen(token) {
   const d = await api('/email/describe', { t: token });
   transientView = true;
   if (!d.valid) {
-    const box = panel('EMAIL BUTTON', 'This link no longer works.', d.reason === 'expired' ? 'Buttons in the weekly email work for 14 days (a year to stop the report); the next email brings fresh ones. Nothing was changed.' : 'The family or child it was for may be gone, or the link was changed on the way. Nothing was changed.');
-    onBack = refresh; box.append(button('Close', refresh, 'ghost')); return;
+    const box = panel('EMAIL BUTTON', 'This link no longer works.', d.reason === 'expired' ? 'Buttons in the weekly email work for 14 days (a year to stop the report); the next email brings fresh ones. Nothing was changed.' : 'The family or child it was for may be gone, or the link was changed on the way. Nothing was changed.', 'w460');
+    onBack = refresh; box.append(actionRow(button('Close', refresh, 'ghost'))); return;
   }
   const what = d.action === 'pace' ? `Set ${d.nickname}’s question time to ${d.value}% (now ${d.current}%).`
     : d.action === 'focus' ? (d.value ? `Focus ${d.nickname}’s weekly System Scan on the weak spots: about 75% of its questions on what ${d.nickname} gets wrong or slow, 25% recap.` : `Switch ${d.nickname}’s System Scan focus off: back to the normal mix.`)
     : `Stop the weekly progress report for ${d.email || 'this account'}. Account and security emails still come.`;
-  const box = panel('EMAIL BUTTON', 'Confirm this change', what); onBack = refresh;
-  box.append(button('Confirm', async () => { const r = await api('/email/apply', { t: token }); await refresh(); note(r.message); }, 'primary'), button('Cancel', async () => { await refresh(); note('Nothing was changed.'); }, 'ghost'));
+  const box = panel('EMAIL BUTTON', 'Confirm this change', '', 'w460'); onBack = refresh;
+  box.append(el('p', what, 'box c-gold email-what'), actionRow(button('Confirm', async () => { const r = await api('/email/apply', { t: token }); await refresh(); note(r.message); }, 'primary'),
+    button('Cancel', async () => { await refresh(); note('Nothing was changed.'); }, 'ghost')));
 }
 // Stage 4 review: the parent still has the old phone and wants a new number on the account (RECOVERY.md). A fresh sign-in
 // first — password and a code to the old number — then a code to the new number; the new factor is enrolled before the old
@@ -656,12 +693,12 @@ function changeMobileScreen() {
       note('Tick \u201cI\u2019m not a robot\u201d just below, then the code is sent.'); await (await auth()).changeMobileSend(tidy(phone.input.value), consent.checked); note('Code sent to the new number. Enter it below.');
     });
     phone.input.addEventListener('input', () => send.check(true)); // the clock belongs to the number typed
-    box.append(phone.wrap, consentLabel, send.button, captchaBox(), otp.wrap,
-      button('Verify new number', async () => {
+    box.append(phone.wrap, consentLabel, actionRow(send.button), captchaBox(), otp.wrap,
+      actionRow(button('Verify new number', async () => {
         const r = await (await auth()).changeMobileConfirm(otp.input.value); keepSdkSession = false;
         await api('/auth/logout', {}); channel?.postMessage('changed'); model = null; signInScreen(); note(r.notice); // the next sign-in carries the new factor
       }, 'primary'),
-      button('Cancel', cancel, 'ghost'));
+      button('Cancel', cancel, 'ghost')));
     armCaptcha();
   });
 }
@@ -698,7 +735,8 @@ function addChildScreen(draft = {}) {
   const { first, repeat, valid } = pinFields();
   let requestId = crypto.randomUUID();
   for (const input of [name.input, select, age.input, ...start.inputs, first.input, repeat.input]) input.addEventListener('input', () => { requestId = crypto.randomUUID(); });
-  box.append(name.wrap, select, first.wrap, repeat.wrap, age.wrap, start.wrap, start.options, button('Create child profile', async () => {
+  const iconWrap = el('label', null, 'field'); iconWrap.append(el('span', 'Profile icon'), select);
+  box.append(name.wrap, iconWrap, first.wrap, repeat.wrap, age.wrap, start.wrap, start.options, actionRow(button('Create child profile', async () => {
     if (!valid()) { note('Enter the same six-digit PIN twice.'); return; }
     const ageValue = Number(age.input.value); if (!Number.isInteger(ageValue) || ageValue < 3 || ageValue > 17) { note('Enter the child\u2019s age (3–17).'); return; }
     try {
@@ -710,24 +748,24 @@ function addChildScreen(draft = {}) {
       first.input.value = repeat.input.value = '';
       reauthenticate(() => { addChildScreen(saved); note('Parent verified. Re-enter the child PIN to finish creating this profile.'); });
     }
-  }, 'primary'), button('Back to family', refresh, 'ghost'));
+  }, 'primary'), button('Back to family', refresh, 'ghost')));
 }
 function startScreen(child) {
   transientView = true;
   const box = panel('LAUNCH POINT', child.nickname, 'Only possible before the child has played anything. A recent parent sign-in is required.', 'w460');
   onBack = refresh;
   const start = startChooser({ yearLevel: child.yearLevel, start: child.start });
-  box.append(start.wrap, start.options, button('Save starting point', async () => {
+  box.append(start.wrap, start.options, actionRow(button('Save starting point', async () => {
     try { await api(`/children/${child.id}/start`, { start: start.value(), yearLevel: Number(start.year.value) }); note('Starting point saved.'); await refresh(); }
     catch (error) { if (error.code === 'ALREADY_STARTED') { note(messages.ALREADY_STARTED); return; } throw error; }
-  }, 'primary'), button('Back', refresh, 'ghost'));
+  }, 'primary'), button('Back', refresh, 'ghost')));
 }
 function resetPinScreen(child) {
   transientView = true;
   const box = panel('PARENT ACTION', `Reset ${child.nickname}\u2019s PIN`, 'This invalidates existing child sessions. A recent parent sign-in is required.', 'narrow');
   onBack = refresh;
   const { first, repeat, valid } = pinFields();
-  box.append(first.wrap, repeat.wrap, button('Set new PIN', async () => {
+  box.append(first.wrap, repeat.wrap, actionRow(button('Set new PIN', async () => {
     if (!valid()) { note('Enter the same six-digit PIN twice.'); return; }
     try {
       await api(`/children/${child.id}/pin`, { pin: first.input.value }); await refresh(); note('Child PIN changed.');
@@ -736,7 +774,7 @@ function resetPinScreen(child) {
       first.input.value = repeat.input.value = '';
       reauthenticate(() => { resetPinScreen(child); note('Parent verified. Enter the new child PIN again.'); });
     }
-  }, 'primary'), button('Back', refresh, 'ghost'), button('Reauthenticate parent', () => reauthenticate(() => resetPinScreen(child)), 'text-button'));
+  }, 'primary'), button('Back', refresh, 'ghost')), actionRow(button('Reauthenticate parent', () => reauthenticate(() => resetPinScreen(child)), 'text-button')));
 }
 // ---- the launch pad and the kid's PIN (v2 player selection 2392-2442, kidPin 2445-2465) ----
 // A child's colour is its place in the family (S1 accent, styles.css acc-N: v2's new-player palette).
@@ -1690,39 +1728,204 @@ function rocketConfirmScreen(rocket, action) {
   const scrap = action === 'scrap';
   const box = panel('PARENT · FAMILY ROCKET', scrap ? 'Scrap this rocket?' : 'Launch this rocket now?', scrap
     ? 'Scrapping ends this rocket for good. The fuel already in it is not refunded to anyone, and the rocket cannot be brought back.'
-    : 'Launching ends fuelling now, before the goal is reached, and the family owes the prize. It cannot be undone.');
+    : 'Launching ends fuelling now, before the goal is reached, and the family owes the prize. It cannot be undone.', 'w460');
   onBack = parentGameScreen; // its own Back button's step: nothing is launched or scrapped
   box.append(el('p', `${rocket.prize.emoji} ${rocket.prize.name} · ${rocket.totalFuel}/${rocket.goal}`, 'notice'),
     // Back comes first: the second tap of a double-tap on Launch or Scrap lands where the first button is.
-    button('Back', parentGameScreen, 'ghost'),
-    button(scrap ? 'Yes, scrap it' : 'Yes, launch now', async () => { await parentGameMutation('/game/parent/rocket', { action, rocketId: rocket.id }); }, 'primary'));
+    actionRow(button('Back', parentGameScreen, 'ghost'),
+      button(scrap ? 'Yes, scrap it' : 'Yes, launch now', async () => { await parentGameMutation('/game/parent/rocket', { action, rocketId: rocket.id }); }, 'primary')));
 }
-async function parentGameMutation(path, payload) {
-  try { await api(path, payload); await parentGameScreen(); }
+// done: what the screen may forget once the server has taken the change (a draft it has just published)
+async function parentGameMutation(path, payload, done = null) {
+  try { await api(path, payload); done?.(); await parentGameScreen(); }
   catch (error) {
     if (error.code !== 'REAUTHENTICATE') throw error;
     reauthenticate(() => { parentGameScreen(); note('Parent verified. Repeat the action to confirm it.'); });
   }
 }
+// The Reward Store's edits and the rocket's build form outlive the game screen's repaints and a parent verification, until they are
+// published or discarded or the page reloads — and only for the account and family that typed them.
+let gameDrafts = null;
+function gameDraft() {
+  const key = `${model?.parent?.uid || ''}:${model?.family?.id || ''}`;
+  if (gameDrafts?.key !== key) gameDrafts = { key, rewards: null, rocket: null };
+  return gameDrafts;
+}
+// a number field with its short label in front (v2's "goal ⚡", "min each ⚡")
+function inlineNum(words, input) { const l = el('label', null, 'inline-num'); l.append(el('span', words), input); return l; }
+// Game & progress as v2's admin panel (2628-2830): the family's time zone, each child's time control and scan focus, one list of the
+// requests waiting, the Reward Store editor, the Family Rocket, coins and each child's log. Every change goes through
+// parentGameMutation, which asks for a fresh parent sign-in whenever the server wants one (game.mjs parent(…, true)).
 async function parentGameScreen() {
-  transientView = true; const g = await api('/game/parent'); const box = panel('PARENT · GAME & PROGRESS', 'Learning controls and family rewards', 'Only the parent session can change pace, rewards, credits or the Family Rocket.');
+  transientView = true; const g = await api('/game/parent');
+  const box = panel('PARENT · GAME & PROGRESS', 'Learning controls and family rewards', 'Only the parent session can change pace, rewards, credits or the Family Rocket.', 'admin');
   onBack = refresh;
-  const tz = field('Family time zone', 'text', { value: g.timeZone, maxLength: 64 }); box.append(tz.wrap, button('Save time zone', async () => { await parentGameMutation('/game/parent/settings', { timeZone: tz.input.value }); }, 'ghost'));
-  for (const row of g.children) {
-    const card = el('div', null, 'track'); card.append(el('strong', `${icons[row.child.icon] || '🤖'} ${row.child.nickname}`), el('span', `⚙️ ${row.engine.levelId} ${Math.min(100,row.engine.paper-1)}/100 · 🧭 ${row.nav.levelId} ${Math.min(100,row.nav.paper-1)}/100 · ⚡${row.wallet.gc} · 🏆${row.wallet.rp}`, 'card-meta'));
-    const pace = field('Question-time pace % (10–200)', 'number', { value: row.pacePercent, min: 10, max: 200 }); card.append(pace.wrap, button('Set pace', async () => { await parentGameMutation('/game/parent/settings', { childId: row.child.id, pacePercent: Number(pace.input.value) }); }, 'ghost'), button('+⚡50 credit', async () => { await parentGameMutation('/game/parent/adjust', { childId: row.child.id, currency: 'gc', amount: 50, reason: 'Parent bonus credit', operationId: crypto.randomUUID() }); }, 'text-button'));
-    // email-v1: the System Scan's focus on this child's weak styles (about 75 % weak spots, 25 % recap), a parent setting like the pace
-    card.append(el('span', row.scanFocus ? '🧠 System Scan focus is on: about 75% on the styles this child gets wrong or slow, 25% recap.' : '🧠 System Scan: the normal mix of this sector and earlier ones.', 'card-meta'),
-      button(row.scanFocus ? 'Switch scan focus off' : 'Focus System Scan on weak spots', async () => { await parentGameMutation('/game/parent/settings', { childId: row.child.id, scanFocus: !row.scanFocus }); }, 'text-button'));
-    const pending = row.wallet.redemptions.filter((r) => r.status === 'pending'); for (const r of pending) { const p = el('div', null, 'approval'); p.append(el('span', `${r.emoji} ${r.name} · 🏆${r.cost}`), button('Approve', async () => { await parentGameMutation('/game/parent/redemption', { childId: row.child.id, redemptionId: r.id, decision: 'approve' }); }, 'ghost'), button('Reject + refund', async () => { await parentGameMutation('/game/parent/redemption', { childId: row.child.id, redemptionId: r.id, decision: 'reject' }); }, 'text-button')); card.append(p); }
-    box.append(card);
+  // each child with the colour and ring /me gives it (S1): the game state names children, it does not dress them
+  const meta = (id) => model?.family?.children?.find((c) => c.id === id) || null;
+  const kids = g.children.map((row, i) => ({ ...row, kid: { ...row.child, accent: meta(row.child.id)?.accent ?? i }, look: { ring: meta(row.child.id)?.appearance?.ring || null } }));
+  // 🌐 the family's time zone (v3's own; v2 had none)
+  const zone = adminSection('🌐 Family time zone', 'c-cyan'), zoneRow = el('div', null, 'row');
+  const tz = adminInput('text', 'Family time zone', { value: g.timeZone, maxLength: 64 }, 'grow');
+  zoneRow.append(tz, button('Save time zone', async () => { await parentGameMutation('/game/parent/settings', { timeZone: tz.value }); }, 'tiny'));
+  zone.append(zoneRow, el('p', 'A time zone name, for example Asia/Jakarta or Asia/Singapore.', 'subtle')); box.append(zone);
+  // ⏱ Time control (2628-2655): a card per child in the child's colour
+  const time = adminSection('⏱ Time control', 'c-magenta');
+  time.append(el('p', '100% is the built-in time per question: at 70% a 50-second question gets 35 seconds, at 150% it gets 75. No question gets under 5 seconds.', 'admin-intro'), ...kids.map(paceCard));
+  box.append(time);
+  // ⏳ Approvals (2768-2784): every request still waiting, from every child, in one list; a refusal refunds the points held
+  const approvals = adminSection('⏳ Approvals', 'c-mint'); let waiting = 0;
+  for (const row of kids) for (const r of row.wallet.redemptions.filter((x) => x.status === 'pending')) {
+    const line = el('div', null, 'row dashed wait-row'), acts = el('div', null, 'row-acts'); waiting++;
+    acts.append(button('Approve', async () => { await parentGameMutation('/game/parent/redemption', { childId: row.child.id, redemptionId: r.id, decision: 'approve' }); }, 'tiny c-mint'),
+      button('Reject + refund', async () => { await parentGameMutation('/game/parent/redemption', { childId: row.child.id, redemptionId: r.id, decision: 'reject' }); }, 'tiny c-red'));
+    line.append(avatarBadge(row.kid, null, 22), el('span', `${row.child.nickname}: ${r.emoji} ${r.name}`, 'row-words'), el('span', `🏆${r.cost}`, 'row-cost'), acts); approvals.append(line);
   }
-  box.append(el('h2', 'Reward Store')); for (const r of g.rewards) box.append(el('p', `${r.emoji} ${r.name} · 🏆${r.cost}${r.cap ? ` · max ${r.cap}/day` : ''}`, 'small muted'));
-  const re = field('New reward name', 'text', { maxLength: 40 }), rc = field('Cost in 🏆', 'number', { value: 100, min: 1, max: 100000 }); box.append(re.wrap, rc.wrap, button('Add reward for all children', async () => { const reward = { id: `rw-${crypto.randomUUID()}`, emoji: '🎁', name: re.input.value, cost: Number(rc.input.value), hidden: false, cap: 0, childIds: g.children.map((x) => x.child.id) }; await parentGameMutation('/game/parent/rewards', { rewards: [...g.rewards, reward] }); }, 'ghost'));
-  box.append(el('h2', '🚀 Family Rocket'));
-  if (!g.rocket) { const prize = field('Prize', 'text', { placeholder: 'Ice cream', maxLength: 50 }), goal = field('Goal in ⚡', 'number', { value: 2000, min: 50 }), min = field('Minimum each', 'number', { value: 300, min: 0 }); box.append(prize.wrap, goal.wrap, min.wrap, button('Build rocket', async () => { await parentGameMutation('/game/parent/rocket', { action: 'build', prize: { emoji: '🎁', name: prize.input.value }, currency: 'gc', goal: Number(goal.input.value), minEach: Number(min.input.value), crewChildIds: g.children.map((x) => x.child.id) }); }, 'primary')); }
-  else { box.append(el('p', `${g.rocket.prize.emoji} ${g.rocket.prize.name} · ${g.rocket.totalFuel}/${g.rocket.goal} · ${g.rocket.status}`, 'notice')); if (g.rocket.status === 'fueling') box.append(button('Launch now', () => rocketConfirmScreen(g.rocket, 'launch'), 'ghost'), button('Scrap (no refund)', () => rocketConfirmScreen(g.rocket, 'scrap'), 'text-button')); else box.append(button('Prize delivered · clear', async () => { await parentGameMutation('/game/parent/rocket', { action: 'claim', rocketId: g.rocket.id }); }, 'primary')); }
-  box.append(button('Back to family', refresh, 'ghost'));
+  if (!waiting) approvals.append(el('p', 'no pending redemptions', 'subtle'));
+  box.append(approvals, rewardEditor(g, kids, gameDraft()), rocketSection(g, kids, gameDraft()), coinsSection(kids));
+  // 📄 Logs: each child's last sessions, read-only, drawn as the child's own log (homeLog)
+  const logs = adminSection('📄 Logs', 'c-cyan');
+  for (const row of kids) logs.append(homeLog(row.child, row.history) || el('p', `${row.child.nickname}: no sessions yet.`, 'subtle'));
+  const foot = actionRow(button('Back to family', refresh, 'ghost')); foot.className = 'row-buttons admin-foot';
+  box.append(logs, foot);
+}
+// a child's time control (2638-2653): v2's slider over v3's 10-200%, the value and an example moving with it, Set pace to send it;
+// under it the System Scan focus, the child's other learning setting (email-v1)
+function paceCard(row) {
+  const card = el('div', null, `pace-card ${accClass(row.kid)}`), head = el('div', null, 'pace-head'), val = el('span', `${row.pacePercent}%`, 'pace-val');
+  head.append(avatarBadge(row.kid, row.look, 40), el('b', row.child.nickname, 'pace-name'), val);
+  const label = el('label', null, 'pace-label'), range = el('input', null, 'pace-range'), example = el('p', null, 'pace-example');
+  Object.assign(range, { type: 'range', min: 10, max: 200, step: 1, value: String(row.pacePercent) }); // step 1: a pace an email button set (say 73) stays as it is
+  const show = () => { const v = Number(range.value) || row.pacePercent; val.textContent = `${v}%`; example.replaceChildren('example: a 50s question gets ', el('b', `${Math.max(5, Math.round((50 * v) / 100))}s`)); };
+  range.addEventListener('input', show); show();
+  label.append(el('span', 'Question-time pace % (10–200)'), range);
+  const acts = el('div', null, 'pace-acts');
+  acts.append(button('Set pace', async () => { await parentGameMutation('/game/parent/settings', { childId: row.child.id, pacePercent: Number(range.value) }); }, 'tiny acc-tint'),
+    button(row.scanFocus ? 'Switch scan focus off' : 'Focus System Scan on weak spots', async () => { await parentGameMutation('/game/parent/settings', { childId: row.child.id, scanFocus: !row.scanFocus }); }, 'tiny c-violet'));
+  card.append(head, el('p', `⚙️ ${row.engine.levelId} ${Math.min(100, row.engine.paper - 1)}/100 · 🧭 ${row.nav.levelId} ${Math.min(100, row.nav.paper - 1)}/100`, 'pace-meta'), label, example,
+    el('p', row.scanFocus ? '🧠 System Scan focus is on: about 75% on the styles this child gets wrong or slow, 25% recap.' : '🧠 System Scan: the normal mix of this sector and earlier ones.', 'pace-note'), acts);
+  return card;
+}
+// 🎁 the Reward Store editor (2732-2766): each reward with its emoji, cost, hidden-until-affordable and daily limit, who may ask for it,
+// and ✕; a new one from the dashed row. Edits stay in the draft until Save rewards publishes the whole list, which the server checks.
+function rewardEditor(g, kids, d) {
+  const sec = adminSection('🎁 Reward Store', 'c-gold'), list = el('div', null, 'rw-list'), saveRow = el('div', null, 'rw-save'), all = kids.map((k) => k.child.id);
+  // a reward ticked for nobody is offered to every child (game.mjs state): the editor shows it ticked for everyone
+  const shape = (r) => ({ id: r.id, emoji: r.emoji, name: r.name, cost: r.cost, hidden: r.hidden === true, cap: Number(r.cap) || 0, childIds: r.childIds?.length ? all.filter((id) => r.childIds.includes(id)) : [...all] });
+  const published = JSON.stringify(g.rewards.map(shape));
+  d.rewards ||= g.rewards.map(shape);
+  const save = button('Save rewards', async () => {
+    if (d.rewards.some((r) => !r.childIds.length)) { note('Tick at least one explorer for each reward, or delete it.'); return; }
+    await parentGameMutation('/game/parent/rewards', { rewards: d.rewards.map((r) => ({ ...r, childIds: [...r.childIds] })) }, () => { d.rewards = null; });
+  }, 'primary gold');
+  const discard = button('Discard changes', () => { d.rewards = null; return parentGameScreen(); }, 'tiny c-dim');
+  const draw = () => {
+    list.replaceChildren(...d.rewards.map(rewardRow), ...(d.rewards.length ? [] : [el('p', 'No rewards yet: add the first one below.', 'subtle')]));
+    const dirty = JSON.stringify(d.rewards) !== published; save.disabled = !dirty;
+    saveRow.replaceChildren(save, ...(dirty ? [discard, el('span', 'Unsaved changes: Save rewards publishes them to the Reward Store.', 'warn')] : []));
+  };
+  function rewardRow(r) {
+    const row = el('div', null, 'row rw-row'), face = el('span', r.emoji, 'rw-emoji'), ticks = el('span', null, 'rw-ticks'); face.setAttribute('aria-hidden', 'true');
+    row.append(face, el('span', r.name, 'rw-name'), el('span', `🏆${r.cost}`, 'rw-cost'), ...(r.hidden ? [el('span', 'hidden until affordable', 'rw-tag')] : []), ...(r.cap > 0 ? [el('span', `max ${r.cap}/day`, 'rw-tag')] : []));
+    for (const k of kids) {
+      const on = r.childIds.includes(k.child.id), tick = el('label', null, `rw-tick ${accClass(k.kid)}${on ? ' on' : ''}`), t = el('input'); t.type = 'checkbox'; t.checked = on;
+      t.addEventListener('change', () => { r.childIds = all.filter((id) => (id === k.child.id ? t.checked : r.childIds.includes(id))); draw(); });
+      tick.append(t, el('span', k.child.nickname)); ticks.append(tick);
+    }
+    const del = button('✕', () => { d.rewards = d.rewards.filter((x) => x !== r); draw(); }, 'tiny c-red'); del.setAttribute('aria-label', `Delete ${r.name}`);
+    row.append(ticks, del); return row;
+  }
+  const add = el('div', null, 'row dashed rw-add');
+  const emoji = adminInput('text', 'reward emoji', { value: '🎁', maxLength: 12 }, 'emoji-in'), name = adminInput('text', 'reward name', { placeholder: 'reward name', maxLength: 40 }, 'grow');
+  const cost = adminInput('text', 'cost in reward points', { value: '100', inputMode: 'numeric', maxLength: 6 }, 'num-in'), cap = adminInput('text', 'daily limit, 0 for none', { value: '0', inputMode: 'numeric', maxLength: 2 }, 'cap-in');
+  cap.setAttribute('title', 'max redemptions a day (0 = no limit)');
+  const hideWrap = el('label', null, 'rw-check'), hide = el('input'); hide.type = 'checkbox'; hideWrap.append(hide, el('span', 'hide til afford'));
+  add.append(emoji, name, inlineNum('🏆', cost), hideWrap, inlineNum('max/day', cap), button('+ ADD', () => {
+    const n = name.value.trim(), c = Number(cost.value), k = Number(cap.value || 0);
+    if (!n) { note('Give the reward a name first.'); return; }
+    if (!Number.isInteger(c) || c < 1 || c > 100000) { note('A reward costs 1 to 100000 🏆.'); return; }
+    if (!Number.isInteger(k) || k < 0 || k > 20) { note('The daily limit is 0 (none) to 20.'); return; }
+    if (d.rewards.length >= 30) { note('The Reward Store holds up to 30 rewards.'); return; }
+    d.rewards.push({ id: `rw-${crypto.randomUUID()}`, emoji: emoji.value.trim() || '🎁', name: n, cost: c, hidden: hide.checked === true, cap: k, childIds: [...all] });
+    name.value = ''; emoji.value = '🎁'; cost.value = '100'; cap.value = '0'; hide.checked = false; draw();
+  }, 'tiny c-mint'));
+  sec.append(list, add, el('p', '100 🏆 is one passed session. Tick who may ask for each reward; a hidden one shows once the child can afford it.', 'subtle'), saveRow);
+  draw(); return sec;
+}
+// 🚀 the Family Rocket (2786-2830) in v2's featured box: fuelling, launched, or the build form — the prize, the fuel with v2's goal
+// and minimum for each (2809), and the crew, which only children with a seat may join (game.mjs rocket)
+function rocketSection(g, kids, d) {
+  const r = g.rocket, sec = el('section', null, `admin-sec feature-box${r?.status === 'launched' ? ' launched' : ''}`);
+  const nick = (id) => kids.find((k) => k.child.id === id)?.child.nickname || '—', day = (ms) => (Number.isFinite(ms) ? new Date(ms).toLocaleDateString() : '—');
+  const draw = (...body) => sec.replaceChildren(el('h2', '🚀 Family Rocket', 'log-title'), ...body);
+  const past = (g.rocketHistory || []).slice(-3).map((h) => `${h?.prize?.emoji || '🚀'} ${h?.prize?.name || 'a rocket'} (${h?.status === 'claimed' ? `launched ${day(h.launchedAt)}` : 'scrapped'})`);
+  const history = past.length ? [el('p', `past rockets: ${past.join(' · ')}`, 'subtle')] : [];
+  if (r) {
+    const sym = r.currency === 'rp' ? '🏆' : '⚡', launched = r.status === 'launched', tank = el('div', null, 'rocket-track'), acts = el('div', null, 'row-acts');
+    setVar(tank, '--w', `${Math.min(100, Math.round((r.totalFuel / (r.goal || 1)) * 100))}%`); tank.setAttribute('aria-label', `rocket fuel ${r.totalFuel} of ${r.goal}`); tank.append(el('span', null, 'rocket-fill'));
+    if (launched) acts.append(button('Prize delivered · clear', async () => { await parentGameMutation('/game/parent/rocket', { action: 'claim', rocketId: r.id }); }, 'tiny c-mint'));
+    else acts.append(button('Launch now', () => rocketConfirmScreen(r, 'launch'), 'tiny c-gold'), button('Scrap (no refund)', () => rocketConfirmScreen(r, 'scrap'), 'tiny c-red'));
+    draw(el('p', launched ? `🎉 LAUNCHED ${day(r.launchedAt)} — ${r.prize.emoji} ${r.prize.name} is owed to the crew` : `${r.prize.emoji} ${r.prize.name} · goal ${sym}${r.goal}${r.minEach ? ` · at least ${sym}${r.minEach} each` : ''} · since ${day(r.createdAt)}`, launched ? 'rk-line lift' : 'rk-line'),
+      tank, el('p', `fuel ${sym}${r.totalFuel} / ${r.goal} — ${(r.crewChildIds || []).map((id) => `${nick(id)} ${sym}${r.fuel?.[id] || 0}`).join(' · ')}`, 'rk-fuel'), acts, ...history);
+    return sec;
+  }
+  const seated = kids.filter((k) => k.child.status === 'active');
+  const f = (d.rocket ||= { emoji: '🎬', name: '', currency: 'gc', goal: '2000', minEach: '300', crew: seated.map((k) => k.child.id) });
+  const build = () => {
+    const sym = f.currency === 'rp' ? '🏆' : '⚡', form = el('div', null, 'rk-form'), crew = el('div', null, 'rk-crew');
+    const emoji = adminInput('text', 'prize emoji', { value: f.emoji, maxLength: 12 }, 'emoji-in'), name = adminInput('text', 'prize name', { value: f.name, placeholder: 'prize, e.g. Movie night', maxLength: 50 }, 'grow');
+    const fuel = el('select', null, 'admin-inp'); fuel.setAttribute('aria-label', 'fuel type');
+    for (const [v, words] of [['gc', '⚡ grid coins'], ['rp', '🏆 reward points']]) { const o = el('option', words); o.value = v; fuel.append(o); }
+    fuel.value = f.currency;
+    const goal = adminInput('text', 'goal', { value: f.goal, inputMode: 'numeric', maxLength: 7 }, 'num-in'), min = adminInput('text', 'minimum each, 0 for none', { value: f.minEach, inputMode: 'numeric', maxLength: 7 }, 'num-in');
+    const keep = () => { f.emoji = emoji.value; f.name = name.value; f.goal = goal.value; f.minEach = min.value; };
+    for (const i of [emoji, name, goal, min]) i.addEventListener('input', keep);
+    fuel.addEventListener('change', () => { keep(); f.currency = fuel.value === 'rp' ? 'rp' : 'gc'; [f.goal, f.minEach] = f.currency === 'rp' ? ['4000', '600'] : ['2000', '300']; build(); });
+    form.append(emoji, name, fuel, inlineNum(`goal ${sym}`, goal), inlineNum(`min each ${sym}`, min));
+    crew.append(el('span', 'crew:', 'rk-crew-label'));
+    for (const k of seated) {
+      const on = f.crew.includes(k.child.id), tick = el('label', null, `rw-tick ${accClass(k.kid)}${on ? ' on' : ''}`), t = el('input'); t.type = 'checkbox'; t.checked = on;
+      t.addEventListener('change', () => { keep(); f.crew = seated.map((x) => x.child.id).filter((id) => (id === k.child.id ? t.checked : f.crew.includes(id))); build(); });
+      tick.append(t, el('span', k.child.nickname)); crew.append(tick);
+    }
+    if (seated.length < kids.length) crew.append(el('span', 'only an explorer with a seat can join the crew', 'rw-tag'));
+    draw(el('p', 'One shared goal the explorers fuel from their own ⚡ or 🏆, on every home screen. When the tank is full, and everyone on the crew has put in the minimum, it launches for all of them and the prize is theirs. Fuel is spent, never refunded.', 'subtle rk-about'),
+      form, crew, actionRow(button('Build rocket', async () => {
+        keep(); const goalN = Number(f.goal), minN = Number(f.minEach || 0), crewIds = seated.map((k) => k.child.id).filter((id) => f.crew.includes(id));
+        if (!f.name.trim()) { note('Name the prize first.'); return; }
+        if (!Number.isInteger(goalN) || goalN < 50 || goalN > 1000000) { note('The goal is 50 to 1000000.'); return; }
+        if (!Number.isInteger(minN) || minN < 0 || minN > goalN) { note('The minimum each is 0 up to the goal.'); return; }
+        if (!crewIds.length) { note('Tick at least one explorer for the crew.'); return; }
+        await parentGameMutation('/game/parent/rocket', { action: 'build', prize: { emoji: f.emoji.trim() || '🚀', name: f.name.trim() }, currency: f.currency, goal: goalN, minEach: minN, crewChildIds: crewIds }, () => { d.rocket = null; });
+      }, 'tiny c-violet')), ...history);
+  };
+  build(); return sec;
+}
+// ✍️ Coins (v2's manual update, 2679-2718, as far as v3's server allows it: coins, never a pass): a quick +⚡50 for each child, and any
+// amount added or taken away in either currency with the reason the child's ledger keeps (game.mjs adjust)
+function coinsSection(kids) {
+  const sec = adminSection('✍️ Coins', 'c-mint');
+  for (const row of kids) {
+    const line = el('div', null, `row ${accClass(row.kid)}`);
+    line.append(avatarBadge(row.kid, row.look, 22), el('b', row.child.nickname, 'row-name'), el('span', `⚡${row.wallet.gc} · 🏆${row.wallet.rp}`, 'row-cost row-words'),
+      button('+⚡50 credit', async () => { await parentGameMutation('/game/parent/adjust', { childId: row.child.id, currency: 'gc', amount: 50, reason: 'Parent bonus credit', operationId: crypto.randomUUID() }); }, 'tiny c-mint'));
+    sec.append(line);
+  }
+  if (!kids.length) return sec;
+  const op = crypto.randomUUID(), form = el('div', null, 'row dashed adj-row'), pick = (aria, pairs) => {
+    const s = el('select', null, 'admin-inp'); s.setAttribute('aria-label', aria);
+    for (const [v, words] of pairs) { const o = el('option', words); o.value = v; s.append(o); }
+    return s;
+  };
+  const who = pick('explorer', kids.map((k) => [k.child.id, k.child.nickname])), way = pick('add or take away', [['add', '+ add'], ['take', '− take away']]), cur = pick('currency', [['gc', '⚡ grid coins'], ['rp', '🏆 reward points']]);
+  const amount = adminInput('text', 'amount', { placeholder: 'amount', inputMode: 'numeric', maxLength: 5 }, 'num-in'), reason = adminInput('text', 'reason', { placeholder: 'reason, e.g. helped with the shopping', maxLength: 120 }, 'grow');
+  form.append(who, way, amount, cur, reason, button('Apply', async () => {
+    const n = Number(amount.value), why = reason.value.trim();
+    if (!Number.isInteger(n) || n < 1 || n > 10000) { note('The amount is 1 to 10000.'); return; }
+    if (why.length < 3) { note('Give a reason of three characters or more: the ledger keeps it.'); return; }
+    await parentGameMutation('/game/parent/adjust', { childId: who.value, currency: cur.value === 'rp' ? 'rp' : 'gc', amount: way.value === 'take' ? -n : n, reason: why, operationId: op });
+  }, 'tiny c-mint'));
+  sec.append(form, el('p', 'A balance never goes below zero. Each change is kept in the child’s ledger with its reason.', 'subtle'));
+  return sec;
 }
 
 channel?.addEventListener('message', () => {
