@@ -166,17 +166,19 @@ export class Payments {
         // An intent from before the debts were recorded is owed whatever the family still shows, never presumed settled.
         const owed = existing.endPrevious ? existing.endPrevious.status === 'pending' : !existing.endedPrevious && owesEnding(family);
         // A debt is settled only against the family it was recorded for. Moved since — the dunning invoice paid, a plan changed, another
-        // checkout completed — the intent is stale and the family's state answers as it would a fresh start (USE_PLAN_CHANGE), so a
-        // retried click never ends a subscription that has just been paid for.
+        // checkout completed, so the state is no longer one a checkout starts from, or the record names another subscription — the intent
+        // is stale and the family's state answers as it would a fresh start (USE_PLAN_CHANGE), so a retried click never ends a subscription
+        // that has just been paid for. A payment the record has not seen yet is the provider's to refuse (`unlessPaid`, below); an ending
+        // the record saw meanwhile (the provider's own notice of the very ending this intent owed) is not a move — the ending is idempotent.
         const state = family.subscription ? deriveState(family.subscription, this.now()) : 'none';
-        const moved = !CHECKOUT_STATES.has(state) || (owed && ((existing.subscriptionVersion != null && (family.subscription?.version ?? null) !== existing.subscriptionVersion) || (existing.subscriptionRef && family.subscription?.providerSubscriptionRef !== existing.subscriptionRef)));
+        const moved = !CHECKOUT_STATES.has(state) || (owed && !!existing.subscriptionRef && family.subscription?.providerSubscriptionRef !== existing.subscriptionRef);
         if (moved) {
           tx.set(path, { ...existing, status: 'stale', staleReason: 'STATE_MOVED', staleAt: this.now() });
           if (family.checkoutIntent?.[gw.name] === checkoutId) tx.set(`families/${s.familyId}`, { ...family, checkoutIntent: { ...family.checkoutIntent, [gw.name]: null } });
           return { refused: CHECKOUT_STATES.has(state) ? 'SUBSCRIPTION_CHANGED' : 'USE_PLAN_CHANGE' };
         }
         return { familyId: s.familyId, uid: s.uid, customerRef: existing.customerRef, endPrevious: owed ? 'pending' : 'done', supersededRef: existing.supersededRef || null, supersededId: existing.supersededId || null,
-          subscriptionRef: existing.subscriptionRef || family.subscription?.providerSubscriptionRef || null, customerId: family.providerCustomer?.[gw.name] || null, customerKnown: !!family.billing?.[gw.name] };
+          subscriptionRef: existing.subscriptionRef || family.subscription?.providerSubscriptionRef || null, customerId: family.providerCustomer?.[gw.name] || null, customerKnown: !!family.billing?.[gw.name], recordEnded: !!family.subscription?.endedAt };
       }
       const now = this.now(), state = family.subscription ? deriveState(family.subscription, now) : 'none';
       if (!CHECKOUT_STATES.has(state)) fail(409, 'USE_PLAN_CHANGE'); // a paid family changes plan through the 3.4 lifecycle, not a fresh checkout (S3.3/3.4-E)
@@ -185,6 +187,7 @@ export class Payments {
       if (mapping && mapping.familyId !== s.familyId) fail(403, 'ACCESS_DENIED'); // a reference belongs to exactly one family
       // one live checkout per family and provider: a newer one supersedes the older, whose later completion is refused
       const live = family.checkoutIntent?.[gw.name] || null, older = live ? await tx.get(`checkouts/${gw.name}:${live}`) : null;
+      if (older && older.status === 'pending' && older.paymentPending) return { refused: 'CHECKOUT_COMPLETING', familyId: s.familyId }; // its session was completed and the payment is clearing (a bank debit): never superseded, its async success completes it
       if (!mapping) tx.set(mappingPath, { provider: gw.name, customerRef, familyId: s.familyId, createdAt: now, lastEventAt: 0, lastEventSeq: null, lastEventId: null });
       tx.set(`families/${s.familyId}`, { ...family, billing: { ...(family.billing || {}), [gw.name]: customerRef }, checkoutIntent: { ...(family.checkoutIntent || {}), [gw.name]: checkoutId } });
       if (older && ['creating', 'pending'].includes(older.status)) tx.set(`checkouts/${gw.name}:${live}`, { ...older, status: 'superseded', supersededBy: checkoutId, supersededAt: now });
@@ -199,9 +202,10 @@ export class Payments {
         endPrevious: { required: endPrevious, status: endPrevious ? 'pending' : 'not_applicable', result: null, at: null }, supersededRef, supersededId,
         subscriptionRef: family.subscription?.providerSubscriptionRef || null, subscriptionVersion: family.subscription?.version ?? null, createdAt: now, completedAt: null, result: null }); // the subscription the debt is against
       this.audit(tx, 'billing.checkout', s.uid, s.familyId);
-      return { familyId: s.familyId, uid: s.uid, customerRef, endPrevious: endPrevious ? 'pending' : 'done', supersededRef, supersededId, subscriptionRef: family.subscription?.providerSubscriptionRef || null, customerId: family.providerCustomer?.[gw.name] || null, customerKnown: !!family.billing?.[gw.name] };
+      return { familyId: s.familyId, uid: s.uid, customerRef, endPrevious: endPrevious ? 'pending' : 'done', supersededRef, supersededId, subscriptionRef: family.subscription?.providerSubscriptionRef || null, customerId: family.providerCustomer?.[gw.name] || null, customerKnown: !!family.billing?.[gw.name], recordEnded: !!family.subscription?.endedAt };
     });
     if ('done' in prepared) return prepared.done;
+    if (prepared.refused === 'CHECKOUT_COMPLETING') await this.refuse(prepared.familyId, prepared.refused);
     if (prepared.refused) fail(409, prepared.refused);
     // The debts, the harmless one first: a superseded hosted session is expired at the provider (best effort, retried on every
     // resume — its completion is refused regardless), and a refused ending below must not leave it payable.
@@ -211,22 +215,18 @@ export class Payments {
       // subscription still live; the parent's retry (the same operation id) lands here again. Only the subscription the family's
       // record names is ended: a different live one is a checkout completing — just paid for — and is never ended for a new one.
       let ended;
-      try { ended = await gw.cancelSubscription({ idempotencyKey: `end:${checkoutId}`, customerRef: prepared.customerRef, customerId: prepared.customerId, subscriptionRef: prepared.subscriptionRef, unlessPaid: true }); }
+      // `unlessPaid`: a payment the record has not seen is the provider's to refuse — unless the record was ended by this server itself
+      // (a full refund, a dispute, an operator's terminate: `endedAt`), when the provider still billing is exactly what the checkout ends
+      try { ended = await gw.cancelSubscription({ idempotencyKey: `end:${checkoutId}`, customerRef: prepared.customerRef, customerId: prepared.customerId, subscriptionRef: prepared.subscriptionRef, unlessPaid: !prepared.recordEnded }); }
       catch (error) { if (error instanceof Fault && PROVIDER_REFUSALS.has(error.code)) await this.refuse(prepared.familyId, error.code); throw error; }
       if (ended.cancelled === false && ended.reason === 'NO_PROVIDER_SUBSCRIPTION') await this.refuse(prepared.familyId, 'PROVIDER_SUBSCRIPTION_NOT_FOUND'); // nothing was ended: the debt stays pending (a search that missed is retried), never presumed settled
       if (ended.cancelled === false && ended.reason === 'SUBSCRIPTION_PAID') await this.refuse(prepared.familyId, 'PROVIDER_SUBSCRIPTION_PAID'); // paid and current at the provider while the family's record says otherwise: the record is behind (its invoice.paid still on its way) and a paid subscription is never ended for a new one
-      if (ended.cancelled === false && ended.reason === 'ANOTHER_SUBSCRIPTION_LIVE' && !prepared.supersededId) await this.refuse(prepared.familyId, 'PROVIDER_SUBSCRIPTION_LIVE'); // a live subscription that is not the family's, and no checkout of ours completing: the operator's
       if (ended.cancelled === false && ended.reason === 'ANOTHER_SUBSCRIPTION_LIVE') {
-        // the older checkout is completing at the provider: it is reinstated as the family's live checkout and this one closed
-        await this.store.transaction(async (tx) => {
-          const mine = await tx.get(path), family = await tx.get(`families/${prepared.familyId}`), olderPath = prepared.supersededId ? `checkouts/${gw.name}:${prepared.supersededId}` : null, older = olderPath ? await tx.get(olderPath) : null, now = this.now();
-          if (mine && mine.status === 'creating') tx.set(path, { ...mine, status: 'superseded', supersededBy: prepared.supersededId || null, supersededAt: now, closedReason: 'CHECKOUT_COMPLETING' });
-          if (older && older.status === 'superseded' && older.supersededBy === checkoutId) {
-            tx.set(olderPath, { ...older, status: 'pending', supersededBy: null, supersededAt: null, reinstatedAt: now });
-            if (family) tx.set(`families/${prepared.familyId}`, { ...family, checkoutIntent: { ...(family.checkoutIntent || {}), [gw.name]: prepared.supersededId } });
-          }
-        });
-        await this.refuse(prepared.familyId, 'CHECKOUT_COMPLETING');
+        // a live subscription that is not the one the record names: the older checkout of ours completing — the provider names that
+        // checkout on the subscription it made — is reinstated as the family's live checkout and this one closed; anything else (a
+        // subscription the dashboard made, a checkout that never reached the provider) is the operator's
+        if (this.completing(prepared, ended.liveCheckoutId)) await this.reinstate(gw, prepared, checkoutId, path);
+        await this.refuse(prepared.familyId, 'PROVIDER_SUBSCRIPTION_LIVE');
       }
       await this.store.transaction(async (tx) => { const intent = await tx.get(path); if (intent && intent.status === 'creating') tx.set(path, { ...intent, endPrevious: { ...(intent.endPrevious || { required: true }), status: 'done', result: ended, at: this.now() }, endedPrevious: ended }); });
     }
@@ -235,9 +235,15 @@ export class Payments {
     if (prepared.customerKnown && typeof gw.inspect === 'function') {
       const st = await gw.inspect(prepared.customerRef, { customerId: prepared.customerId });
       if (st.multiple) await this.refuse(prepared.familyId, 'MULTIPLE_PROVIDER_SUBSCRIPTIONS');
-      if (!st.simulated && ((st.openCount ?? st.liveCount) || 0) >= 1) await this.refuse(prepared.familyId, 'PROVIDER_SUBSCRIPTION_LIVE'); // live, or able to bill again
+      if (!st.simulated && ((st.openCount ?? st.liveCount) || 0) >= 1) { // live, or able to bill again
+        // a first checkout paid at the provider and clicked again before its completion landed: the subscription names that checkout,
+        // which is reinstated (never left superseded with its completion refused) — anything else is the operator's (fifth round)
+        const theirs = (st.subscriptions || []).find((x) => x.checkoutId) || null;
+        if (this.completing(prepared, theirs?.checkoutId || null)) await this.reinstate(gw, prepared, checkoutId, path);
+        await this.refuse(prepared.familyId, 'PROVIDER_SUBSCRIPTION_LIVE');
+      }
     }
-    const result = await gw.createCheckout({ checkoutId, idempotencyKey: checkoutId, customerRef: prepared.customerRef, plan, familyId: prepared.familyId });
+    const result = await gw.createCheckout({ checkoutId, idempotencyKey: checkoutId, customerRef: prepared.customerRef, customerId: prepared.customerId, plan, familyId: prepared.familyId });
     const finished = await this.store.transaction(async (tx) => {
       const intent = await tx.get(path);
       const family = await tx.get(`families/${prepared.familyId}`);
@@ -294,10 +300,36 @@ export class Payments {
   async refuse(familyId, code) {
     await this.store.transaction(async (tx) => {
       const family = familyId ? await tx.get(`families/${familyId}`) : null;
-      if (family) tx.set(`families/${familyId}`, { ...family, providerAttention: { code, at: this.now() } });
+      if (family && family.deleted !== true && family.deletion?.status !== 'executing') tx.set(`families/${familyId}`, { ...family, providerAttention: { code, at: this.now() } }); // a tombstone carries no mark
       this.audit(tx, 'billing.refused', `provider:${this.provider}`, familyId, { code });
     });
     fail(409, code);
+  }
+  /** The live subscription the provider holds is the older checkout of ours completing: that checkout reached the provider (it holds a session) and the subscription names it. */
+  completing(prepared, liveCheckoutId) { return !!prepared.supersededId && !!prepared.supersededRef && !!liveCheckoutId && liveCheckoutId === prepared.supersededId; }
+  /**
+   * The older checkout is completing at the provider: it is reinstated as the family's live checkout, this attempt closed, and a
+   * completion of it the inbox rejected while it was superseded is queued and processed again — never left as a rejection nobody
+   * reads. On a family being deleted nothing is reinstated: the freeze owns the checkouts, and the refusal says so.
+   */
+  async reinstate(gw, prepared, checkoutId, path) {
+    const done = await this.store.transaction(async (tx) => {
+      const mine = await tx.get(path), family = await tx.get(`families/${prepared.familyId}`), olderPath = `checkouts/${gw.name}:${prepared.supersededId}`, older = await tx.get(olderPath), now = this.now();
+      if (!family || family.deleted === true || family.deletion?.status === 'executing') return { deleted: true };
+      const rejected = (await tx.query('billingEvents', 'checkoutRef', prepared.supersededId, 20)).map(([, r]) => r).filter((r) => r.outcome?.status === 'rejected' && r.outcome?.reason === 'CHECKOUT_SUPERSEDED');
+      const mappings = new Map(); for (const r of rejected) { const mp = `billingCustomers/${gw.name}:${r.customer}`; if (!mappings.has(mp)) mappings.set(mp, await tx.get(mp)); }
+      if (mine && mine.status === 'creating') tx.set(path, { ...mine, status: 'superseded', supersededBy: prepared.supersededId, supersededAt: now, closedReason: 'CHECKOUT_COMPLETING' });
+      if (older && older.status === 'superseded' && older.supersededBy === checkoutId) {
+        tx.set(olderPath, { ...older, status: 'pending', supersededBy: null, supersededAt: null, reinstatedAt: now });
+        tx.set(`families/${prepared.familyId}`, { ...family, checkoutIntent: { ...(family.checkoutIntent || {}), [gw.name]: prepared.supersededId } });
+      }
+      let requeued = 0;
+      for (const [mp, m] of mappings) { if (!m) continue; const ids = rejected.filter((r) => `billingCustomers/${gw.name}:${r.customer}` === mp).map((r) => r.providerEventId).filter((id) => !(m.pending || []).includes(id)); if (ids.length) { tx.set(mp, { ...m, pending: [...(m.pending || []), ...ids] }); requeued += ids.length; } }
+      return { deleted: false, requeued };
+    });
+    if (done.deleted) fail(409, 'FAMILY_DELETED');
+    if (done.requeued) await this.reprocessFamily(gw.name, prepared.familyId); // the completion that landed while the checkout was superseded applies now
+    await this.refuse(prepared.familyId, 'CHECKOUT_COMPLETING');
   }
   /** A family's deletion ends the provider's subscription. Best effort, never throws for a provider fault: the outcome is recorded and the report flags a subscription left live. */
   async cancelAtProvider(family, idempotencyKey) {
@@ -401,7 +433,8 @@ export class Payments {
     }
     // the provider's answer is on the record before anything else can fail: a finalisation refused below (the session revoked
     // meanwhile, the deletion freeze landing) must never lose a proration the provider charged (fifth round)
-    await this.store.transaction(async (tx) => { const current = await tx.get(path); if (current && current.status === 'creating' && !current.providerAnsweredAt) tx.set(path, { ...current, providerAnsweredAt: this.now(), providerOperationRef: proration?.providerOperationRef || null, proration: up ? proration : null }); });
+    // ...whatever the intent's status meanwhile (the deletion freeze, a takeover): money the provider moved is on the record that asked for it
+    await this.store.transaction(async (tx) => { const current = await tx.get(path); if (current && !current.providerAnsweredAt && !['applied', 'awaiting_payment'].includes(current.status)) tx.set(path, { ...current, providerAnsweredAt: this.now(), providerOperationRef: proration?.providerOperationRef || null, proration: up ? proration : null }); });
     const finished = await this.store.transaction(async (tx) => {
       const { s, family } = await this.billing.parent(tx, ctx, true);
       const current = await tx.get(path);
@@ -507,7 +540,13 @@ export class Payments {
       // provider — is not this family's (Stage 4 review, third round); a completed checkout is the moment the subscription changes
       const other = !!ev.data.subscriptionRef && !!family?.subscription?.providerSubscriptionRef && ev.type !== 'checkout.completed' && family.subscription.providerSubscriptionRef !== ev.data.subscriptionRef;
       let outcome;
-      if (!internalType) outcome = { status: 'ignored', reason: 'UNSUPPORTED_EVENT' };
+      if (ev.type === 'checkout.payment_pending') {
+        // a session completed with a payment still clearing (a bank debit): nothing is granted, but the checkout remembers it so a later
+        // click never supersedes it and the deletion can end what it made; the provider's async success is the completion (fifth round)
+        if (checkout && checkout.familyId === familyId && checkout.status === 'pending' && !checkout.paymentPending) tx.set(checkoutPath, { ...checkout, paymentPending: { eventId: ev.id, subscriptionRef: ev.data.subscriptionRef || null, status: ev.data.ref || null, at: ev.at } });
+        outcome = { status: 'ignored', reason: 'PAYMENT_PENDING' };
+      }
+      else if (!internalType) outcome = { status: 'ignored', reason: 'UNSUPPORTED_EVENT' };
       else if (!mapping) outcome = { status: 'rejected', reason: 'UNKNOWN_CUSTOMER' };
       else if (ev.data.familyId && ev.data.familyId !== familyId) outcome = { status: 'rejected', reason: 'FAMILY_MISMATCH' };
       // checkout.completed means exactly that: the completion of a checkout this server opened
@@ -519,8 +558,13 @@ export class Payments {
       else if (checkout && plan && checkout.plan !== plan) outcome = { status: 'rejected', reason: 'CHECKOUT_MISMATCH' }; // paid for a different plan than the one this checkout was opened for
       else if (ev.type === 'checkout.completed' && checkout.status === 'completed') outcome = { status: 'rejected', reason: 'CHECKOUT_ALREADY_COMPLETED' };
       else if (ev.type === 'checkout.completed' && checkout.status === 'superseded_by_deletion') outcome = { status: 'reconciliation_required', reason: 'FAMILY_DELETED' }; // paid on a session the deletion superseded: a live subscription for a deleted family, for the operator (fifth round)
-      else if (ev.type === 'checkout.completed' && checkout.status === 'superseded') outcome = { status: 'rejected', reason: 'CHECKOUT_SUPERSEDED' }; // a newer checkout replaced it: no double transition
+      else if (ev.type === 'checkout.completed' && checkout.status === 'superseded' && (family?.deleted === true || family?.deletion?.status === 'executing')) outcome = { status: 'reconciliation_required', reason: 'FAMILY_DELETED' }; // a live subscription for a deleted family: the operator's, never a rejection nobody reads
+      else if (ev.type === 'checkout.completed' && checkout.status === 'superseded') outcome = { status: 'rejected', reason: 'CHECKOUT_SUPERSEDED' }; // a newer checkout replaced it: no double transition (reinstate() queues it again when that checkout turns out to be completing)
       else if (duplicateRefund) outcome = { status: 'ignored', reason: 'DUPLICATE_REFUND' };
+      // a refund of a subscription the record does not name yet, while a checkout of this family is still pending: it may be the new
+      // subscription's, refunded before its completion landed — it waits on the customer mapping and is processed again after the
+      // completion (an old subscription's refund is then ignored as OTHER_SUBSCRIPTION); never granted access on a refunded charge
+      else if (other && internalType === 'refund' && family?.checkoutIntent?.[gw.name]) outcome = { status: 'requires_action', reason: 'CHECKOUT_PENDING' };
       else if (other) outcome = { status: 'ignored', reason: 'OTHER_SUBSCRIPTION' }; // recorded for the operator; the family's own subscription is untouched
       else if (stale) outcome = { status: 'ignored', reason: 'STALE_EVENT' }; // an older event arriving after a newer one never rolls the facts back
       else {
@@ -555,11 +599,11 @@ export class Payments {
         const before = mapping.pending || [], pending = before.filter((id) => id !== ev.id);
         if (outcome.status === 'requires_action') pending.push(ev.id);
         const next = { ...mapping, pending };
-        if (outcome.status === 'applied' && !older) { next.lastEventAt = ev.at; next.lastEventSeq = ev.seq; next.lastEventId = ev.id; } // an older refund that applied never moves the clock back
+        if (outcome.status === 'applied' && !older && internalType !== 'refund') { next.lastEventAt = ev.at; next.lastEventSeq = ev.seq; next.lastEventId = ev.id; } // a refund is money back, not a state snapshot: it never moves the clock (an older one never back, a newer one never forward past a completion still on its way)
         if (outcome.status === 'applied' || pending.length !== before.length || outcome.status === 'requires_action') tx.set(mappingPath, next);
         if (outcome.status === 'applied' && checkout && ev.type === 'checkout.completed') tx.set(checkoutPath, { ...checkout, status: 'completed', completedAt: now, completedBy: ev.id }); // a `creating` intent whose session the provider did open is completed too
       }
-      tx.set(inboxPath, { provider: gw.name, providerEventId: ev.id, type: ev.type, at: ev.at, seq: ev.seq ?? null, receivedAt: seen?.receivedAt ?? now, lastReceivedAt: now, attempts: (seen?.attempts || 0) + 1, customer: ev.customer, familyId, data: ev.data, refundRef: /^(refund|dispute)\./.test(ev.type) || internalType === 'refund' ? ev.data.ref || null : null, invoiceRef: ev.type.startsWith('invoice.') ? ev.data.ref || null : null, fingerprint, outcome });
+      tx.set(inboxPath, { provider: gw.name, providerEventId: ev.id, type: ev.type, at: ev.at, seq: ev.seq ?? null, receivedAt: seen?.receivedAt ?? now, lastReceivedAt: now, attempts: (seen?.attempts || 0) + 1, customer: ev.customer, familyId, data: ev.data, refundRef: /^(refund|dispute)\./.test(ev.type) || internalType === 'refund' ? ev.data.ref || null : null, invoiceRef: ev.type.startsWith('invoice.') ? ev.data.ref || null : null, checkoutRef: ev.data.checkoutId || null, fingerprint, outcome });
       this.audit(tx, `webhook.${outcome.status}`, `webhook:${gw.name}`, familyId);
       return outcome;
     });

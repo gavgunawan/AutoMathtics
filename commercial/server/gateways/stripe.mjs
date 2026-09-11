@@ -83,14 +83,14 @@ export class StripeGateway {
     return json;
   }
   /** The Stripe Customer that carries our customer reference in its metadata; created once per reference. */
-  async customer(customerRef, familyId) {
-    const found = await this.api('GET', `/v1/customers/search?query=${encodeURIComponent(`metadata['customerRef']:'${customerRef}'`)}&limit=1`);
-    if (found.data?.[0]) return found.data[0];
+  async customer(customerRef, familyId, customerId = null) {
+    const { customer } = await this.resolveCustomer({ customerRef, customerId }); // the recorded id first: a search that lags must not mint a second customer (fifth round)
+    if (customer) return customer;
     return this.api('POST', '/v1/customers', { metadata: { customerRef, familyId } }, `customer:${customerRef}`);
   }
-  async createCheckout({ checkoutId, idempotencyKey, customerRef, plan, familyId }) {
+  async createCheckout({ checkoutId, idempotencyKey, customerRef, customerId = null, plan, familyId }) {
     const price = this.priceFor(plan.id); if (!price) fail(400, 'INVALID_PLAN');
-    const cus = await this.customer(customerRef, familyId);
+    const cus = await this.customer(customerRef, familyId, customerId);
     const session = await this.api('POST', '/v1/checkout/sessions', {
       mode: 'subscription', customer: cus.id, client_reference_id: checkoutId,
       line_items: [{ price, quantity: 1 }],
@@ -102,7 +102,14 @@ export class StripeGateway {
   /** A superseded hosted session is expired at Stripe so it can no longer be paid (already expired or completed: nothing to do). */
   async cancelCheckout(providerCheckoutRef) {
     try { await this.api('POST', `/v1/checkout/sessions/${providerCheckoutRef}/expire`, {}, `expire:${providerCheckoutRef}`); return { expired: true }; }
-    catch (error) { if (error instanceof Fault && [400, 404].includes(error.provider?.status)) return { expired: false, reason: error.provider.code }; throw error; }
+    catch (error) {
+      if (!(error instanceof Fault && [400, 404].includes(error.provider?.status))) throw error;
+      // a session no longer open — expired before (a rerun, a concurrent run), or completed — refuses the expiry: that is its settled
+      // state, answered as such and never recorded as a failure (fifth round); a session Stripe cannot show is the refusal it gave
+      let status = null; try { status = (await this.api('GET', `/v1/checkout/sessions/${providerCheckoutRef}`)).status || null; } catch { /* answered below as the refusal */ }
+      if (status && status !== 'open') return { expired: true, already: true, status };
+      return { expired: false, reason: error.provider.code };
+    }
   }
   /** The customer carrying our reference, without creating one: a change, a cancellation or a check never mints a customer. */
   async findCustomer(customerRef) {
@@ -149,7 +156,7 @@ export class StripeGateway {
   /** Stripe's subscription in the shape the reconciliation compares (RECONCILIATION.md); nothing secret in it. */
   describe(sub) {
     const price = sub.items?.data?.[0]?.price?.id || null;
-    return { ref: sub.id, status: sub.status, live: LIVE.has(sub.status), ended: ENDED.has(sub.status), price, plan: this.planFor(price), periodEnd: periodEndOf(sub), cancelAtPeriodEnd: sub.cancel_at_period_end === true, canceledAt: sub.canceled_at ? sub.canceled_at * 1000 : null };
+    return { ref: sub.id, status: sub.status, live: LIVE.has(sub.status), ended: ENDED.has(sub.status), price, plan: this.planFor(price), periodEnd: periodEndOf(sub), cancelAtPeriodEnd: sub.cancel_at_period_end === true, canceledAt: sub.canceled_at ? sub.canceled_at * 1000 : null, checkoutId: sub.metadata?.checkoutId || null }; // checkoutId: the checkout of ours that made it (createCheckout stamps it), null for one the dashboard made
   }
   /**
    * Move the customer's live subscription to the new price; the prorated difference is invoiced now.
@@ -191,15 +198,26 @@ export class StripeGateway {
     if (!cus) return { cancelled: false, reason: 'NO_PROVIDER_SUBSCRIPTION', simulated: false };
     const { live, all } = await this.subscriptionsOf(cus.id);
     if (live.length > 1) fail(409, 'MULTIPLE_PROVIDER_SUBSCRIPTIONS');
-    if (subscriptionRef && live[0] && live[0].id !== subscriptionRef) return { cancelled: false, reason: 'ANOTHER_SUBSCRIPTION_LIVE', liveRef: live[0].id, simulated: false };
-    const sub = subscriptionRef ? all.find((x) => x.id === subscriptionRef) || null : live[0] || all[0] || null; // a named subscription is never substituted by another of the customer's (fifth round)
+    if (subscriptionRef && live[0] && live[0].id !== subscriptionRef) return { cancelled: false, reason: 'ANOTHER_SUBSCRIPTION_LIVE', liveRef: live[0].id, liveCheckoutId: live[0].metadata?.checkoutId || null, simulated: false }; // liveCheckoutId: the checkout of ours that made the live one, when it was ours
+    let sub = subscriptionRef ? all.find((x) => x.id === subscriptionRef) || null : live[0] || all[0] || null; // a named subscription is never substituted by another of the customer's (fifth round)
+    // the named subscription absent from this customer's list — the family's customer moved on after a deletion, a record older than the
+    // customer it names — is asked for by its own id: Stripe keeps an ended subscription retrievable, and one it never held settles nothing
+    if (!sub && subscriptionRef) sub = await this.subscriptionById(subscriptionRef);
     if (!sub) return { cancelled: false, reason: 'NO_PROVIDER_SUBSCRIPTION', simulated: false };
-    if (ENDED.has(sub.status)) return { cancelled: true, already: true, providerOperationRef: sub.id, simulated: false }; // `paused` and `incomplete` can bill again: they are ended below
+    // read once more right before the ending: the list above may be seconds old and a payment that landed meanwhile must be seen — the
+    // window is this one call, not search + list + delete; what the subscription looked like travels on the answer, for the record
+    const fresh = (await this.subscriptionById(sub.id)) || sub, seen = { status: fresh.status, periodEnd: periodEndOf(fresh), cancelAtPeriodEnd: fresh.cancel_at_period_end === true };
+    if (ENDED.has(fresh.status)) return { cancelled: true, already: true, providerOperationRef: fresh.id, ...seen, simulated: false }; // `paused` and `incomplete` can bill again: they are ended below
     // paid and current at Stripe (and not winding down) while the family's record says otherwise: the record is behind — its invoice.paid
     // still on its way — and a subscription just paid for is never ended for a new checkout (fifth round); the caller marks the family
-    if (unlessPaid && PAID.has(sub.status) && sub.cancel_at_period_end !== true) return { cancelled: false, reason: 'SUBSCRIPTION_PAID', status: sub.status, providerOperationRef: sub.id, simulated: false };
-    try { await this.api('DELETE', `/v1/subscriptions/${sub.id}`); return { cancelled: true, providerOperationRef: sub.id, simulated: false }; }
-    catch (error) { if (error instanceof Fault && [400, 404].includes(error.provider?.status)) return { cancelled: true, already: true, providerOperationRef: sub.id, reason: error.provider.code, simulated: false }; throw error; }
+    if (unlessPaid && PAID.has(fresh.status) && fresh.cancel_at_period_end !== true) return { cancelled: false, reason: 'SUBSCRIPTION_PAID', providerOperationRef: fresh.id, ...seen, simulated: false };
+    try { await this.api('DELETE', `/v1/subscriptions/${fresh.id}`); return { cancelled: true, providerOperationRef: fresh.id, ...seen, simulated: false }; }
+    catch (error) { if (error instanceof Fault && [400, 404].includes(error.provider?.status)) return { cancelled: true, already: true, providerOperationRef: fresh.id, reason: error.provider.code, ...seen, simulated: false }; throw error; }
+  }
+  /** One subscription by its id; null when Stripe never held it. */
+  async subscriptionById(id) {
+    try { return await this.api('GET', `/v1/subscriptions/${id}`); }
+    catch (error) { if (error instanceof Fault && error.provider?.status === 404) return null; throw error; }
   }
   /** What Stripe holds for this customer, for the reconciliation report. Read-only. */
   async inspect(customerRef, { customerId = null } = {}) {
@@ -224,7 +242,7 @@ export class StripeGateway {
       if (!customer || !o.subscription) fail(400, 'INVALID_REQUEST');
       // a session is paid only when Stripe says so: one completed with a delayed-notification method (a bank debit) says `unpaid` and
       // grants nothing; its `async_payment_succeeded` — the same session, now paid — is the completion (fifth round)
-      if (o.payment_status !== 'paid' && o.payment_status !== 'no_payment_required') return passthrough(`stripe.${ev.type}:${o.payment_status || 'unknown'}`);
+      if (o.payment_status !== 'paid' && o.payment_status !== 'no_payment_required') return { ...base, type: 'checkout.payment_pending', customer, data: { ...NONE, familyId: o.metadata?.familyId || null, checkoutId: o.client_reference_id || o.metadata?.checkoutId || null, subscriptionRef: typeof o.subscription === 'string' ? o.subscription : o.subscription?.id || null, ref: o.payment_status || 'unknown' } }; // ignored by the machine, remembered on the checkout: its async success completes it
       const sub = await this.api('GET', `/v1/subscriptions/${typeof o.subscription === 'string' ? o.subscription : o.subscription.id}`); // provider state, not our own metadata
       return { ...base, type: 'checkout.completed', customer, data: { ...NONE, price: sub.items?.data?.[0]?.price?.id || null, periodEnd: periodEndOf(sub), familyId: o.metadata?.familyId || null, checkoutId: o.client_reference_id || o.metadata?.checkoutId || null, subscriptionRef: typeof sub.id === 'string' ? sub.id : null } };
     }

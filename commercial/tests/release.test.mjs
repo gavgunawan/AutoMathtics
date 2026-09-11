@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, mkdir, writeFile, readdir, rm } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { once } from 'node:events';
 import { VERSION } from '../server/version.mjs';
 import { createApp } from '../server/http.mjs';
@@ -40,8 +43,29 @@ test('the commit a revision runs is a fact the service states: /api/health carri
   const res = await fetch(`http://127.0.0.1:${server.address().port}/api/health`), health = await res.json();
   assert.deepEqual(health, { status: 'ok', version: VERSION, release: sha });
   const helper = await read('../scripts/deploy-staging.sh');
-  for (const s of ['RELEASE_SHA="$(git rev-parse HEAD', '^[0-9a-f]{40}$', 'DIRTY="$(git status --porcelain --untracked-files=no)"', 'git archive --format=tar "${RELEASE_SHA}${PREFIX:+:$PREFIX}"', '--source "$SRC"', '--labels "release-sha=$RELEASE_SHA"', 'RELEASE_SHA: p.RELEASE_SHA', 'The checkout changed while the tests ran', 'node scripts/verify-release.mjs "$ORIGIN" "$RELEASE_SHA" "$SERVICE_JSON"']) assert.ok(helper.includes(s), s);
+  for (const s of ['RELEASE_SHA="$(git rev-parse HEAD', '^[0-9a-f]{40}$', 'DIRTY="$(git status --porcelain --untracked-files=no)"', 'TOP="$(git rev-parse --show-toplevel)"', 'git -C "$TOP" archive --format=tar "${RELEASE_SHA}${PREFIX:+:$PREFIX}"', '--source "$SRC"', '--labels "release-sha=$RELEASE_SHA"', 'RELEASE_SHA: p.RELEASE_SHA', 'The checkout changed while the tests ran', 'VERDICT="$(node scripts/verify-release.mjs "$ORIGIN" "$RELEASE_SHA" "$SERVICE_JSON")"', '*"is responding at"*']) assert.ok(helper.includes(s), s);
   assert.ok(!helper.includes('--source .'), 'never the working tree as it stands after the suites');
+  assert.ok((await read('../scripts/verify-release.mjs')).includes('realpathSync(process.argv[1])'), 'the CLI guard sees through a linked path, so the last gate is never silently skipped');
+  // the export, run as the helper runs it — from inside commercial/ of a checkout whose top level is the repo — must yield the subtree
+  // (from inside commercial/, a plain `git archive <sha>:commercial` scopes to the current directory inside the tree-ish and yields nothing)
+  let git = true; try { execFileSync('git', ['--version'], { stdio: 'ignore' }); execFileSync('bash', ['--version'], { stdio: 'ignore' }); } catch { git = false; }
+  if (!git) t.diagnostic('git or bash unavailable: the export is pinned by the helper text only');
+  else {
+    const dir = await mkdtemp(join(tmpdir(), 'am-export-')); t.after(() => rm(dir, { recursive: true, force: true }));
+    const sub = join(dir, 'commercial'); await mkdir(join(sub, 'server'), { recursive: true });
+    for (const [name, body] of [['Dockerfile', 'FROM scratch\n'], ['.dockerignore', '*\n'], ['.gcloudignore', '.git\n'], ['package.json', '{}\n'], ['package-lock.json', '{}\n'], ['server/main.mjs', '// main\n']]) await writeFile(join(sub, name), body);
+    await writeFile(join(dir, 'README.md'), 'root\n');
+    const g = (args) => execFileSync('git', ['-c', 'user.email=t@example.test', '-c', 'user.name=t', ...args], { cwd: dir, stdio: 'pipe' }).toString().trim();
+    g(['init', '-q']); g(['add', '-A']); g(['commit', '-q', '-m', 'one']);
+    const lines = helper.split('\n'), exportLines = lines.filter((l) => l.startsWith('PREFIX="$(git rev-parse --show-prefix)"') || l.startsWith('git -C "$TOP" archive'));
+    assert.equal(exportLines.length, 2, 'the two export lines are found verbatim');
+    const script = `set -euo pipefail\nRELEASE_SHA="$(git rev-parse HEAD)"\nSRC="$(mktemp -d)"\n${exportLines.join('\n')}\nls -A "$SRC" "$SRC/server"\nrm -rf "$SRC"`;
+    const out = execFileSync('bash', ['-c', script], { cwd: sub, stdio: 'pipe' }).toString();
+    for (const name of ['Dockerfile', '.dockerignore', '.gcloudignore', 'package.json', 'package-lock.json', 'main.mjs']) assert.ok(out.includes(name), `${name} is exported`);
+    assert.ok(!out.includes('README.md'), 'the subtree only');
+    const naive = execFileSync('bash', ['-c', 'git archive --format=tar "$(git rev-parse HEAD):commercial" | tar -t | wc -l'], { cwd: sub, stdio: 'pipe' }).toString().trim();
+    assert.equal(naive, '0', 'the naive form from inside commercial/ exports nothing: the reason the helper archives from the top level');
+  }
   assert.ok(!/\[\[ -z "\$\(git status/.test(helper), 'a failing git status must not read as a clean tree');
   // the decision itself, on the live answer of a server: the commit, the revision, its label and its traffic
   const service = (latest, ready, traffic, label = sha) => ({ metadata: { name: 'automathtics-v3' }, spec: { template: { metadata: { labels: { 'release-sha': label } } } }, status: { latestCreatedRevisionName: latest, latestReadyRevisionName: ready, traffic } });
@@ -53,6 +77,8 @@ test('the commit a revision runs is a fact the service states: /api/health carri
   assert.throws(() => verifyRelease({ ok: true, health: { ...health, version: '2.9.0' }, sha }), /health check failed/);
   assert.throws(() => verifyRelease({ ok: true, health, sha, service: service('r2', 'r2', [{ revisionName: 'r1', percent: 100 }]) }), /Traffic is not on r2/, 'a rollback pinned traffic to the older revision of the same commit: the new one serves nothing');
   assert.throws(() => verifyRelease({ ok: true, health, sha, service: service('r2', 'r2', [{ revisionName: 'r1', percent: 50 }, { revisionName: 'r2', percent: 50 }]) }), /Traffic is not on r2/);
+  assert.throws(() => verifyRelease({ ok: true, health, sha, service: service('r2', 'r2', [{ revisionName: 'r2', percent: 60, latestRevision: true }, { revisionName: 'r1', percent: 40 }]) }), /Traffic is not on r2/, 'a majority is not all of it');
+  assert.throws(() => verifyRelease({ ok: true, health, sha, service: service('r2', 'r2', [{ revisionName: 'r2', percent: 99 }, { revisionName: 'r1', percent: 1 }]) }), /Traffic is not on r2/);
   assert.throws(() => verifyRelease({ ok: true, health, sha, service: service('r2', 'r1', [{ revisionName: 'r1', percent: 100 }]) }), /not the ready one/);
   assert.throws(() => verifyRelease({ ok: true, health, sha, service: service('r2', 'r2', [{ revisionName: 'r2', percent: 100 }], other) }), /labelled release-sha=cdcd/);
 });

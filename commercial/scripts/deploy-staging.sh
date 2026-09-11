@@ -57,8 +57,9 @@ DIRTY="$(git status --porcelain --untracked-files=no)"
 # edit, a pull or a checkout in another tab while the tests run cannot reach the revision that carries this commit's label.
 SRC="$(mktemp -d)"; ENV_FILE="$(mktemp)"; SERVICE_JSON="$(mktemp)"
 trap 'rm -rf "$SRC"; rm -f "$ENV_FILE" "$SERVICE_JSON"' EXIT
-PREFIX="$(git rev-parse --show-prefix)"; PREFIX="${PREFIX%/}"
-git archive --format=tar "${RELEASE_SHA}${PREFIX:+:$PREFIX}" | tar -x -C "$SRC"
+# (from the top level: run inside commercial/, git-archive scopes the archive to the current directory INSIDE the tree-ish and exports nothing)
+PREFIX="$(git rev-parse --show-prefix)"; PREFIX="${PREFIX%/}"; TOP="$(git rev-parse --show-toplevel)"
+git -C "$TOP" archive --format=tar "${RELEASE_SHA}${PREFIX:+:$PREFIX}" | tar -x -C "$SRC"
 for needed in Dockerfile .dockerignore .gcloudignore package.json package-lock.json server/main.mjs; do [[ -e "$SRC/$needed" ]] || { echo "The exported commit lacks $needed." >&2; exit 1; }; done
 npm ci --ignore-scripts --no-fund --no-audit
 npm test
@@ -85,4 +86,6 @@ mkdir -p .hosting  # deliberately empty; git keeps no empty directory, so make s
 # would leave the new one, with its new environment, serving nothing while the health check still answered from the old — and
 # the live service must report this very commit. scripts/verify-release.mjs decides; the suite tests its decision.
 gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json > "$SERVICE_JSON"
-node scripts/verify-release.mjs "$ORIGIN" "$RELEASE_SHA" "$SERVICE_JSON"
+VERDICT="$(node scripts/verify-release.mjs "$ORIGIN" "$RELEASE_SHA" "$SERVICE_JSON")"
+echo "$VERDICT"
+[[ "$VERDICT" == *"is responding at"* ]] || { echo 'verify-release printed no verdict: refusing to call this deploy done.' >&2; exit 1; }

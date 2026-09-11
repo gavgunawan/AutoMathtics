@@ -2,6 +2,7 @@
 // report the commit that was deployed, and the revision this deploy created must be ready, labelled with that commit and the one
 // serving every request. A check that lived in the helper's heredoc could be neutered without a test noticing (fifth round).
 import { readFile } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { VERSION } from '../server/version.mjs';
 
@@ -29,7 +30,8 @@ export function verifyRelease({ ok, health, sha, service = null }) {
   return { version: health.version, release: health.release, revision };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+const main = (() => { try { return process.argv[1] ? pathToFileURL(realpathSync(process.argv[1])).href : null; } catch { return null; } })(); // the real path: a checkout reached through a link must not make the gate silent
+if (main && import.meta.url === main) {
   const [origin, sha, serviceFile] = process.argv.slice(2);
   if (!origin || !sha) { console.error('usage: node scripts/verify-release.mjs ORIGIN SHA [service.json]'); process.exit(2); }
   const res = await fetch(`${origin}/api/health`), health = await res.json().catch(() => null);

@@ -256,7 +256,9 @@ recovery forms have the same second wall and a cap per instance. Keep advertisin
 **Which commit is running.** The deploy helper records the commit it deploys from as `RELEASE_SHA` in
 the service's environment and as a `release-sha` label on the revision, refuses to deploy from a dirty or
 commitless checkout (and stops when git cannot answer), uploads the commit itself — exported with
-`git archive` before the suites run, never the working tree as it stands minutes later — re-checks the
+`git archive` from the repository's top level before the suites run (from inside `commercial/` git would scope
+the archive to the current directory and export nothing; the suite runs that export in a throwaway repository),
+never the working tree as it stands minutes later — re-checks the
 checkout after the suites, and after the deploy `scripts/verify-release.mjs` (tested by the suite) requires
 that `/api/health` reports that very commit (`release`) and that the revision just created is the ready one,
 labelled with it and serving all traffic: a rollback that pinned traffic to an older revision of the same

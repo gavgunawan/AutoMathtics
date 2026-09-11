@@ -196,7 +196,7 @@ export class Support {
       const mapping = await this.store.get(`billingCustomers/${provider}:${ref}`);
       customers.push({ provider, ref, mapping: mapping ? { lastEventAt: mapping.lastEventAt, lastEventId: mapping.lastEventId, pending: mapping.pending || [], aliasOf: mapping.aliasOf || null } : null });
     }
-    const refs = new Set(customers.map((c) => c.ref)), truncated = [], paged = async (collection, field, value) => { const r = await this.pagedBy(this.store, collection, field, value); if (r.truncated) truncated.push(collection); return r.rows; }; // the family's rows only, never the whole collection (fifth round)
+    const refs = new Set(customers.map((c) => c.ref)), truncated = [], paged = async (collection, field, value) => { const r = await this.pagedBy(this.store, collection, field, value); if (r.truncated && !truncated.includes(collection)) truncated.push(collection); return r.rows; }; // the family's rows only, never the whole collection (fifth round)
     const inboxRows = []; for (const ref of refs) inboxRows.push(...(await paged('billingEvents', 'customer', ref)));
     const inbox = inboxRows.sort((a, b) => (a.at - b.at) || ((a.receivedAt || 0) - (b.receivedAt || 0)) || (a.providerEventId < b.providerEventId ? -1 : a.providerEventId > b.providerEventId ? 1 : 0)) // deterministic: time, receipt, then id
       .map((e) => ({ id: e.providerEventId, provider: e.provider, type: e.type, at: e.at, attempts: e.attempts, outcome: e.outcome }));
@@ -309,6 +309,10 @@ export class Support {
       if ((await this.store.query('sessions', 'familyId', id, 1)).length) add('TOMBSTONE_RESIDUE', id, 'a session remains');
       const pc = f.deletion?.providerCancellation || null, hadProvider = !!f.subscription && f.subscription.plan !== 'trial' && !!f.subscription.provider && !!f.billing?.[f.subscription.provider];
       if (pc?.status === 'failed' || (hadProvider && !pc)) add('DELETED_FAMILY_PROVIDER_LIVE', id, pc ? 'the provider subscription was not ended at deletion: reconcile-provider, then cancel at the provider' : 'the deletion never asked the provider to end the subscription: reconcile-provider, then cancel at the provider');
+      for (const [, c] of await this.store.query('checkouts', 'familyId', id, 100)) { // a session the deletion could not expire, a clearing payment it could not end
+        if (c.expiredByDeletion && c.expiredByDeletion.expired !== true) add('DELETED_FAMILY_PROVIDER_LIVE', id, `the hosted session of checkout ${c.checkoutId} could not be expired at deletion (${c.expiredByDeletion.reason || 'no reason'}): expire it at the provider`);
+        if (c.paymentPending && !(c.endedByDeletion?.cancelled === true)) add('DELETED_FAMILY_PROVIDER_LIVE', id, `checkout ${c.checkoutId} completed with its payment clearing and its subscription ${c.paymentPending.subscriptionRef || '?'} was not ended at deletion: cancel it at the provider`);
+      }
       return;
     }
     counts.families++;
@@ -410,7 +414,7 @@ export class Support {
         if (ps.periodEnd && local.periodEnd && Math.abs(ps.periodEnd - local.periodEnd) > 60_000) add('PERIOD_END_MISMATCH', `provider ${new Date(ps.periodEnd).toISOString()}; family ${new Date(local.periodEnd).toISOString()}`);
         if (ps.cancelAtPeriodEnd !== local.cancelAtPeriodEnd) add('CANCEL_FLAG_MISMATCH', `provider cancel at period end ${ps.cancelAtPeriodEnd}; family ${local.cancelAtPeriodEnd}`);
       }
-      providers.push({ provider, ref, available: st.available, simulated: st.simulated === true, error: st.error || null, customer: st.customer || null, subscription: ps, liveCount: st.liveCount ?? null, findings });
+      providers.push({ provider, ref, available: st.available, simulated: st.simulated === true, error: st.error || null, customer: st.customer || null, customerDeleted: st.customerDeleted === true, subscription: ps, liveCount: st.liveCount ?? null, findings });
     }
     const target = (i) => (i.kind === 'clear' ? i.fromPlan : i.toPlan);
     const intents = (await this.store.query('billingChangeIntents', 'familyId', familyId, 100)).map(([, i]) => i).filter((i) => ['creating', 'awaiting_payment', 'stale', 'superseded', 'frozen_by_deletion'].includes(i.status)).sort((a, b) => a.createdAt - b.createdAt)
@@ -533,13 +537,25 @@ export class Support {
     // checkout; a rerun finds the ones not yet done): a page still open in the parent's browser must not buy a subscription for a
     // family that is being deleted (fifth round). Then the subscription ends as a recorded financial event, now that nothing can
     // revive it (a rerun finds it ended).
+    let pendingEnding = null; // a subscription made by a session that completed with its payment still clearing: ended here, since the record never held it
     for (const [id, c] of await this.store.query('checkouts', 'familyId', familyId, 100)) {
-      if (c.status !== 'superseded_by_deletion' || !c.providerCheckoutRef || c.expiredByDeletion) continue;
       const gw = this.payments?.gateways && Object.hasOwn(this.payments.gateways, c.provider) ? this.payments.gateways[c.provider] : null;
-      if (!gw || typeof gw.cancelCheckout !== 'function') continue;
-      let outcome; try { outcome = await gw.cancelCheckout(c.providerCheckoutRef); } catch (error) { if (!(error instanceof Fault)) throw error; outcome = { expired: false, reason: error.code }; }
-      await this.store.transaction(async (tx) => { const cur = await tx.get(`checkouts/${id}`); if (cur && cur.status === 'superseded_by_deletion') tx.set(`checkouts/${id}`, { ...cur, expiredByDeletion: { ...outcome, at: this.now() } }); });
+      if (!gw) continue;
+      // every session of the family's that may still be payable — the one the freeze superseded and the ones earlier clicks superseded,
+      // whose best-effort expiry may have faulted — is expired; a record that says expired is never downgraded by a rerun's refusal
+      if (['superseded', 'superseded_by_deletion'].includes(c.status) && c.providerCheckoutRef && !c.expiredByDeletion && typeof gw.cancelCheckout === 'function') {
+        let outcome; try { outcome = await gw.cancelCheckout(c.providerCheckoutRef); } catch (error) { if (!(error instanceof Fault)) throw error; outcome = { expired: false, reason: error.code }; }
+        await this.store.transaction(async (tx) => { const cur = await tx.get(`checkouts/${id}`); if (cur && !(cur.expiredByDeletion?.expired === true)) tx.set(`checkouts/${id}`, { ...cur, expiredByDeletion: { ...outcome, at: this.now() } }); });
+      }
+      if (c.status === 'superseded_by_deletion' && c.paymentPending?.subscriptionRef && !c.endedByDeletion?.cancelled && typeof gw.cancelSubscription === 'function') {
+        let r; try { r = await gw.cancelSubscription({ idempotencyKey: `deletion:${family.deletion.executionId}:${c.checkoutId}`, customerRef: c.customerRef, customerId: family.providerCustomer?.[c.provider] || null, subscriptionRef: c.paymentPending.subscriptionRef }); }
+        catch (error) { if (!(error instanceof Fault)) throw error; r = { cancelled: false, reason: error.code }; }
+        const ended = { cancelled: r.cancelled === true, already: r.already === true, reason: r.reason || null, providerOperationRef: r.providerOperationRef || null, at: this.now() };
+        await this.store.transaction(async (tx) => { const cur = await tx.get(`checkouts/${id}`); if (cur) tx.set(`checkouts/${id}`, { ...cur, endedByDeletion: ended }); });
+        pendingEnding = { provider: c.provider, status: ended.cancelled ? 'cancelled' : 'failed', already: ended.already, providerOperationRef: ended.providerOperationRef, reason: ended.reason, checkoutId: c.checkoutId, at: ended.at };
+      }
     }
+    if (!family.subscription && pendingEnding) await this.store.transaction(async (tx) => { const f = await tx.get(`families/${familyId}`); if (f && !f.deleted) tx.set(`families/${familyId}`, { ...f, deletion: { ...f.deletion, providerCancellation: pendingEnding } }); });
     // The provider is told whatever the local state — a past_due family is still being dunned there, a refunded one may still be
     // live (Stage 4 review, third round); the machine records `terminate` only where access still existed.
     if (family.subscription) {

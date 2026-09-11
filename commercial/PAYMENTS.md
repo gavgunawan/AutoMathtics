@@ -171,31 +171,58 @@ these rules:
 
 - two attempts of one operation reach the provider under one idempotency key and get one session: the
   attempt that finalises second answers that same session and expires nothing (`lateSessionRef` only ever
-  names a different session);
-- a subscription the provider holds as paid and current (`active`, not winding down) is never ended for a
-  new checkout while the family's record says past due, cancelled or expired — the record is behind, its
+  names a different session); an intent superseded meanwhile answers that session closed (`url: null`);
+- a resume goes stale (`STATE_MOVED`) only on what the record has seen — a state a checkout no longer starts
+  from, or another subscription named — never on a version bump alone: the provider's own notice of the very
+  ending the intent owed is not a move, and a payment the record has not seen is the provider's to refuse;
+- a subscription the provider holds as paid and current (`active` or `trialing`, not winding down) is never
+  ended for a new checkout while the family's record says past due or expired — the record is behind, its
   `invoice.paid` still on its way: the click is refused `PROVIDER_SUBSCRIPTION_PAID`, the family marked, and
-  once the payment has landed the retried click is refused as a fresh start would be (`USE_PLAN_CHANGE`);
+  once the payment has landed the retried click is refused as a fresh start would be (`USE_PLAN_CHANGE`). A
+  record this server itself ended (a full refund, a dispute, an operator's terminate: `endedAt`) is ahead of
+  the provider, not behind it, and the returning checkout ends what still bills; the adapter reads the
+  subscription once more by its id right before the ending and records what it saw (`status`, `periodEnd`);
 - every provider call resolves the family's customer by the Stripe id this server recorded when its checkout
   completed (`providerCustomer`), and by the `customerRef` metadata search only for a customer it never
   recorded: a dashboard edit of the metadata, or a search index that lags, cannot make one family's change
   land on another's subscription — and a plan change or a cancellation acts only on the subscription the
   record names (`providerSubscriptionRef`), any other live one refused `PROVIDER_SUBSCRIPTION_LIVE`;
 - a customer deleted in the dashboard settles the ending debt (`CUSTOMER_DELETED`: Stripe ended its
-  subscriptions with it), so the family can come back; an id Stripe never held settles nothing; a named
-  subscription is never substituted by another of the customer's; `paused` and `incomplete` can bill again
-  and are ended, never taken for ended;
+  subscriptions with it), so the family can come back — and the session that follows is opened on a fresh
+  customer, never on a second one minted because the search lagged (the session's customer is resolved by
+  the recorded id too); a named subscription absent from the customer's list is asked for by its own id
+  (ended: settled; never held: settles nothing) and is never substituted by another of the customer's;
+  `paused` and `incomplete` can bill again and are ended, never taken for ended;
+- a live subscription that is not the one the record names is the older checkout of ours completing only when
+  the provider says so — the subscription carries the checkout's id (`checkoutId`, stamped when the session
+  was made) and that checkout held a session: then it is reinstated as the family's live checkout, this
+  attempt closed (`CHECKOUT_COMPLETING`), and a completion of it the inbox rejected while it was superseded
+  is queued and processed again. This holds on both paths — a returning family's ending and a first
+  checkout's guard (a first checkout paid and clicked again before its completion landed was left superseded
+  with its payment refused). A subscription naming no checkout of ours, or a checkout that never reached the
+  provider, is the operator's (`PROVIDER_SUBSCRIPTION_LIVE`); a family being deleted reinstates nothing;
 - a refund or a dispute names the subscription its charge paid for (through the invoice): a full refund of
   the previous subscription's last charge — goodwill for the unused dunning month — is recorded
-  `OTHER_SUBSCRIPTION` and leaves the new, paid subscription alone;
+  `OTHER_SUBSCRIPTION` and leaves the new, paid subscription alone. Delivered before the completion it belongs
+  to, a refund of a subscription the record does not name yet waits on the customer mapping while a checkout
+  is pending (`requires_action: CHECKOUT_PENDING`) and is processed again right after the completion — never
+  access on a refunded charge; and a refund never moves the customer's clock, so a completion still on its way
+  is never stale behind it;
 - a session is paid only when Stripe says so: `checkout.session.completed` with `payment_status: unpaid` (a
-  bank debit still clearing) grants nothing; `checkout.session.async_payment_succeeded` is the completion;
+  bank debit still clearing) or no status at all grants nothing, but is remembered on the checkout
+  (`paymentPending`: the subscription it made) — a later click never supersedes it (`CHECKOUT_COMPLETING`),
+  `checkout.session.async_payment_succeeded` completes it, and a deletion meanwhile ends the subscription it
+  made (`endedByDeletion`); `no_payment_required` (a coupon, a trial) is complete;
 - a held upgrade answers the same to every attempt of its operation, and the provider's answer to a plan
   change is on the intent (`providerAnsweredAt`, `providerOperationRef`, `proration`) before the finalisation
-  can fail, so a proration the provider charged is never without a record;
-- a family's deletion expires the hosted session its freeze superseded (`expiredByDeletion` on the checkout),
-  and a payment that still lands on it is `reconciliation_required` (`FAMILY_DELETED`) for the operator,
-  never a rejection nobody reads;
+  can fail — whatever the intent's status meanwhile (the deletion freeze, a takeover): money the provider
+  moved is never without a record, and it is recorded once;
+- a family's deletion expires every hosted session of the family's still payable — the one its freeze
+  superseded and the ones earlier clicks superseded, whose best-effort expiry may have faulted —
+  (`expiredByDeletion` on each checkout; a provider fault is recorded, never fatal, and the nightly sweep
+  names the family until it is expired; a session no longer open is the settled state, never downgraded by a
+  rerun), and a payment that still lands on any of them is `reconciliation_required` (`FAMILY_DELETED`) for
+  the operator, never a rejection nobody reads;
 - a refusal's audit row (`billing.refused`) carries its `code`.
 
 The intent is durable before the provider is contacted. Two simultaneous requests with one
