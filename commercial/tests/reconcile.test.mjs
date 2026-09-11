@@ -95,7 +95,7 @@ test('a deletion ends the subscription at Stripe before terminate is recorded; t
   assert.equal(res.kind, 'event'); assert.equal(res.previousOutcome, 'reconciliation_required'); assert.equal(res.reason, 'FAMILY_DELETED'); assert.equal(res.familyId, a.familyId);
   assert.equal((await f.store.get(`billingReconciliations/${res.id}`)).operator, OPERATOR);
   const row = await f.store.get(`billingEvents/stripe:${gone.id}`); assert.equal(row.outcome.status, 'reconciliation_required'); assert.equal(row.outcome.resolution.outcome, 'cancelled_at_provider');
-  report = await support.familyReport(a.familyId); assert.equal(report.attention.reconciliationRequired, 0); assert.equal(report.inbox.at(-1).outcome.resolution.operator, OPERATOR);
+  report = await support.familyReport(a.familyId); assert.equal(report.attention.reconciliationRequired, 0); assert.equal(report.inbox.find((e) => e.id === gone.id).outcome.resolution.operator, OPERATOR); // the row itself: the report's order among same-second events is the document id's, never insertion order
   assert.equal((await support.inbox('reconciliation_required')).at(-1).outcome.resolution.outcome, 'cancelled_at_provider');
   await assert.rejects(support.resolveEvent('stripe', gone.id, { operator: OPERATOR, outcome: 'no_action_needed', note: 'again' }), rejected('EVENT_ALREADY_RESOLVED'));
   s = signed(f, gone); assert.equal((await payments.receive('stripe', s.raw, s.headers)).replayed, true, 'a redelivery is a replay, the resolution stays');

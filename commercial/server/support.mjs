@@ -198,7 +198,7 @@ export class Support {
     }
     const refs = new Set(customers.map((c) => c.ref)), truncated = [], paged = async (collection, field, value) => { const r = await this.pagedBy(this.store, collection, field, value); if (r.truncated) truncated.push(collection); return r.rows; }; // the family's rows only, never the whole collection (fifth round)
     const inboxRows = []; for (const ref of refs) inboxRows.push(...(await paged('billingEvents', 'customer', ref)));
-    const inbox = inboxRows.sort((a, b) => a.at - b.at)
+    const inbox = inboxRows.sort((a, b) => (a.at - b.at) || ((a.receivedAt || 0) - (b.receivedAt || 0)) || (a.providerEventId < b.providerEventId ? -1 : a.providerEventId > b.providerEventId ? 1 : 0)) // deterministic: time, receipt, then id
       .map((e) => ({ id: e.providerEventId, provider: e.provider, type: e.type, at: e.at, attempts: e.attempts, outcome: e.outcome }));
     const intents = (await paged('billingChangeIntents', 'familyId', familyId)).sort((a, b) => a.createdAt - b.createdAt)
       .map((i) => ({ operationId: i.operationId, provider: i.provider, kind: i.kind, fromPlan: i.fromPlan, toPlan: i.toPlan, status: i.status, providerOperationRef: i.providerOperationRef || null, providerAnsweredAt: i.providerAnsweredAt || null, reconciliation: i.reconciliation || null, createdAt: i.createdAt }));
