@@ -75,3 +75,26 @@ test('four right in a row: the combo shout in the equipped pack\'s words and the
   assert.ok(burst.children.every((c) => ['--dx', '--dy', '--rot'].every((k) => k in c.style.props)), 'each coin flies on custom properties');
   assert.ok(h.root.textContent.includes('Paper 2 · 6/25'));
 });
+
+test('a clean sheet ends on v2\'s summary: the headline, the score and tally, the time (S3), the loot with a coin burst, then the next papers on the same track', async (t) => {
+  const { h, kid } = await kidWith(t);
+  await h.click('⚙️ Start Engine ▶');
+  for (let i = 0; i < 25; i++) { h.nodes('INPUT')[0].value = String((await stored(h, kid, i)).answer.v); await submit(h); }
+  const text = h.root.textContent;
+  for (const words of ['PERFECT! Papers unlocked 🎉', '25/25', '✓ 25 correct', '✗ 0 incorrect', '⏰ 0 out of time', 'Papers 1–5 · 0:00 min', '+⚡50 +🏆100', '⚡ 50 · 🏆 100'])
+    assert.ok(text.includes(words), `${words} — ${text.slice(0, 300)}`);
+  assert.ok(all(h.root).some((n) => (n.className || '').startsWith('summary-head') && n.className.includes('c-mint')), 'the headline in mint');
+  assert.equal(all(h.root).find((n) => n.className === 'splash')?.children.length, 16, 'a pass throws sixteen coins');
+  assert.ok(!text.includes('The 100% rule'));
+  await h.click('Next session ▶'); assert.ok(h.root.textContent.includes('Paper 6 · 1/25'), 'the next papers, on the same track');
+});
+
+test('a missed question ends on "almost there": the tally, the 100% rule, no coins, and Try again or Home', async (t) => {
+  const { h, kid } = await kidWith(t);
+  await h.click('⚙️ Start Engine ▶');
+  for (let i = 0; i < 25; i++) { const v = (await stored(h, kid, i)).answer.v; h.nodes('INPUT')[0].value = String(i === 0 ? v + 1 : v); await submit(h); }
+  for (const words of ['Session done — almost there!', '24/25', '✗ 1 incorrect', 'The 100% rule: perfect score unlocks the next papers', '⚡ 0 · 🏆 0']) assert.ok(h.root.textContent.includes(words), words);
+  assert.ok(!all(h.root).some((n) => n.className === 'splash'), 'no coins without a pass');
+  assert.ok(h.nodes('BUTTON').some((b) => b.textContent === 'Try again ▶'));
+  await h.click('Home'); assert.ok(h.root.textContent.includes('grid coins · spend in 🛒') && h.root.textContent.includes('retry'), 'home, with the run in the log');
+});

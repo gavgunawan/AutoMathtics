@@ -170,7 +170,7 @@ export class Learning {
     // Earned pets, a hatching egg and a streak shield are derived from trusted progress, in this transaction.
     const derived = applyGameDerived(np, now, timeZone); np = derived.progress;
     const summary = { passed, rewarded, correct, incorrect, timeout, total, gcEarned: np.wallet.gc - prog.wallet.gc, rpEarned: np.wallet.rp - prog.wallet.rp, wallet: np.wallet,
-      track: sess.track, mode: sess.mode, papers: row.papers, gameEvents: derived.events, leveledUp: jumped.includes(sess.track), jumped,
+      track: sess.track, mode: sess.mode, papers: row.papers, secs: row.secs, gameEvents: derived.events, leveledUp: jumped.includes(sess.track), jumped, // secs: the run's time, "· m:ss min" on the summary (port plan S3)
       newLevel: trk(np, sess.track).level, newLevelId: LEVELS[trk(np, sess.track).level].id,
       bossNext: passed && !['boss', 'scan'].includes(sess.mode) && bossDue(np, sess.track), trackNowDone: passed && !jumped.includes(sess.track) && trackDone(np, sess.track) && !trackDone(prog, sess.track) };
     return { progress: np, summary };

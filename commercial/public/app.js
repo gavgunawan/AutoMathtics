@@ -1099,7 +1099,7 @@ function playView(session, q, after = {}) {
     const paperDone = r.correct && session.mode !== 'placement' && (q.index + 1) % T.qpp === 0; // the last question of a paper
     playStreak = r.correct ? playStreak + 1 : 0;
     if (r.correct) sound(paperDone ? 'paper' : 'correct'); else if (r.result !== 'timeout') sound('wrong'); // a timeout plays nothing (v2 2164)
-    if (r.done) { summaryView(session, r.summary); return; }
+    if (r.done) { await summaryView(session, r.summary); return; }
     const flash = r.correct ? (streakTier(playStreak) ? { combo: playStreak } : { kind: 'ok', text: `⭐ Correct! ${r.expected}` })
       : r.result === 'timeout' ? { kind: 'late', text: `⏰ Time's up — it was ${r.expected}` } : { kind: 'bad', text: `✗ Not quite — it was ${r.expected}` };
     playView({ ...session, index: r.question.index }, r.question, { flash, burst: paperDone });
@@ -1170,24 +1170,59 @@ function playView(session, q, after = {}) {
   box.append(row, bar, ...(after.burst ? [moneySplash('mini')] : []), slot, form, el('p', `${Math.floor((Date.now() - playStart.at) / 60000)} min elapsed · target: under 20`, 'subtle play-foot'));
   if (input && !coarse()) input.focus();
 }
-function summaryView(session, s) {
+// ---- the result (v2 3564-3640): a headline for what happened, the score and the tally, the time (S3), and on a pass the
+// coins, the pet and the vehicle's lift-off; anything earned or hatched; then the next run on the same track, or home ----
+async function summaryView(session, s) {
   transientView = true;
+  if (gameModel && s.wallet) gameModel.wallet = s.wallet; // the server's wallet after this run: a pet earned or hatched is already worn
+  const w = gameModel?.wallet || s.wallet || {};
   if (s.placement) { // the test is done: where each track begins
-    const box = panel('🎯 PLACEMENT COMPLETE', 'Your grid is set.', `${s.correct} out of ${s.total} in the test. Coins start with your first real papers.`);
-    onBack = refresh; applyLook(gameModel?.wallet);
+    const box = panel('🎯 PLACEMENT COMPLETE', 'Your grid is set.', `${s.correct} out of ${s.total} in the test. Coins start with your first real papers.`, 'summary');
+    onBack = refresh; applyLook(w);
     const words = { ahead: 'ready for the next sector', 'on-level': 'right in the middle of the sector', building: 'building up through the sector', foundations: 'from the start of the sector', previous: 'a sector back, from the middle', 'previous-start': 'a sector back, from the start' };
-    for (const tr of ['engine', 'nav']) { const p = s.placement[tr]; box.append(el('p', `${TRACK[tr].emoji} ${TRACK[tr].name}: starts at Sector ${p.levelId}, paper ${p.paper} — ${words[p.band] || p.band} (${p.correct}/${p.total} right).`, 'notice')); }
-    box.append(button('Go to my grid', refresh, 'primary')); return;
+    for (const tr of ['engine', 'nav']) { const p = s.placement[tr]; box.append(el('p', `${TRACK[tr].emoji} ${TRACK[tr].name}: starts at Sector ${p.levelId}, paper ${p.paper} — ${words[p.band] || p.band} (${p.correct}/${p.total} right).`, `box ${TRACK[tr].c}`)); }
+    const row = el('div', null, 'row-buttons'); row.append(button('Go to my grid', refresh, 'primary')); box.append(row); return;
   }
-  const t = TRACK[session.track];
-  const box = panel(`${t.emoji} ${t.name} · ${s.papers}`, s.passed ? 'PASS!' : 'Not this time.',
-    s.passed ? (s.rewarded ? `${s.correct} out of ${s.total}. ⚡ +${s.gcEarned} 🏆 +${s.rpEarned}` : `${s.correct} out of ${s.total}. Practice runs keep you sharp but pay nothing — coins come back when the other track finishes the sector.`)
-      : `${s.correct} out of ${s.total}${s.timeout ? `, ${s.timeout} timed out` : ''}. A pass needs every question right.`);
-  onBack = refresh; applyLook(gameModel?.wallet);
-  if (s.leveledUp) box.append(el('p', `Sector ${s.newLevelId} unlocked!`, 'notice'));
-  else if (s.bossNext) box.append(el('p', '👑 A check point is next: questions from the whole tier, double loot.', 'notice'));
-  for (const e of s.gameEvents || []) if (e.item) box.append(el('p', `${e.type === 'hatched' ? '🥚 HATCH!' : '🏆 UNLOCK!'} ${e.item.emoji} ${e.item.name}`, 'notice'));
-  box.append(el('p', `Wallet: ⚡ ${s.wallet.gc} · 🏆 ${s.wallet.rp}`, 'muted'), button('Back to my grid', refresh, 'primary'));
+  const T = TRACK[session.track] || TRACK.engine, other = session.track === 'nav' ? '⚙️ Engine' : '🧭 Navigator';
+  let finishedAll = false; // both tracks through Sector F: the one outcome this summary cannot tell by itself, so it asks
+  if (s.passed && s.newLevel === LAST_LEVEL && (s.trackNowDone || s.mode === 'practice')) {
+    try { const st = await api('/learn/state'); finishedAll = st.engine.done && st.nav.done && st.engine.level === LAST_LEVEL && st.nav.level === LAST_LEVEL; } catch { /* the headline below says the rest */ }
+  }
+  // the headline, first match wins (3566-3586); gold, not v2's off-palette purple, for the last one of all
+  const [head, tone] = finishedAll ? ['🏆 ALL LEVELS COMPLETE!', 'c-gold']
+    : s.leveledUp ? [`⬆ JUMP! ${T.emoji} ${T.label} moves on — welcome to Sector ${s.newLevelId}${(s.jumped || []).length === 2 ? ' · both tracks!' : ''}`, 'c-gold']
+    : s.trackNowDone ? [`✓ ${T.emoji} ${T.name} SECTOR ${s.newLevelId} COMPLETE — it jumps once ${other} has finished Sector ${s.newLevelId} too`, 'c-mint']
+    : s.mode === 'practice' ? [`🔁 Practice run ${s.passed ? '— perfect!' : '— keep at it'}`, s.passed ? 'c-mint' : 'c-cyan']
+    : s.mode === 'boss' && s.passed ? ['👑 CHECK POINT CLEARED! Tier complete', 'c-gold']
+    : s.mode === 'scan' && s.passed ? ['🧠 SYSTEM SCAN COMPLETE — double loot!', 'c-violet']
+    : s.mode === 'boss' ? ['👑 Check point not cleared — run it again!', 'c-cyan']
+    : s.mode === 'scan' ? ['🧠 Scan done — retry any time this week', 'c-cyan']
+    : s.passed ? ['PERFECT! Papers unlocked 🎉', 'c-mint'] : ['Session done — almost there!', 'c-cyan'];
+  const box = panel('', '', '', 'summary'); box.replaceChildren();
+  onBack = refresh; applyLook(w);
+  const tally = el('div', null, 'tally'); tally.append(el('span', `✓ ${s.correct} correct`, 'ok'), el('span', `✗ ${s.incorrect} incorrect`, 'bad'), el('span', `⏰ ${s.timeout} out of time`, 'late'));
+  box.append(el('h2', head, `summary-head ${tone}`), el('div', `${s.correct}/${s.total}`, 'big-score'), tally, el('p', `Papers ${s.papers}${Number.isFinite(s.secs) ? ` · ${mmss(s.secs)} min` : ''}`, 'subtle'));
+  if (s.passed && s.rewarded) { // the loot (3594-3603): a streak block or a double shows in the amount
+    const earn = el('div', null, 'earn-box pop2'); earn.append(`+⚡${s.gcEarned} `, el('span', `+🏆${s.rpEarned}`));
+    if (s.gcEarned > 100) earn.append(el('span', ' DOUBLE LOOT!', 'earn-note')); else if (s.gcEarned > 50) earn.append(el('span', ' (incl. 🔥 streak block!)', 'earn-note'));
+    box.append(moneySplash(s.gcEarned > 50 ? 'big' : 'pass'), earn); setTimeout(() => sound('kaching'), 350); // the till rings with the coins (v2 2184)
+  } else if (s.passed) box.append(el('p', 'Practice runs keep you sharp but pay nothing — coins come back when the other track finishes the sector.', 'subtle'));
+  if (s.passed) { // the pet pops up and the vehicle lifts off (3604-3609)
+    const pet = petBadge(w, 44, 'pop'), veh = gameItem(w.activeVehicle);
+    if (pet) box.append(pet);
+    if (veh?.kind === 'vehicle') { const v = el('div', veh.emoji, 'launch'); v.setAttribute('aria-hidden', 'true'); box.append(v); }
+  }
+  for (const e of s.gameEvents || []) { // what this run earned or hatched (3610-3619); a shield that covered a day is said too
+    if (e.type === 'earned' && e.item) box.append(el('div', `🌟 ${lookup(LEGEND, e.item.id) === 'semi' ? 'SEMI-LEGENDARY' : 'LEGENDARY'} UNLOCKED — ${e.item.emoji} ${e.item.name} joins you!`, 'unlock-box c-gold pop2'));
+    else if (e.type === 'hatched' && e.item) box.append(el('div', `🐣 Your egg hatched — ${e.item.emoji} ${e.item.name}!`, 'unlock-box c-mint pop2'));
+    else if (e.type === 'shield') box.append(el('p', `🛡️ A streak shield covered ${e.date} — chain protected`, 'subtle'));
+  }
+  if (s.bossNext) box.append(el('p', '👑 CHECK POINT unlocked — clear it to enter the next tier!', 'warn'));
+  const mini = el('p', null, 'mini-wallet'); mini.append('⚡ ', el('b', String(s.wallet?.gc ?? 0)), ' · 🏆 ', el('b', String(s.wallet?.rp ?? 0))); box.append(mini);
+  if (!s.passed) { const rule = el('p', null, 'intro'); rule.append('The 100% rule: ', el('b', 'perfect score unlocks the next papers'), '. Same papers again next session — you\'ve got this! 💪'); box.append(rule); }
+  const row = el('div', null, 'row-buttons');
+  row.append(button(s.passed ? 'Next session ▶' : 'Try again ▶', () => startRun({ track: session.track }), 'primary'), button('Home', refresh, 'ghost'));
+  box.append(row);
 }
 // Launch and Scrap cannot be taken back: a launched rocket owes its prize, a scrapped one refunds nobody. Like deleting
 // the family (deletionScreen), each opens its own screen first, and nothing is sent until the parent confirms there.

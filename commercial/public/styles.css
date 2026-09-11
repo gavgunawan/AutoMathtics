@@ -448,6 +448,19 @@ input.answer-box:not(:placeholder-shown){border-style:solid;box-shadow:0 0 16px 
 .restart-btn{color:var(--cyan);border:1.5px solid var(--cyan)}
 .quit-btn{color:var(--dim);border:1.5px solid var(--v2line)}
 .play-foot{margin-top:8px;text-align:center}
+/* ---- the result (v2 3564-3640; st.bigScore 3801, st.tally 3802, st.earnBox 3817) ---- */
+.summary-head{margin:0 0 4px;font:700 20px/1.35 var(--display);letter-spacing:.02em;text-transform:none;color:var(--c,var(--cyan))}
+.big-score{margin:6px 0;font:600 52px/1.1 var(--mono);color:var(--cyan)}
+.tally{display:flex;gap:18px;justify-content:center;flex-wrap:wrap;margin:0 0 6px;font-size:14px;font-weight:700}
+.tally .ok{color:var(--mint)}.tally .bad{color:var(--red)}.tally .late{color:var(--gold)}
+.earn-box{display:inline-block;margin:10px auto 4px;padding:6px 18px;border:2px solid var(--gold);border-radius:12px;background:var(--void);font:600 30px var(--mono);color:var(--gold);box-shadow:0 0 18px rgba(255,176,32,.2)}
+.earn-note{font-size:13px}
+.unlock-box{display:block;max-width:440px;margin:10px auto 0;padding:6px 18px;border:2px solid var(--c);border-radius:12px;background:var(--void);font:600 16px/1.4 var(--mono);color:var(--c);box-shadow:0 0 18px rgba(255,176,32,.2)}
+.mini-wallet{margin:4px 0 0;font-size:15px}
+.panel.summary .pet-44{display:block;margin:4px auto 0}
+.panel.summary .row-buttons{margin-top:14px}
+/* an inner box (v2's howBox and tipsBox, 3722-3729): dark, ringed in its section's colour */
+.box{margin:10px 0;padding:14px 16px;border:1.5px solid var(--c,var(--v2line));border-radius:12px;background:var(--void);text-align:left}
 /* no motion: nothing animates, and neither the decor layer (static columns of symbols would only sit on the screen) nor a
    coin burst is drawn; the crate's prize shows at once */
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}html[data-mode] #decor,.splash{display:none}.crate-item,.crate-name{opacity:1}}
