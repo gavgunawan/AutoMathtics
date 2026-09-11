@@ -35,6 +35,14 @@ const peerAddress = (req) => {
   const ip = chain.length ? chain[chain.length - 1] : req.socket.remoteAddress;
   return /^[A-Za-z0-9.:]{1,64}$/.test(ip || '') ? ip : 'unknown';
 };
+// An IPv6 client counts by its /64 (the feedback route's address budget): a subscriber is handed a whole /64 and can walk through
+// it at will, so a budget per full address would be a budget per request (RFC 6177). IPv4 and IPv4-mapped addresses stay as they are.
+const by64 = (ip) => {
+  if (!ip.includes(':') || /^::ffff:[\d.]+$/i.test(ip)) return ip;
+  const [head, tail] = ip.split('::'), left = head ? head.split(':') : [], right = tail ? tail.split(':') : [];
+  const groups = ip.includes('::') ? [...left, ...Array(Math.max(0, 8 - left.length - right.length)).fill('0'), ...right] : ip.split(':');
+  return groups.length >= 4 ? `${groups.slice(0, 4).map((g) => (parseInt(g, 16) || 0).toString(16)).join(':')}::/64` : ip;
+};
 async function rawBody(req, limit) {
   if ((req.headers['content-type'] || '').split(';')[0].trim() !== 'application/json') fail(415, 'JSON_REQUIRED');
   if (req.headers['content-encoding'] && req.headers['content-encoding'] !== 'identity') fail(415, 'ENCODING_UNSUPPORTED');
@@ -239,15 +247,25 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
         else if (key) throttle(key, Infinity, 60 * 60_000);
         return json(200, result);
       }
-      // Feedback (server/feedback.mjs): from the sign-in screen with the pre-authentication CSRF token, or inside a parent's session.
-      // The session, never the body, says who sent it; a child's or the launch pad's session is refused, as no free text ever comes
-      // from a child (PRIVACY.md). The body is checked first, so a malformed request spends nothing; then the budgets: a hundred an
-      // hour per instance, five an hour per address (and the peer's share), ten a day per session or pre-authentication cookie.
+      // Feedback (server/feedback.mjs): from the sign-in screen with the pre-authentication CSRF token, or inside a parent's session,
+      // authenticated here (the identity recheck: a password change revokes it, as on /api/me) and authorized in the note's own
+      // transaction like every session route's. The session, never the body, says who sent it; a child's or the launch pad's session
+      // is refused, as no free text ever comes from a child (PRIVACY.md). A malformed body, and the retry of a note kept already, are
+      // answered before any budget. The budgets are then all checked before any is spent, and spent only for a note that is kept:
+      // five an hour per address (an IPv6 /64 is one address) with the peer's twenty-fold share (Hosting's front end is everyone's),
+      // ten a day per session or pre-authentication cookie, and a hundred kept notes an hour per instance, so one address cannot use
+      // the instance's allowance up. The day's caps on signed-out notes and on the owner's copies are in the transaction too.
       if (feedback && req.method === 'POST' && path === '/api/feedback') {
-        const input = feedback.parse(data), live = stored && stored.expiresAt > service.now() ? stored : null;
+        const input = feedback.parse(data);
+        if (await feedback.kept(input.id)) return json(200, { ok: true });
+        const live = stored && stored.expiresAt > service.now() ? stored : null;
         if (live && live.role !== 'parent') fail(403, 'PARENT_REQUIRED');
-        throttle('feedback:all', 100, 60 * 60_000); await spend('feedback', req, 5, 60 * 60_000); await service.rate(`feedback:session:${sha256(token)}`, 10, 24 * 60 * 60_000);
-        return json(200, await feedback.record(input, live ? { uid: live.uid, familyId: live.familyId || null, email: typeof live.email === 'string' ? live.email : null } : null));
+        const ctx = live ? await service.authenticate(token) : null;
+        reused('feedback:all', 100);
+        const client = by64(clientAddress(req, cfg.proxyHops)), peer = peerAddress(req);
+        const budgets = [[`feedback:${client}`, 5, 60 * 60_000], ...(client === peer ? [] : [[`feedback:peer:${peer}`, 5 * peerFactor, 60 * 60_000]]), [`feedback:session:${sha256(token)}`, 10, 24 * 60 * 60_000]];
+        if (!(await feedback.record(input, { ctx, budgets })).replay) throttle('feedback:all', Infinity, 60 * 60_000); // the instance counts the notes it kept, never a refusal
+        return json(200, { ok: true });
       }
       if (stored) throttle(`session:${sha256(token)}`, 120, 60_000);
       const ctx = await service.authenticate(token);

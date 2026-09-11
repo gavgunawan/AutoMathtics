@@ -178,7 +178,7 @@ The server stamps short-lived records with an `expireAt` timestamp; Firestore de
 if a TTL policy names that field for the collection group. Run once, after the database exists:
 
 ```bash
-for GROUP in sessions rateLimits pinAttempts operations audit recoveries sweeps reports outbox feedback; do
+for GROUP in sessions rateLimits pinAttempts operations audit recoveries sweeps reports outbox feedback feedbackDays; do
   gcloud firestore fields ttls update expireAt --collection-group="$GROUP" \
     --enable-ttl --project "$PROJECT_ID"
 done
@@ -191,8 +191,8 @@ retention policy in `PAYMENTS.md`, never by TTL (S3.4-G).
 `emailPrefs` (email-v1) has no `expireAt` either: it is the parent account's consent record and lives as long as the sign-in
 account. `reports` (the weekly email's claim and outcome, 400 days) and `outbox` (the fake mail provider's copies, 14 days) do
 expire; on a project set up before email-v1, block G requests those two policies (section 5b). `feedback` (the notes from
-*Send feedback*, 400 days) expires the same way; on a project set up before it, rerun block B, which requests only the policies
-not yet listed (section 5c).
+*Send feedback*, 400 days) and `feedbackDays` (their daily counts, 8 days) expire the same way; on a project set up before
+them, rerun block B, which requests only the policies not yet listed (section 5c).
 
 Learning sessions live under `families/*/learning/*/sessions`, whose collection group is
 `sessions` as well, so the first line covers them. Deletion runs within about 24 hours of the
@@ -441,11 +441,17 @@ usage, so a slip can never widen a run to every family.
 ## 5c. Feedback
 
 *Send feedback* sits under the sign-in screen and under every parent screen, never in kid mode (from *Hand over to kids* until a
-parent signs in again). A note is 1 to 2000 characters and names the screen it came from; on the sign-in screen the sender may
+parent signs in again on that device, remembered across reloads). A note is 1 to 2000 characters and names the screen it came from; on the sign-in screen the sender may
 add an address to be answered at. The server decides who sent it: a parent's session names the parent and the family, the
 sign-in screen names nobody, and a child's or the launch pad's session is refused. Each note is kept in `feedback/{id}` for 400
-days (TTL, block B), with the release it was sent from. Budgets: five an hour per address, ten a day per session, a hundred an
-hour per instance. A family's deletion removes the notes its parents sent, and the sign-in account's deletion those it sent
+days (TTL, block B), with the release it was sent from. A parent's session is rechecked as on every
+session route: one revoked by a password change, or superseded, sends nothing. A retried send carries the same operation id and
+stays one note. Budgets, all checked before any is spent and spent only for a note that is kept: five an hour per address (an
+IPv6 /64 counts as one address), with Hosting's shared front end allowed twenty times that; ten a day per session or
+pre-authentication cookie; a hundred kept notes an hour per instance. Per UTC day (`feedbackDays/{day}`, TTL 8 days), whatever the
+addresses or cookies: at most 100 notes from signed-out senders, all of them together (after that 429 `FEEDBACK_BUSY` for them,
+never for a parent), and at most 20 copies to the owner, 5 of them for notes sent signed out; past a copy cap the note is still
+kept, and the CLI below reads it. A family's deletion removes the notes its parents sent, and the sign-in account's deletion those it sent
 without a family; the family export carries the family's notes (`PRIVACY.md`).
 
 To read them, in Cloud Shell with the variables `scripts/support.mjs` uses (`APP_MODE=staging`, `FIREBASE_PROJECT_ID`,
@@ -455,7 +461,7 @@ when, the screen, the release, the parent and family when signed in, the address
 
 **A copy in the owner's inbox.** With Resend set up (5b: the key in `am-v3-email-key`, and block G rerun with
 `EMAIL_PROVIDER=resend`, which grants the runtime account the key), deploy with the owner's address:
-`export FEEDBACK_TO=owner@example.com EMAIL_PROVIDER=resend`, then block C. Each note then also arrives by email, and Reply goes
+`export FEEDBACK_TO=owner@example.com EMAIL_PROVIDER=resend`, then block C. Each note, within the day's copy caps, then also arrives by email, and Reply goes
 to the parent's account address or to the address given on the sign-in screen. The copy is best effort with a three-second
 limit: a slow or failing provider never loses the note or fails the parent's request. Every deploy states the service's whole
 environment, so keep `FEEDBACK_TO` exported for every later run of block C; a deploy without it stops the copies (the notes are

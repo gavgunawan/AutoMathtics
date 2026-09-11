@@ -37,6 +37,7 @@ const messages = {
   SCAN_ALREADY_DONE: 'System Scan is already complete this week.', SCAN_LOCKED: 'System Scan unlocks in Sector B after the first tier.',
   LINK_INVALID: 'This link does not work. Nothing was changed.', LINK_EXPIRED: 'This link has expired; the next weekly email brings fresh ones. Nothing was changed.', LINK_GONE: 'The family or child this link was for is no longer there. Nothing was changed.',
   FEEDBACK_TEXT: 'Write your feedback first (up to 2000 characters).', FEEDBACK_CONTACT: 'That email address does not look right. Fix it, or leave it empty.',
+  FEEDBACK_BUSY: 'Many notes have come in today. Please try again tomorrow, or sign in to send yours now.',
 };
 // The sign-in provider's own refusals: in the parent's words where the cause is known, otherwise the provider's code and text,
 // so that a failure can be reported and matched against the provider's own log (the one generic sentence used to hide everything).
@@ -97,28 +98,32 @@ const tidy = (value) => String(value || '').replace(/[\s().-]/g, '');
 const e164 = (value) => /^\+[1-9]\d{6,14}$/.test(tidy(value));
 // the robot check belongs on the screen from the moment it opens, not only once Send has been pressed
 function armCaptcha() { auth().then((a) => a.armCaptcha?.()).catch(() => {}); }
-function panel(kicker, title, subtitle, play = false) {
+function panel(kicker, title, subtitle, { play = false, page = null } = {}) {
   authModule?.resetCaptcha?.(); // the robot check belongs to the screen that built it; one left behind strands its frame
   stopSendClock(); screenId++; onBack = null; // the same for the Send countdown, and Back is each screen's to set again
   root.replaceChildren();
   const box = el('section', null, 'panel'); box.setAttribute('data-deck', model?.role === 'child' ? 'GRID // ONLINE' : 'MISSION CONTROL // ONLINE'); // the corner tag every deck carries
   box.append(el('p', kicker, 'kicker'), el('h1', title), el('p', subtitle, 'muted'));
   root.append(box);
-  if (!kidMode) root.append(feedbackFoot(kicker)); // under the sign-in screen and every parent screen; never in kid mode
+  if (!kidMode) root.append(feedbackFoot(page || kicker)); // under the sign-in screen and every parent screen; never in kid mode
   inPlay = play; showUpdate(); // a newer release's bar goes on every screen but a running question session (playView)
   return box;
 }
 function note(text) { status.textContent = text || ''; }
-// ---- Send feedback (the owner's request of 12 Sep 2026): under the sign-in screen and every parent screen, never in kid mode —
-// kidMode is set from Hand over to kids until a parent signs in again (renderModel). The browser sends the words, the screen and,
-// signed out, an address to be answered at if the sender wants one; the server decides who sent it (server/feedback.mjs).
-let kidMode = false;
+// ---- Send feedback (the owner's request of 12 Sep 2026): under the sign-in screen and every parent screen, never in kid mode.
+// The browser sends the words, the screen, an operation id and, signed out, an address to be answered at if the sender wants one;
+// the server decides who sent it (server/feedback.mjs). Kid mode is remembered on the device (automathtics.kidmode, PRIVACY.md):
+// set when the launch pad or a child's screen opens, cleared only when a parent's session opens (renderModel), so neither a reload
+// nor an expired launch pad brings the button back on the kids' tablet. With no storage it is this page's memory alone.
+const KID_MODE = 'automathtics.kidmode';
+let kidMode = (() => { try { return localStorage.getItem(KID_MODE) === '1'; } catch { return false; } })();
+function setKidMode(on) { kidMode = on; try { if (on) localStorage.setItem(KID_MODE, '1'); else localStorage.removeItem(KID_MODE); } catch { /* no storage: this page's memory only */ } }
 const EMAIL_ADDRESS = /^[^\s@<>"]{1,64}@[^\s@<>"]{1,190}\.[^\s@<>"]{2,}$/;
-function feedbackFoot(kicker) {
-  const foot = el('div', null, 'feedback'), page = String(kicker || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'screen';
+function feedbackFoot(where) { // `where`: the screen's own name (sign-in, sign-up…) or else its heading, as the page the note reports
+  const foot = el('div', null, 'feedback'), page = String(where || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'screen';
   const closed = () => foot.replaceChildren(button('Send feedback', open, 'text-button'));
   function open() {
-    const words = el('textarea'); Object.assign(words, { maxLength: 2000, rows: 4, required: true });
+    const operationId = crypto.randomUUID(), words = el('textarea'); Object.assign(words, { maxLength: 2000, rows: 4, required: true }); // one id per note: Send again after a lost answer is the same note
     const label = el('label', null, 'field'); label.append(el('span', 'Your feedback (up to 2000 characters)'), words);
     const reply = model ? null : field('Your email, if you would like an answer (optional)', 'email', { required: false, maxLength: 254, autocomplete: 'email' });
     foot.replaceChildren(label, ...(reply ? [reply.wrap] : []), button('Send', async () => {
@@ -126,7 +131,7 @@ function feedbackFoot(kicker) {
       if (!text || text.length > 2000) { note(messages.FEEDBACK_TEXT); return; }
       if (contact && (contact.length > 254 || !EMAIL_ADDRESS.test(contact))) { note(messages.FEEDBACK_CONTACT); return; }
       if (!model) csrf = (await bootstrap()).csrf; // signed out, the pre-authentication token lives ten minutes: a fresh one
-      await api('/feedback', { text, page, ...(contact ? { contact } : {}) });
+      await api('/feedback', { text, page, operationId, ...(contact ? { contact } : {}) });
       closed(); note('Thank you: your feedback was sent.');
     }, 'primary'), button('Cancel', closed, 'ghost'));
   }
@@ -322,7 +327,8 @@ function signInScreen(signup = false, afterReady = null, reauth = false) {
   const box = panel(reauth ? 'PARENT VERIFICATION' : 'MISSION CONTROL',
     reauth ? 'Confirm it\u2019s you.' : (signup ? 'A new crew starts here.' : 'Big futures. Small steps.'),
     reauth ? 'This sensitive parent action needs a fresh password and SMS check.' :
-      (signup ? 'Create your adult account first. Then build a private grid for your explorers.' : 'One secure parent account. A personal learning grid for every child.'));
+      (signup ? 'Create your adult account first. Then build a private grid for your explorers.' : 'One secure parent account. A personal learning grid for every child.'),
+    { page: reauth ? 'parent-verification' : signup ? 'sign-up' : 'sign-in' }); // the page a note sent from here reports
   if (!reauth) box.append(rail(1));
   if (reauth) onBack = cancelVerification; else if (signup) onBack = () => signInScreen();
   const form = el('form', null, 'auth-form');
@@ -394,7 +400,7 @@ async function signOut() {
   await api('/auth/logout', {}); if (authModule) await authModule.clear(); channel?.postMessage('changed'); await refresh();
 }
 function renderModel() {
-  kidMode = model.role !== 'parent'; // the launch pad or a child: no Send feedback on this device until a parent signs in again
+  setKidMode(model.role !== 'parent'); // the launch pad or a child: no Send feedback on this device until a parent's session opens here
   if (model.role === 'child') return childScreen();
   if (!model.family) return familySetup();
   return model.role === 'parent' ? parentScreen() : selectorScreen();
@@ -810,7 +816,7 @@ async function mapScreen() {
 }
 function displayText(d) { if (d.layout === 'stack') return `${d.top} ${d.sym} ${d.bottom} =`; if (d.layout === 'frac') return `${d.pre ? `${d.pre} ` : ''}${d.parts.map((p) => (p.sym ? p.sym : `${p.n}/${p.d}`)).join(' ')} =`; return d.text; }
 function playView(session, q) {
-  stopTimer(); transientView = true; const t = TRACK[q.track || session.track], box = panel(`${t.emoji} ${t.name} · SECTOR ${q.levelId || session.levelId}`, runLabel(session), `Question ${q.index + 1} of ${session.count}${session.mode === 'placement' ? '' : ` · paper ${q.paper}`}`, true);
+  stopTimer(); transientView = true; const t = TRACK[q.track || session.track], box = panel(`${t.emoji} ${t.name} · SECTOR ${q.levelId || session.levelId}`, runLabel(session), `Question ${q.index + 1} of ${session.count}${session.mode === 'placement' ? '' : ` · paper ${q.paper}`}`, { play: true });
   onBack = refresh; // to the child's home: the session stays open there under "Continue", nothing is quit or lost
   const shout = gameModel?.wallet?.activeShout, tier = playStreak >= 18 ? 3 : playStreak >= 14 ? 2 : playStreak >= 9 ? 1 : playStreak >= 4 ? 0 : -1;
   if (tier >= 0) box.append(el('p', (SHOUTS[shout] || ['COMBO!', 'SUPER COMBO!', 'HYPER COMBO!', 'ULTRA COMBO!!'])[tier], 'combo'));

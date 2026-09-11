@@ -21,7 +21,7 @@ const FROM = /^(?:[^<>\r\n"]{1,80} <[^\s@<>"]{1,64}@[^\s@<>"]{1,190}\.[^\s@<>"]{
 /** a.parent@example.com → a…@example.com: enough to tell two parents apart in a log line, never the address itself. */
 export const maskAddress = (to) => { const [local, domain] = String(to || '').split('@'); return local && domain ? `${local.slice(0, 1)}…@${domain}` : '…'; };
 
-/** The job's mailer settings, from its environment (the web service itself never sends). */
+/** Mail settings from an environment: the report job's, and the web service's for the owner's feedback copies when FEEDBACK_TO is set (config.mjs). */
 export function mailerConfig(env = process.env) {
   const provider = env.EMAIL_PROVIDER || 'fake', from = env.EMAIL_FROM || DEFAULT_FROM;
   if (!['fake', 'resend'].includes(provider)) throw Error('EMAIL_PROVIDER must be "fake" or "resend".');
