@@ -8,7 +8,9 @@ import vm from 'node:vm';
 import { fixture, secret } from './support.mjs';
 import { createApp } from '../server/http.mjs';
 export class Element {
-  constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.value = ''; this._text = ''; this.attrs = {}; this.events = {}; }
+  constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.value = ''; this._text = ''; this.attrs = {}; this.events = {};
+    // only the CSSOM custom properties the page sets through setVar (the CSP refuses every other way), readable as style.props
+    this.style = { props: {}, setProperty(k, v) { this.props[k] = String(v); }, removeProperty(k) { delete this.props[k]; } }; }
   append(...items) { this.children.push(...items); }
   replaceChildren(...items) { this.children = items; this._text = ''; }
   set textContent(x) { this._text = String(x); this.children = []; }
@@ -42,8 +44,10 @@ export async function uiFixture(t, { family = true, signedIn = true, clock = nul
     postMessage(message) { broadcasts.push(message); }
   }
   const root = new Element('main'), message = new Element('p');
-  const document = { visibilityState: 'visible', querySelector: sel => sel === '#app' ? root : message,
-    createElement: tag => new Element(tag), addEventListener: (name, fn) => { documentEvents[name] = fn; } };
+  // html: the page's root element, which carries data-mode (and data-bg on kid screens); decor: the #decor layer behind #app
+  const html = new Element('html'), decor = new Element('div'); decor.id = 'decor';
+  const document = { visibilityState: 'visible', querySelector: sel => sel === '#app' ? root : message, documentElement: html,
+    getElementById: id => id === 'decor' ? decor : null, createElement: tag => new Element(tag), addEventListener: (name, fn) => { documentEvents[name] = fn; } };
   const fetchForPage = async (path, options = {}) => {
     requests.push({ path, method: options.method || 'GET' }); // never retain request credentials
     const r = await fetch(cfg.origin + path, { ...options, headers: { ...options.headers, Cookie: cookie, Origin: cfg.origin } });
@@ -81,7 +85,7 @@ export async function uiFixture(t, { family = true, signedIn = true, clock = nul
     nodes(root, 'SELECT')[0].value = 'wolf'; f.advance(301000);
     await control(root, 'Create child profile').onclick(); assert.ok(root.textContent.includes('PARENT VERIFICATION'));
   };
-  return { f, a, root, message, api, requests, broadcasts, nodes: tag => nodes(root, tag), click: label => control(root, label).onclick(),
+  return { f, a, root, message, html, decor, api, requests, broadcasts, nodes: tag => nodes(root, tag), click: label => control(root, label).onclick(),
     idle, setAuth, submitLogin, draft, cookie: () => cookie, setCookie: value => { cookie = `__session=${value}`; },
     visibility: () => documentEvents.visibilitychange?.(), sessionChange: () => channelHandler?.(),
     history, intervals: () => intervals.size, tick: () => { for (const fn of [...intervals.values()]) fn(); },

@@ -73,6 +73,10 @@ function el(tag, text, className) {
   if (className) node.className = className;
   return node;
 }
+// The one way a dynamic value (a width, a position, a colour) reaches CSS: a custom property set through the CSSOM. The CSP
+// (style-src 'self') refuses a style attribute, whether written in markup or set by script, and a style element, silently
+// on a phone, so a screen built with one only looks right in a test. Optional, for a DOM without CSSOM.
+const setVar = (n, k, v) => n.style?.setProperty(k, v);
 function button(label, action, className = '') {
   const b = el('button', label, className); b.type = 'button'; b.onclick = () => (b.disabled ? undefined : run(action)); return b; // a counting-down Send is disabled: nothing runs
 }
@@ -620,8 +624,62 @@ function selectorScreen() {
 // ---- secure learning + migrated v2 game layer ----
 const TRACK = { engine: { name: 'ENGINE', emoji: '⚙️' }, nav: { name: 'NAVIGATOR', emoji: '🧭' } };
 const EQUIP_SLOT = { pet: 'activePet', fx: 'activeFx', snd: 'activeSnd', bg: 'activeBg', ring: 'ring', outfit: 'activeOutfit', shout: 'activeShout', timer: 'activeTimer', title: 'activeTitle', namefx: 'activeNameFx', map: 'activeMap', vehicle: 'activeVehicle', base: 'activeBase' };
-const SHOUTS = { shout_kapow: ['POW!', 'KAPOW!', 'BOOM!!', 'KA-BLAMMO!!!'], shout_turbo: ['TURBO!', 'OVERDRIVE!', 'HYPERDRIVE!', 'WARP SPEED!!'], shout_robot: ['NICE.HUMAN', 'IMPRESSIVE', 'MAXIMUM.POWER', 'LEGENDARY.EXE'], shout_dino: ['RAWR!', 'MEGA RAWR!', 'ULTRA RAWR!', 'T-REX MODE!!'] };
-const FX = { fx_confetti: '🎊', fx_lightning: '🌩️', fx_goldrain: '💰' };
+// The v2 look (main:src/automathtics-src.jsx): display constants only. Prices, crate rolls, unlocks and every other outcome
+// stay with the server; these say how a result it sent is drawn.
+const LEVEL_NAMES = ['Addition (hundreds)', 'Subtraction', 'Multiplication', 'Division', 'Fractions I', 'Fractions II']; // by level, as engine.mjs LEVELS
+// the shop in v2's order: the kinds a section holds, its header, its colour class (styles.css c-*) and its note
+const SHOP_SECTIONS = [
+  [['crate', 'egg'], '🎁 SURPRISES', 'c-gold', 'a box is a random new look · an egg hatches into a pet you can’t buy'],
+  [['pet'], '🐉 CYBER PETS', 'c-violet', null],
+  [['outfit'], '👒 PET OUTFITS', 'c-magenta', 'your pet wears it everywhere'],
+  [['ring'], '⭕ AVATAR RINGS', 'c-cyan', null],
+  [['bg'], '🌆 BACKGROUNDS', 'c-magenta', null],
+  [['fx'], '🎆 SPLASH FX', 'c-gold', null],
+  [['snd'], '🎵 SOUND PACKS', 'c-mint', null],
+  [['shout'], '🔥 COMBO SHOUTS', 'c-magenta', 'what the screen yells at 4 · 9 · 14 · 18 in a row'],
+  [['timer'], '⏱️ TIMER BARS', 'c-cyan', null],
+  [['title'], '🏷️ TITLES', 'c-gold', 'shows under your name'],
+  [['namefx'], '✨ NAME FX', 'c-violet', null],
+  [['map'], '🗺️ MAP THEMES', 'c-mint', 'recolours your level route'],
+  [['vehicle'], '🚀 GARAGE', 'c-gold', 'home screen · map route · launches on every pass'],
+  [['base'], '🛰️ BASE UPGRADE', 'c-cyan', null],
+  [['shield'], '🛡️ UTILITY', 'c-txt', null],
+];
+// the combo shout's words per pack, one per streak tier (4, 9, 14 and 18 right in a row); `default` when none is equipped
+const SHOUT_PACKS = {
+  default: { labels: ['COMBO!', 'SUPER COMBO!', 'HYPER COMBO!', 'ULTRA COMBO!!'], cls: '' },
+  shout_kapow: { labels: ['POW!', 'KAPOW!', 'BOOM!!', 'KA-BLAMMO!!!'], cls: 'shout-kapow' },
+  shout_turbo: { labels: ['TURBO!', 'OVERDRIVE!', 'HYPERDRIVE!', 'WARP SPEED!!'], cls: 'shout-turbo' },
+  shout_robot: { labels: ['NICE.HUMAN', 'IMPRESSIVE', 'MAXIMUM.POWER', 'LEGENDARY.EXE'], cls: 'shout-robot' },
+  shout_dino: { labels: ['RAWR!', 'MEGA RAWR!', 'ULTRA RAWR!', 'T-REX MODE!!'], cls: 'shout-dino' },
+};
+// a map theme recolours the lit route, the five check points and the grid (SVG attributes and setVar('--grid'), never a style)
+const MAP_THEMES = {
+  map_lava: { lit: '#FF5A2D', cps: ['#FFB020', '#FF7A2D', '#FF5A2D', '#FF2D55', '#FF2DA8'], grid: 'rgba(255,90,45,.07)' },
+  map_ice: { lit: '#8FE9FF', cps: ['#EAF2FF', '#B8F1FF', '#8FE9FF', '#5CC8FF', '#8A9BFF'], grid: 'rgba(143,233,255,.08)' },
+  map_matrix: { lit: '#2DFF6B', cps: ['#B6FFB0', '#7CFF8A', '#2DFF6B', '#00D95F', '#2DFFB3'], grid: 'rgba(45,255,107,.07)' },
+  map_gold: { lit: '#FFD54F', cps: ['#FFF3B0', '#FFE082', '#FFD54F', '#FFB020', '#FF8F00'], grid: 'rgba(255,213,79,.08)' },
+};
+const FX_SETS = { default: ['⚡', '🪙', '🪙'], fx_confetti: ['🎊', '⚡', '🪙'], fx_lightning: ['🌩️', '⚡', '⚡'], fx_goldrain: ['💰', '🪙', '🪙'] }; // what a coin burst throws
+// what the frozen server catalogue (game.mjs SHOP_ITEMS) does not say: the legendary tags, the big items' blurbs, the kinds used up
+const LEGEND = { pet_legend: 'legendary', pet_semilegend: 'semi' };
+const BLURB = {
+  ring_prestige: 'a spinning rainbow holo-frame with an orbiting spark — on your face everywhere it shows',
+  veh_bike: 'parks on your home screen, rides your map route, roars off every time you pass',
+  veh_rocket: 'parks on your home screen, rides your map route, blasts off every time you pass',
+  veh_mech: 'the biggest thing in the garage — home screen, map route, and a launch on every pass',
+  base_deck: 'your whole home screen becomes a starship bridge — live radar, HUD corners, scanlines',
+  crate: 'one random new look you don’t have yet — could be rare!',
+  egg: 'keep it warm for 5 passes and it hatches into a pet nobody can buy',
+};
+const CONSUMABLE = new Set(['shield', 'crate', 'egg']);
+// equipped item id → class name, so only a catalogue id ever becomes a class (bg ids are also the page's data-bg values)
+const RING_CLASS = { ring_pulse: 'ringpulse', ring_halo: 'ringhalo', ring_prestige: 'ringprestige' };
+const NAMEFX_CLASS = { nfx_rainbow: 'namefx-rainbow', nfx_glitch: 'namefx-glitch', nfx_gold: 'namefx-gold' };
+const TBAR_CLASS = { tbar_bolt: 'tbar-tbar_bolt', tbar_lava: 'tbar-tbar_lava', tbar_rainbow: 'tbar-tbar_rainbow', tbar_pixel: 'tbar-tbar_pixel' };
+const BGCARD_CLASS = { bg_symbols: 'bgcard-bg_symbols', bg_city: 'bgcard-bg_city', bg_space: 'bgcard-bg_space' };
+// own keys only: an id is the server's, and 'constructor' must not find Object's
+const lookup = (map, id, fallback = '') => (typeof id === 'string' && Object.hasOwn(map, id) ? map[id] : fallback);
 let timer = null, gameModel = null, playStreak = 0, audioCtx = null;
 function stopTimer() { if (timer) { clearInterval(timer); timer = null; } }
 function gameSound(kind) {
@@ -709,13 +767,13 @@ function playView(session, q) {
   stopTimer(); transientView = true; const t = TRACK[q.track || session.track], box = panel(`${t.emoji} ${t.name} · SECTOR ${q.levelId || session.levelId}`, runLabel(session), `Question ${q.index + 1} of ${session.count}${session.mode === 'placement' ? '' : ` · paper ${q.paper}`}`);
   onBack = refresh; // to the child's home: the session stays open there under "Continue", nothing is quit or lost
   const shout = gameModel?.wallet?.activeShout, tier = playStreak >= 18 ? 3 : playStreak >= 14 ? 2 : playStreak >= 9 ? 1 : playStreak >= 4 ? 0 : -1;
-  if (tier >= 0) box.append(el('p', (SHOUTS[shout] || ['COMBO!', 'SUPER COMBO!', 'HYPER COMBO!', 'ULTRA COMBO!!'])[tier], 'combo'));
+  if (tier >= 0) box.append(el('p', lookup(SHOUT_PACKS, shout, SHOUT_PACKS.default).labels[tier], 'combo'));
   box.append(el('p', displayText(q.display), 'question'));
   if (q.read && window.speechSynthesis && window.SpeechSynthesisUtterance) box.append(button('🔊 Read aloud', () => { window.speechSynthesis.cancel(); window.speechSynthesis.speak(new window.SpeechSynthesisUtterance(q.read)); }, 'text-button'));
   const timerSkin = gameModel?.wallet?.activeTimer || ''; const clock = el('p', `${q.seconds} s`, `clock ${timerSkin}`); box.append(clock); let left = q.seconds;
   timer = setInterval(() => { left--; clock.textContent = `${Math.max(0, left)} s`; if (left <= 0) stopTimer(); }, 1000);
   const attemptId = crypto.randomUUID();
-  const submit = async (answer) => { stopTimer(); const r = await api('/learn/answer', { sessionId: session.id, index: q.index, attemptId, answer }); playStreak = r.correct ? playStreak + 1 : 0; const fx = FX[gameModel?.wallet?.activeFx]; if (fx && r.correct) note(`${fx} ${fx} ${fx}`);
+  const submit = async (answer) => { stopTimer(); const r = await api('/learn/answer', { sessionId: session.id, index: q.index, attemptId, answer }); playStreak = r.correct ? playStreak + 1 : 0; const fx = lookup(FX_SETS, gameModel?.wallet?.activeFx, null)?.[0]; if (fx && r.correct) note(`${fx} ${fx} ${fx}`);
     gameSound(r.correct ? 'correct' : 'wrong'); if (r.done) summaryView(session, r.summary); else playView({ ...session, index: r.question.index }, r.question); note(r.correct ? '✓ Correct' : r.result === 'timeout' ? `⏱ Too slow — it was ${r.expected}` : `✗ It was ${r.expected}`); };
   const submitForm = (fields, read) => { const form = el('form', null, 'answer-form'); for (const f of fields) form.append(f.wrap); const go = el('button', 'Answer', 'primary'); go.type = 'submit'; form.append(go); form.onsubmit = (event) => { event.preventDefault(); run(() => submit(read())); }; box.append(form); fields[0].input.focus(); };
   if (q.answerType === 'choice') q.display.choices.forEach((c, i) => box.append(button(c, () => submit(String(i)), 'primary')));
