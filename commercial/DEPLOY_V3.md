@@ -255,8 +255,12 @@ recovery forms have the same second wall and a cap per instance. Keep advertisin
 
 **Which commit is running.** The deploy helper records the commit it deploys from as `RELEASE_SHA` in
 the service's environment and as a `release-sha` label on the revision, refuses to deploy from a dirty or
-commitless checkout, and after the deploy checks that `/api/health` reports that very commit
-(`release`). So `curl https://PROJECT_ID.web.app/api/health` answers "which code is on staging" with a
+commitless checkout (and stops when git cannot answer), uploads the commit itself — exported with
+`git archive` before the suites run, never the working tree as it stands minutes later — re-checks the
+checkout after the suites, and after the deploy `scripts/verify-release.mjs` (tested by the suite) requires
+that `/api/health` reports that very commit (`release`) and that the revision just created is the ready one,
+labelled with it and serving all traffic: a rollback that pinned traffic to an older revision of the same
+commit would otherwise let a redeploy with a new environment pass while serving nothing. So `curl https://PROJECT_ID.web.app/api/health` answers "which code is on staging" with a
 commit hash anyone can compare with the release branch — that is the evidence a device test is against
 a given release, not a line in a terminal. The nightly sweep job does not carry it (it runs from the same
 image; `gcloud run jobs describe` shows the image digest).

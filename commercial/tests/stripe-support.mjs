@@ -30,7 +30,9 @@ const missing = { status: 404, json: { error: { code: 'resource_missing', type: 
 export function stripeAccount(f, { customerId = 'cus_live1' } = {}) {
   const state = { customer: null, sub: null, expired: [], deleted: [], invoices: 1 };
   const routes = {
-    'GET /v1/customers/search': () => ({ data: state.customer ? [state.customer] : [] }),
+    'GET /v1/customers/search': () => ({ data: state.customer && !state.searchHidden ? [state.customer] : [] }), // searchHidden: the search index lags behind the customer
+    'GET /v1/customers/': (body, calls) => { const id = calls.at(-1).path.split('/').pop(); if ((state.deletedCustomers || []).includes(id)) return { id, object: 'customer', deleted: true }; return state.customer && state.customer.id === id ? state.customer : missing; },
+    'GET /v1/invoices/': (body, calls) => (state.invoiceOf || {})[calls.at(-1).path.split('/').pop()] || missing, // invoiceOf: what a charge's invoice says about its subscription
     'POST /v1/customers': (body) => { state.customer = { id: customerId, metadata: { customerRef: body['metadata[customerRef]'] } }; return state.customer; },
     'POST /v1/checkout/sessions': (body) => ({ id: `cs_${body.client_reference_id.slice(0, 8)}`, url: 'https://checkout.stripe.com/c/pay/x' }),
     'POST /v1/checkout/sessions/': (body, calls) => { state.expired.push(calls.at(-1).path); return { status: 'expired' }; },

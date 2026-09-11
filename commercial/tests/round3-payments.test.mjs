@@ -22,7 +22,7 @@ async function subscribed(r, fam, plan = 'starter', subId = 'sub_1') {
   const { f, account, payments } = r;
   const chk = await payments.checkout(fam.ctx, { plan, ...op() });
   account.activate(PRICES[plan]); account.state.sub.id = subId;
-  const done = event(f, 'checkout.session.completed', { object: 'checkout.session', customer: account.state.customer.id, subscription: subId, client_reference_id: chk.checkoutId, metadata: { familyId: fam.familyId, checkoutId: chk.checkoutId } });
+  const done = event(f, 'checkout.session.completed', { object: 'checkout.session', payment_status: 'paid', customer: account.state.customer.id, subscription: subId, client_reference_id: chk.checkoutId, metadata: { familyId: fam.familyId, checkoutId: chk.checkoutId } });
   const s = signed(f, done); assert.equal((await payments.receive('stripe', s.raw, s.headers)).status, 'applied');
   return chk;
 }
@@ -54,7 +54,7 @@ test('an event names the subscription it is about: one for another subscription 
   // Stripe's notice of sub_1's end arrives, then the new subscription's completion; a late invoice of sub_1 changes nothing
   g.f.advance(1000); assert.equal((await deliver(g, event(g.f, 'customer.subscription.deleted', { object: 'subscription', id: 'sub_1', status: 'canceled', customer: g.account.state.customer.id }))).status, 'applied');
   g.account.activate(PRICES.family); g.account.state.sub.id = 'sub_2';
-  const done = event(g.f, 'checkout.session.completed', { object: 'checkout.session', customer: g.account.state.customer.id, subscription: 'sub_2', client_reference_id: chk.checkoutId, metadata: { familyId: b.familyId, checkoutId: chk.checkoutId } });
+  const done = event(g.f, 'checkout.session.completed', { object: 'checkout.session', payment_status: 'paid', customer: g.account.state.customer.id, subscription: 'sub_2', client_reference_id: chk.checkoutId, metadata: { familyId: b.familyId, checkoutId: chk.checkoutId } });
   g.f.advance(1000); assert.equal((await deliver(g, done)).status, 'applied');
   let fb = await family(g.f, b.familyId); assert.equal(fb.subscription.plan, 'family'); assert.equal(fb.subscription.providerSubscriptionRef, 'sub_2'); assert.equal(deriveState(fb.subscription, g.f.now()), 'active');
   g.f.advance(1000); const late = invoice(g, 'in_late', 'sub_1', [[PRICES.starter, 500, Math.floor((g.f.now() + 30 * DAY) / 1000)]]);

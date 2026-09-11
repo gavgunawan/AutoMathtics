@@ -11,7 +11,7 @@
 // the financial records that PR #17 made durable stay, with the personal linkage they need
 // reduced to a tombstone (RETENTION below says what and why).
 import { randomUUID } from 'node:crypto';
-import { fail, object, uuid, text } from './security.mjs';
+import { Fault, fail, object, uuid, text } from './security.mjs';
 import { normalizeProgress, freshProgress } from './progress.mjs';
 import { reconcile } from './ledger.mjs';
 import { deriveState, effectiveEntitlement } from './subscription.mjs';
@@ -81,18 +81,20 @@ export class Support {
       family: { id: f, label: family.label, createdAt: family.createdAt, timeZone: family.timeZone || null, activeChildIds: family.activeChildIds || [], deletion: family.deletion || null },
       entitlement: effectiveEntitlement(family, this.now()), subscription: family.subscription || null, billing, gameConfig: config || null, children, audit, auditTruncated: trail.truncated };
   }
-  /** Every audit row of one family, oldest first, read in pages under the reader given (a transaction or the store); `truncated` only past the cap — and then the rows kept are the first by document id, not by time (the cap is years of use; SUPPORT.md). */
-  async familyAudit(reader, familyId) {
+  /** The rows of one collection with `field` equal to `value`, read in pages under the reader given (a transaction or the store); `truncated` only past the cap — and then the rows kept are the first by document id, not by time (the cap is years of use; SUPPORT.md). Never a whole collection: one family's rows cost one family's reads (fifth round). */
+  async pagedBy(reader, collection, field, value) {
     const rows = []; let after = null, truncated = false;
     for (;;) {
-      const page = await reader.queryAfter('audit', 'familyId', familyId, after, this.auditPage);
+      const page = await reader.queryAfter(collection, field, value, after, this.auditPage);
       for (const [, a] of page) rows.push(a);
       if (rows.length > this.auditCap) { truncated = true; break; } // strictly past the cap: exactly the cap is every row
       if (page.length < this.auditPage) break;
       after = page.at(-1)[0];
     }
-    return { rows: rows.slice(0, this.auditCap).sort((a, b) => a.at - b.at), truncated };
+    return { rows: rows.slice(0, this.auditCap), truncated };
   }
+  /** Every audit row of one family, oldest first. */
+  async familyAudit(reader, familyId) { const r = await this.pagedBy(reader, 'audit', 'familyId', familyId); return { rows: r.rows.sort((a, b) => a.at - b.at), truncated: r.truncated }; }
   /** The parent asks for the family to be deleted. Nothing changes for 14 days; the parent can take it back. */
   async requestDeletion(ctx, body) {
     object(body, ['operationId']); const operationId = uuid(body?.operationId ?? (fail(400, 'OPERATION_ID_REQUIRED')));
@@ -194,16 +196,17 @@ export class Support {
       const mapping = await this.store.get(`billingCustomers/${provider}:${ref}`);
       customers.push({ provider, ref, mapping: mapping ? { lastEventAt: mapping.lastEventAt, lastEventId: mapping.lastEventId, pending: mapping.pending || [], aliasOf: mapping.aliasOf || null } : null });
     }
-    const refs = new Set(customers.map((c) => c.ref));
-    const inbox = (await this.store.list('billingEvents')).filter((e) => refs.has(e.customer)).sort((a, b) => a.at - b.at)
+    const refs = new Set(customers.map((c) => c.ref)), truncated = [], paged = async (collection, field, value) => { const r = await this.pagedBy(this.store, collection, field, value); if (r.truncated) truncated.push(collection); return r.rows; }; // the family's rows only, never the whole collection (fifth round)
+    const inboxRows = []; for (const ref of refs) inboxRows.push(...(await paged('billingEvents', 'customer', ref)));
+    const inbox = inboxRows.sort((a, b) => a.at - b.at)
       .map((e) => ({ id: e.providerEventId, provider: e.provider, type: e.type, at: e.at, attempts: e.attempts, outcome: e.outcome }));
-    const intents = (await this.store.list('billingChangeIntents')).filter((i) => i.familyId === familyId).sort((a, b) => a.createdAt - b.createdAt)
-      .map((i) => ({ operationId: i.operationId, provider: i.provider, kind: i.kind, fromPlan: i.fromPlan, toPlan: i.toPlan, status: i.status, providerOperationRef: i.providerOperationRef || null, reconciliation: i.reconciliation || null, createdAt: i.createdAt }));
-    const checkouts = (await this.store.list('checkouts')).filter((c) => c.familyId === familyId).sort((a, b) => a.createdAt - b.createdAt)
-      .map((c) => ({ checkoutId: c.checkoutId, provider: c.provider, plan: c.plan, status: c.status, providerCheckoutRef: c.providerCheckoutRef || null, supersededBy: c.supersededBy || null, createdAt: c.createdAt }));
+    const intents = (await paged('billingChangeIntents', 'familyId', familyId)).sort((a, b) => a.createdAt - b.createdAt)
+      .map((i) => ({ operationId: i.operationId, provider: i.provider, kind: i.kind, fromPlan: i.fromPlan, toPlan: i.toPlan, status: i.status, providerOperationRef: i.providerOperationRef || null, providerAnsweredAt: i.providerAnsweredAt || null, reconciliation: i.reconciliation || null, createdAt: i.createdAt }));
+    const checkouts = (await paged('checkouts', 'familyId', familyId)).sort((a, b) => a.createdAt - b.createdAt)
+      .map((c) => ({ checkoutId: c.checkoutId, provider: c.provider, plan: c.plan, status: c.status, providerCheckoutRef: c.providerCheckoutRef || null, supersededBy: c.supersededBy || null, expiredByDeletion: c.expiredByDeletion || null, createdAt: c.createdAt }));
     const billing = (await this.store.list(`families/${familyId}/billing`)).sort((a, b) => a.at - b.at).map((e) => ({ id: e.id, type: e.type, plan: e.plan, at: e.at, actor: e.actor, state: e.result?.state || null }));
     const trail = await this.familyAudit(this.store, familyId), audit = trail.rows.map((a) => ({ action: a.action, uid: a.uid, at: a.at, childId: a.childId || null })), auditTruncated = trail.truncated; // every row, in pages (fourth round)
-    const reconciliations = (await this.store.list('billingReconciliations')).filter((r) => r.familyId === familyId);
+    const reconciliations = await paged('billingReconciliations', 'familyId', familyId);
     const providerChecks = reconciliations.filter((r) => r.kind === 'provider_state').sort((a, b) => b.at - a.at);
     const members = family.deleted ? [] : await this.store.entries(`families/${familyId}/members`), recoveries = []; // Stage 4.4: the parents' recovery requests
     for (const [uid] of members) { const r = await this.store.get(`recoveries/${uid}`); if (r) recoveries.push({ uid, status: r.status, requestedAt: r.requestedAt, readyAt: r.readyAt, cancelledBy: r.cancelledBy || null }); }
@@ -225,7 +228,7 @@ export class Support {
     };
     return { familyId, deleted: family.deleted === true, label: family.deleted ? null : family.label, createdAt: family.createdAt, phoneKey: family.phoneKey || null, timeZone: family.timeZone || null,
       entitlement: effectiveEntitlement(family, now), subscription: sub ? { ...sub, state: deriveState(sub, now) } : null, manualGrant: family.entitlement || null,
-      children, customers, inbox, intents, checkouts, billing, reconciliations, recoveries, audit, auditTruncated, attention };
+      children, customers, inbox, intents, checkouts, billing, reconciliations, recoveries, audit, auditTruncated, truncated, attention };
   }
   /** Provider customer reference → family. */
   async customerLookup(provider, ref) {
@@ -391,7 +394,7 @@ export class Support {
     const wantsProvider = !!sub && sub.plan !== 'trial' && ['active', 'grace', 'past_due'].includes(state) && !gone; // the family's record says a provider subscription should be live
     const providers = [];
     for (const [provider, ref] of Object.entries(family.billing || {})) {
-      const st = this.payments ? await this.payments.providerState(provider, ref) : { provider, available: false };
+      const st = this.payments ? await this.payments.providerState(provider, ref, family.providerCustomer?.[provider] || null) : { provider, available: false };
       const findings = [], add = (code, detail) => findings.push({ code, detail }), relevant = local.provider === provider, ps = st.subscription || null, live = ps?.live === true;
       if (!st.available) add('PROVIDER_STATE_UNAVAILABLE', 'this adapter cannot report provider state');
       else if (st.error) add('PROVIDER_UNREACHABLE', st.error);
@@ -526,7 +529,17 @@ export class Support {
       return next;
     });
     if (family.deleted) return await this.store.get(`deletions/${familyId}`);
-    // phase 0b — the subscription ends as a recorded financial event, now that nothing can revive it (a rerun finds it ended).
+    // phase 0b — first the hosted sessions the freeze superseded are expired at the provider (best effort, recorded on each
+    // checkout; a rerun finds the ones not yet done): a page still open in the parent's browser must not buy a subscription for a
+    // family that is being deleted (fifth round). Then the subscription ends as a recorded financial event, now that nothing can
+    // revive it (a rerun finds it ended).
+    for (const [id, c] of await this.store.query('checkouts', 'familyId', familyId, 100)) {
+      if (c.status !== 'superseded_by_deletion' || !c.providerCheckoutRef || c.expiredByDeletion) continue;
+      const gw = this.payments?.gateways && Object.hasOwn(this.payments.gateways, c.provider) ? this.payments.gateways[c.provider] : null;
+      if (!gw || typeof gw.cancelCheckout !== 'function') continue;
+      let outcome; try { outcome = await gw.cancelCheckout(c.providerCheckoutRef); } catch (error) { if (!(error instanceof Fault)) throw error; outcome = { expired: false, reason: error.code }; }
+      await this.store.transaction(async (tx) => { const cur = await tx.get(`checkouts/${id}`); if (cur && cur.status === 'superseded_by_deletion') tx.set(`checkouts/${id}`, { ...cur, expiredByDeletion: { ...outcome, at: this.now() } }); });
+    }
     // The provider is told whatever the local state — a past_due family is still being dunned there, a refunded one may still be
     // live (Stage 4 review, third round); the machine records `terminate` only where access still existed.
     if (family.subscription) {

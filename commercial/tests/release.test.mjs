@@ -5,6 +5,7 @@ import { once } from 'node:events';
 import { VERSION } from '../server/version.mjs';
 import { createApp } from '../server/http.mjs';
 import { fixture, secret } from './support.mjs';
+import { verifyRelease } from '../scripts/verify-release.mjs';
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 test('v3.0 version agrees across manifest, page and backend', async () => {
   assert.equal(VERSION, '3.0.0');
@@ -32,13 +33,28 @@ test('live health endpoint identifies v3.0 without exposing private configuratio
   const real = await fetch(`http://127.0.0.1:${server.address().port}/api/health`, { headers: { 'X-Forwarded-For': '8.8.8.8, 192.0.2.9' } });
   assert.deepEqual(await real.json(), { status: 'ok', version: VERSION, release: null, forwarded: 2 }, 'a real address is never echoed');
 });
-test('the commit a revision runs is a fact the service states: /api/health carries RELEASE_SHA, the deploy helper records it and refuses a dirty or commitless checkout', async (t) => {
-  const f = fixture(), sha = 'ab'.repeat(20);
+test('the commit a revision runs is a fact the service states: /api/health carries RELEASE_SHA; the deploy helper exports the commit it deploys, refuses a dirty, commitless or changed checkout, and verify-release decides on the live answer', async (t) => {
+  const f = fixture(), sha = 'ab'.repeat(20), other = 'cd'.repeat(20);
   const server = createApp(f.service, { origin: 'https://pilot.example.test', secret, emulator: false, releaseSha: sha, web: { authDomain: 'demo-am-foundation.firebaseapp.com' } });
   server.listen(0, '127.0.0.1'); await once(server, 'listening'); t.after(() => { server.closeAllConnections(); server.close(); });
-  assert.deepEqual(await (await fetch(`http://127.0.0.1:${server.address().port}/api/health`)).json(), { status: 'ok', version: VERSION, release: sha });
+  const res = await fetch(`http://127.0.0.1:${server.address().port}/api/health`), health = await res.json();
+  assert.deepEqual(health, { status: 'ok', version: VERSION, release: sha });
   const helper = await read('../scripts/deploy-staging.sh');
-  for (const s of ['RELEASE_SHA="$(git rev-parse HEAD', '^[0-9a-f]{40}$', 'git status --porcelain --untracked-files=no', '--labels "release-sha=$RELEASE_SHA"', 'RELEASE_SHA: p.RELEASE_SHA', 'result.release !== sha']) assert.ok(helper.includes(s), s);
+  for (const s of ['RELEASE_SHA="$(git rev-parse HEAD', '^[0-9a-f]{40}$', 'DIRTY="$(git status --porcelain --untracked-files=no)"', 'git archive --format=tar "${RELEASE_SHA}${PREFIX:+:$PREFIX}"', '--source "$SRC"', '--labels "release-sha=$RELEASE_SHA"', 'RELEASE_SHA: p.RELEASE_SHA', 'The checkout changed while the tests ran', 'node scripts/verify-release.mjs "$ORIGIN" "$RELEASE_SHA" "$SERVICE_JSON"']) assert.ok(helper.includes(s), s);
+  assert.ok(!helper.includes('--source .'), 'never the working tree as it stands after the suites');
+  assert.ok(!/\[\[ -z "\$\(git status/.test(helper), 'a failing git status must not read as a clean tree');
+  // the decision itself, on the live answer of a server: the commit, the revision, its label and its traffic
+  const service = (latest, ready, traffic, label = sha) => ({ metadata: { name: 'automathtics-v3' }, spec: { template: { metadata: { labels: { 'release-sha': label } } } }, status: { latestCreatedRevisionName: latest, latestReadyRevisionName: ready, traffic } });
+  assert.deepEqual(verifyRelease({ ok: res.ok, health, sha, service: service('r2', 'r2', [{ revisionName: 'r2', percent: 100, latestRevision: true }]) }), { version: VERSION, release: sha, revision: 'r2' });
+  assert.deepEqual(verifyRelease({ ok: true, health, sha }), { version: VERSION, release: sha, revision: null });
+  assert.throws(() => verifyRelease({ ok: true, health, sha: other }), /reports commit abab.*not cdcd/);
+  assert.throws(() => verifyRelease({ ok: true, health: { status: 'ok', version: VERSION, release: null }, sha }), /reports commit none/);
+  assert.throws(() => verifyRelease({ ok: false, health, sha }), /health check failed/);
+  assert.throws(() => verifyRelease({ ok: true, health: { ...health, version: '2.9.0' }, sha }), /health check failed/);
+  assert.throws(() => verifyRelease({ ok: true, health, sha, service: service('r2', 'r2', [{ revisionName: 'r1', percent: 100 }]) }), /Traffic is not on r2/, 'a rollback pinned traffic to the older revision of the same commit: the new one serves nothing');
+  assert.throws(() => verifyRelease({ ok: true, health, sha, service: service('r2', 'r2', [{ revisionName: 'r1', percent: 50 }, { revisionName: 'r2', percent: 50 }]) }), /Traffic is not on r2/);
+  assert.throws(() => verifyRelease({ ok: true, health, sha, service: service('r2', 'r1', [{ revisionName: 'r1', percent: 100 }]) }), /not the ready one/);
+  assert.throws(() => verifyRelease({ ok: true, health, sha, service: service('r2', 'r2', [{ revisionName: 'r2', percent: 100 }], other) }), /labelled release-sha=cdcd/);
 });
 test('the parent screens wear the game\'s own faces, served from this origin: /fonts with a year of cache, font-src self, no third-party font request', async (t) => {
   const f = fixture();

@@ -166,6 +166,38 @@ the rest of the rules:
 Two live subscriptions at the provider — a state the dashboard can make — stop every money-changing call
 with `MULTIPLE_PROVIDER_SUBSCRIPTIONS` until an operator has cancelled one (`RECONCILIATION.md`).
 
+The second adversarial pass over the whole seam (fifth round: three finders after the ten verdicts) added
+these rules:
+
+- two attempts of one operation reach the provider under one idempotency key and get one session: the
+  attempt that finalises second answers that same session and expires nothing (`lateSessionRef` only ever
+  names a different session);
+- a subscription the provider holds as paid and current (`active`, not winding down) is never ended for a
+  new checkout while the family's record says past due, cancelled or expired — the record is behind, its
+  `invoice.paid` still on its way: the click is refused `PROVIDER_SUBSCRIPTION_PAID`, the family marked, and
+  once the payment has landed the retried click is refused as a fresh start would be (`USE_PLAN_CHANGE`);
+- every provider call resolves the family's customer by the Stripe id this server recorded when its checkout
+  completed (`providerCustomer`), and by the `customerRef` metadata search only for a customer it never
+  recorded: a dashboard edit of the metadata, or a search index that lags, cannot make one family's change
+  land on another's subscription — and a plan change or a cancellation acts only on the subscription the
+  record names (`providerSubscriptionRef`), any other live one refused `PROVIDER_SUBSCRIPTION_LIVE`;
+- a customer deleted in the dashboard settles the ending debt (`CUSTOMER_DELETED`: Stripe ended its
+  subscriptions with it), so the family can come back; an id Stripe never held settles nothing; a named
+  subscription is never substituted by another of the customer's; `paused` and `incomplete` can bill again
+  and are ended, never taken for ended;
+- a refund or a dispute names the subscription its charge paid for (through the invoice): a full refund of
+  the previous subscription's last charge — goodwill for the unused dunning month — is recorded
+  `OTHER_SUBSCRIPTION` and leaves the new, paid subscription alone;
+- a session is paid only when Stripe says so: `checkout.session.completed` with `payment_status: unpaid` (a
+  bank debit still clearing) grants nothing; `checkout.session.async_payment_succeeded` is the completion;
+- a held upgrade answers the same to every attempt of its operation, and the provider's answer to a plan
+  change is on the intent (`providerAnsweredAt`, `providerOperationRef`, `proration`) before the finalisation
+  can fail, so a proration the provider charged is never without a record;
+- a family's deletion expires the hosted session its freeze superseded (`expiredByDeletion` on the checkout),
+  and a payment that still lands on it is `reconciliation_required` (`FAMILY_DELETED`) for the operator,
+  never a rejection nobody reads;
+- a refusal's audit row (`billing.refused`) carries its `code`.
+
 The intent is durable before the provider is contacted. Two simultaneous requests with one
 operation id, or a crash between the intent and the provider, both resume the same intent and
 hand the provider the same key, so a provider that honours idempotency keys returns the same

@@ -22,7 +22,7 @@ async function subscribed(r, fam, plan = 'starter') {
   const { f, account, payments } = r;
   const chk = await payments.checkout(fam.ctx, { plan, ...op() });
   account.activate(PRICES[plan]);
-  const done = event(f, 'checkout.session.completed', { object: 'checkout.session', customer: account.state.customer.id, subscription: 'sub_1', client_reference_id: chk.checkoutId, metadata: { familyId: fam.familyId, checkoutId: chk.checkoutId } });
+  const done = event(f, 'checkout.session.completed', { object: 'checkout.session', payment_status: 'paid', customer: account.state.customer.id, subscription: 'sub_1', client_reference_id: chk.checkoutId, metadata: { familyId: fam.familyId, checkoutId: chk.checkoutId } });
   const s = signed(f, done); assert.equal((await payments.receive('stripe', s.raw, s.headers)).status, 'applied');
   return chk;
 }

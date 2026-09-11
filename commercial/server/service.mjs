@@ -24,8 +24,8 @@ export class Foundation {
     this.secret = secret; this.now = now;
   }
   // Audit rows expire after AUDIT_RETENTION_MS through the Firestore TTL policy on `expireAt`.
-  audit(tx, action, uid, familyId = null, childId = null) {
-    tx.set(`audit/${randomUUID()}`, { action, uid, familyId, childId, at: this.now(), expireAt: this.now() + AUDIT_RETENTION_MS });
+  audit(tx, action, uid, familyId = null, childId = null, extra = null) {
+    tx.set(`audit/${randomUUID()}`, { action, uid, familyId, childId, at: this.now(), expireAt: this.now() + AUDIT_RETENTION_MS, ...(extra && typeof extra === 'object' ? extra : {}) });
   }
   // Throttle inside an existing transaction, after authorization has been read, so an
   // unauthorized caller cannot spend a family's budget. The read happens now; the returned
