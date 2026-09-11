@@ -29,7 +29,8 @@ export function control(root, label) {
 // clock: a function returning the time the page reads from Date.now(), for tests that count down (omit for real time)
 // storage: a stand-in for the page's localStorage (omit: the page has none, as in a browser that blocks site data)
 // location: the page's address, e.g. { search: '?resetsms', pathname: '/' } (omit: no location, as before)
-export async function uiFixture(t, { family = true, signedIn = true, clock = null, storage = null, location = null } = {}) {
+// recordBodies: routes whose request bodies the test may read back from requests; only routes that carry no credential, such as '/api/learn/answer'
+export async function uiFixture(t, { family = true, signedIn = true, clock = null, storage = null, location = null, recordBodies = [] } = {}) {
   const f = fixture();
   const a = signedIn ? (family ? await f.family('parentA', 2) : await f.login('parentA')) : null;
   const cfg = { origin: 'http://127.0.0.1', secret, emulator: true, web: { authDomain: 'demo-am-foundation.firebaseapp.com' } };
@@ -50,7 +51,7 @@ export async function uiFixture(t, { family = true, signedIn = true, clock = nul
   const document = { visibilityState: 'visible', querySelector: sel => sel === '#app' ? root : message, documentElement: html,
     getElementById: id => id === 'decor' ? decor : null, createElement: tag => new Element(tag), addEventListener: (name, fn) => { documentEvents[name] = fn; } };
   const fetchForPage = async (path, options = {}) => {
-    requests.push({ path, method: options.method || 'GET' }); // never retain request credentials
+    requests.push({ path, method: options.method || 'GET', ...(recordBodies.includes(path) && options.body ? { body: JSON.parse(options.body) } : {}) }); // never retain request credentials
     const r = await fetch(cfg.origin + path, { ...options, headers: { ...options.headers, Cookie: cookie, Origin: cfg.origin } });
     const next = r.headers.get('set-cookie'); if (next) cookie = next.split(';')[0]; return r;
   };

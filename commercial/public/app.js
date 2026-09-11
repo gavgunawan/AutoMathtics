@@ -35,6 +35,7 @@ const messages = {
   ITEM_ALREADY_OWNED: 'You already own that item.', SHIELD_LIMIT: 'You can hold at most two streak shields.',
   EGG_ALREADY_WARMING: 'Your Mystery Egg is already warming.', REWARD_DAILY_LIMIT: 'That reward has reached its daily limit.',
   SCAN_ALREADY_DONE: 'System Scan is already complete this week.', SCAN_LOCKED: 'System Scan unlocks in Sector B after the first tier.',
+  INVALID_ANSWER: 'The grid could not read that answer. Check it, then tap Go again.',
 };
 // The sign-in provider's own refusals: in the parent's words where the cause is known, otherwise the provider's code and text,
 // so that a failure can be reported and matched against the provider's own log (the one generic sentence used to hide everything).
@@ -111,8 +112,8 @@ function setMode() {
 // variant: one of v2's narrower cards (narrow 420px, w460, w520) or a screen's own class
 function panel(kicker, title, subtitle, variant = '') {
   authModule?.resetCaptcha?.(); // the robot check belongs to the screen that built it; one left behind strands its frame
-  stopSendClock(); screenId++; onBack = null; // the same for the Send countdown, and Back is each screen's to set again
-  root.replaceChildren(); setMode();
+  stopSendClock(); stopTimer(); screenId++; onBack = null; // the same for the Send countdown and a question's clock, and Back is each screen's to set again
+  root.replaceChildren(); setMode(); root.setAttribute('aria-live', 'polite'); // a session turns it off while it plays
   const box = el('section', null, variant ? `panel ${variant}` : 'panel');
   box.append(el('p', kicker, 'kicker'), el('h1', title), el('p', subtitle, 'intro muted'));
   root.append(box); return box;
@@ -806,16 +807,58 @@ function titleChip(w) { const t = gameItem(w?.activeTitle); return t?.kind === '
 function nameSpan(nickname, w) { return el('span', nickname, `caps ${lookup(NAMEFX_CLASS, w?.activeNameFx)}`.trim()); }
 let timer = null, gameModel = null, playStreak = 0, audioCtx = null;
 function stopTimer() { if (timer) { clearInterval(timer); timer = null; } }
-function gameSound(kind) {
-  const pack = gameModel?.wallet?.activeSnd; if (!pack) return;
-  try { const Ctx = window.AudioContext || window.webkitAudioContext; if (!Ctx) return; audioCtx ||= new Ctx();
-    const osc = audioCtx.createOscillator(), gain = audioCtx.createGain(), now = audioCtx.currentTime; osc.connect(gain); gain.connect(audioCtx.destination);
-    osc.type = pack === 'snd_retro' ? 'square' : 'sine'; const good = kind === 'correct' || kind === 'buy';
-    osc.frequency.setValueAtTime(good ? (pack === 'snd_retro' ? 660 : 880) : 190, now); if (pack === 'snd_space') osc.frequency.exponentialRampToValueAtTime(good ? 1320 : 120, now + .12);
-    gain.gain.setValueAtTime(.04, now); gain.gain.exponentialRampToValueAtTime(.0001, now + .15); osc.start(now); osc.stop(now + .16);
-  } catch {}
+// ---- v2's arcade sounds (989-1086): WebAudio tones, no files. The equipped pack is the voice — the default grid chimes when
+// nothing is equipped (as v2 played them), snd_retro's 8-bit squares, snd_space's sine glides. The audio context is made by
+// the first tap that sounds (a browser allows audio from a tap), and anything that fails is silence.
+function ac() {
+  try { const Ctx = window.AudioContext || window.webkitAudioContext; if (!Ctx) return null; audioCtx ||= new Ctx(); if (audioCtx.state === 'suspended') audioCtx.resume?.(); return audioCtx; } catch { return null; }
 }
-const runLabel = (s) => s.mode === 'boss' ? `👑 Check point T${s.tierEnd / 20}` : s.mode === 'scan' ? '🧠 SYSTEM SCAN · ×2 LOOT' : s.mode === 'placement' ? '🎯 Placement test' : s.mode === 'practice' ? 'Practice run' : `Papers ${s.startPaper}–${s.startPaper + 4}`;
+function voice(f0, f1, at, dur, type, vol, glides) {
+  const c = ac(); if (!c) return;
+  try {
+    const o = c.createOscillator(), g = c.createGain(), t0 = c.currentTime + at; o.type = type; o.frequency.setValueAtTime(f0, t0);
+    if (glides) o.frequency.exponentialRampToValueAtTime(f1, t0 + dur * 0.85);
+    g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(vol, t0 + (glides ? 0.015 : 0.012)); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g); g.connect(c.destination); o.start(t0); o.stop(t0 + dur + 0.05);
+  } catch { /* silence */ }
+}
+const tone = (f, at, dur, type, vol) => voice(f, f, at, dur, type, vol, false), glide = (f0, f1, at, dur, type, vol) => voice(f0, f1, at, dur, type, vol, true);
+const SOUNDS = {
+  correct: { snd_retro: () => { tone(523.3, 0, 0.05, 'square', 0.11); tone(659.3, 0.05, 0.05, 'square', 0.11); tone(1046.5, 0.1, 0.08, 'square', 0.11); },
+    snd_space: () => { glide(500, 1300, 0, 0.22, 'sine', 0.2); glide(1000, 2600, 0.05, 0.22, 'sine', 0.08); },
+    default: () => { tone(880, 0, 0.09, 'triangle', 0.18); tone(1318.5, 0.07, 0.12, 'triangle', 0.18); } },
+  paper: { snd_retro: () => { [392, 523.3, 659.3, 784, 1046.5].forEach((f, i) => tone(f, i * 0.07, 0.07, 'square', 0.12)); tone(1046.5, 0.4, 0.18, 'square', 0.1); },
+    snd_space: () => { glide(400, 900, 0, 0.3, 'sine', 0.2); glide(600, 1400, 0.12, 0.3, 'sine', 0.16); glide(900, 2200, 0.24, 0.4, 'sine', 0.12); },
+    default: () => { tone(659.3, 0, 0.1, 'triangle', 0.2); tone(830.6, 0.09, 0.1, 'triangle', 0.2); tone(987.8, 0.18, 0.12, 'triangle', 0.2); tone(1318.5, 0.28, 0.22, 'triangle', 0.22); } },
+  kaching: { snd_retro: () => { tone(987.8, 0, 0.09, 'square', 0.14); tone(1318.5, 0.09, 0.5, 'square', 0.13); },
+    snd_space: () => { tone(2093, 0, 0.5, 'sine', 0.12); tone(3135.9, 0.08, 0.6, 'sine', 0.08); glide(1568, 3520, 0.12, 0.5, 'sine', 0.07); },
+    default: () => { tone(2093, 0, 0.28, 'square', 0.06); tone(2637, 0.05, 0.32, 'square', 0.06); tone(2093, 0.16, 0.24, 'sine', 0.14); tone(2637, 0.2, 0.34, 'sine', 0.14); tone(3135.9, 0.24, 0.4, 'sine', 0.1); } },
+  wrong: { snd_retro: () => { tone(147, 0, 0.09, 'square', 0.07); tone(110, 0.09, 0.14, 'square', 0.07); },
+    snd_space: () => glide(420, 160, 0, 0.28, 'sine', 0.14),
+    default: () => tone(196, 0, 0.16, 'sawtooth', 0.06) },
+};
+function sound(kind) { const set = SOUNDS[kind]; if (set) lookup(set, gameModel?.wallet?.activeSnd, set.default)(); }
+// a coin burst (MoneySplash 1479-1505): the equipped splash set's glyphs fly out — 9 when a paper closes, 16 on a pass, 26 on
+// a big one. Each coin's flight is custom properties; one timer (never a loop) takes the burst away once it has flown.
+function moneySplash(size = 'pass') {
+  const set = lookup(FX_SETS, gameModel?.wallet?.activeFx, FX_SETS.default), mini = size === 'mini', burst = el('div', null, 'splash');
+  burst.setAttribute('aria-hidden', 'true');
+  for (let i = 0; i < (mini ? 9 : size === 'big' ? 26 : 16); i++) {
+    burst.append(decorPiece('coin', { '--dx': `${Math.round(rnd(-1, 1) * (mini ? 110 : 170))}px`, '--dy': `${-Math.round((mini ? 40 : 70) + Math.random() * (mini ? 70 : 150))}px`,
+      '--rot': `${Math.round(rnd(-1, 1) * 320)}deg`, '--delay': `${rnd(0, 0.3).toFixed(2)}s`, '--fs': `${Math.round((20 + Math.random() * 12) * (mini ? 0.7 : 1))}px` }, anyOf(set)));
+  }
+  setTimeout(() => burst.remove?.(), 1500); // the last coin lands at 1.45 s
+  return burst;
+}
+// read a Navigator question aloud (v2 199-207): the browser's own speech, nothing leaves the device
+function speak(text) {
+  try {
+    const s = window.speechSynthesis; if (!s || !window.SpeechSynthesisUtterance) return; s.cancel();
+    const u = new window.SpeechSynthesisUtterance(String(text).replace(/___/g, ' blank ').replace(/×/g, ' times ').replace(/÷/g, ' divided by ').replace(/–/g, ' to ')
+      .replace(/m²/g, ' square metres').replace(/cm³/g, ' cubic centimetres').replace(/cm²/g, ' square centimetres'));
+    u.rate = 0.92; s.speak(u);
+  } catch { /* no speech */ }
+}
 const gameItem = (id) => gameModel?.catalog?.find((x) => x.id === id) || null;
 // ---- the child's home (v2 2859-3073): the header above the card, the card, and the child's log below it ----
 const LEVEL_IDS = 'ABCDEF', LAST_LEVEL = 5, EGG_PASSES = 5; // display mirrors of the server's six sectors and the egg's five passes
@@ -932,7 +975,10 @@ function rocketPanel(g) {
   else {
     const pour = el('div', null, 'rocket-fuel'); pour.append(el('span', `⛽ fuel it with ${rp ? 'reward points' : 'grid coins'}:`, 'rocket-note'));
     for (const amount of rp ? [100, 200, 500] : [50, 100, 250]) {
-      const b = button(`${sym}${amount}`, async () => { await api('/game/rocket/fuel', { rocketId: r.id, amount, operationId: crypto.randomUUID() }); await childScreen(); }, `tiny ${rp ? 'c-gold' : 'c-violet'}`);
+      const b = button(`${sym}${amount}`, async () => {
+        const res = await api('/game/rocket/fuel', { rocketId: r.id, amount, operationId: crypto.randomUUID() }); sound('kaching');
+        await childScreen({ boom: res.rocket?.status === 'launched' }); // this pour filled the tank: lift-off, with v2's big burst (1702-1706)
+      }, `tiny ${rp ? 'c-gold' : 'c-violet'}`);
       b.disabled = bal < amount; b.setAttribute('aria-label', `Fuel ${sym}${amount}`); pour.append(b);
     }
     if (min > 0 && (r.myFuel || 0) < min) pour.append(el('span', `everyone needs ${sym}${min} in for lift-off`, 'rocket-note due'));
@@ -961,7 +1007,7 @@ function homeLog(child, history) {
   table.append(thead, body); box.append(el('p', `${child.nickname}'s log`, 'log-title'), table); return box;
 }
 // The home: root.replaceChildren(header, card, log). The card wears the background's colours, the deck and the vehicle.
-async function childScreen() {
+async function childScreen(after = {}) {
   stopTimer(); playStreak = 0; transientView = false; const child = model.child;
   const [st, g] = await Promise.all([api('/learn/state'), api('/game/state')]); gameModel = g;
   const w = g.wallet, e = st.engine, n = st.nav, deck = w.activeBase === 'base_deck', veh = gameItem(w.activeVehicle)?.kind === 'vehicle' ? gameItem(w.activeVehicle) : null;
@@ -982,7 +1028,7 @@ async function childScreen() {
   const tracks = el('div', null, 'track-grid');
   if (pending) tracks.append(placementCard(st)); else for (const t of ['engine', 'nav']) tracks.append(trackCard(t, st[t], !st.active));
   box.append(tracks); if (!pending) box.append(jumpBanner(e, n));
-  const rocket = rocketPanel(g); if (rocket) box.append(rocket);
+  const rocket = rocketPanel(g); if (rocket) { if (after.boom === true) rocket.append(moneySplash('big')); box.append(rocket); }
   const nav = el('div', null, 'row-buttons home-nav'); nav.append(button('🛒 Shop', shopScreen, 'ghost'), button('🗺 Map', mapScreen, 'ghost')); box.append(nav);
   if (st.scan?.available && !st.active && !pending) box.append(button('🧠 SYSTEM SCAN — weekly ×2 loot ▶', () => startRun({ track: 'engine', mode: 'scan' }), 'ghost c-violet scan-go'));
   else if (st.scan?.doneThisWeek) box.append(el('p', '🧠 System Scan done this week · resets Monday', 'subtle'));
@@ -997,8 +1043,8 @@ async function shopScreen() {
   const inv = new Set(g.wallet.inventory || []);
   for (const it of g.catalog.filter((x) => !x.hatch && !x.unlock)) {
     const row = el('div', null, 'shop-row'); row.append(el('span', `${it.emoji} ${it.name}`, 'shop-name'), el('span', `⚡${it.cost}`, 'shop-cost'));
-    if (it.kind === 'shield' || it.kind === 'crate' || it.kind === 'egg') row.append(button('BUY', async () => { const r = await api('/game/shop/buy', { itemId: it.id, operationId: crypto.randomUUID() }); gameSound('buy'); if (r.awarded) note(`🎁 You got ${r.awarded.emoji} ${r.awarded.name}!`); await shopScreen(); }, 'ghost'));
-    else if (!inv.has(it.id)) row.append(button('BUY', async () => { await api('/game/shop/buy', { itemId: it.id, operationId: crypto.randomUUID() }); gameSound('buy'); await shopScreen(); }, 'ghost'));
+    if (it.kind === 'shield' || it.kind === 'crate' || it.kind === 'egg') row.append(button('BUY', async () => { const r = await api('/game/shop/buy', { itemId: it.id, operationId: crypto.randomUUID() }); sound('kaching'); if (r.awarded) note(`🎁 You got ${r.awarded.emoji} ${r.awarded.name}!`); await shopScreen(); }, 'ghost'));
+    else if (!inv.has(it.id)) row.append(button('BUY', async () => { await api('/game/shop/buy', { itemId: it.id, operationId: crypto.randomUUID() }); sound('kaching'); await shopScreen(); }, 'ghost'));
     else if (EQUIP_SLOT[it.kind]) { const active = g.wallet[EQUIP_SLOT[it.kind]] === it.id; row.append(button(active ? 'EQUIPPED' : 'EQUIP', async () => { if (!active) await api('/game/shop/equip', { kind: it.kind, itemId: it.id }); await shopScreen(); }, active ? 'badge' : 'ghost')); }
     box.append(row);
   }
@@ -1017,25 +1063,112 @@ async function mapScreen() {
   for (const c of g.heatmap.sort((a,b) => a.track.localeCompare(b.track) || a.level-b.level || a.tier-b.tier)) { const row = el('div', null, 'heat-row'); row.append(el('strong', `${TRACK[c.track].emoji} ${c.levelId} · Tier ${c.tier}`), el('span', `${c.accuracy}% · ${c.avgSeconds ?? '—'} s avg · ${c.attempts} questions`, 'card-meta')); box.append(row); }
   box.append(button('Back to my grid', childScreen, 'primary'));
 }
-function displayText(d) { if (d.layout === 'stack') return `${d.top} ${d.sym} ${d.bottom} =`; if (d.layout === 'frac') return `${d.pre ? `${d.pre} ` : ''}${d.parts.map((p) => (p.sym ? p.sym : `${p.n}/${p.d}`)).join(' ')} =`; return d.text; }
-function playView(session, q) {
-  stopTimer(); transientView = true; const t = TRACK[q.track || session.track], box = panel(`${t.emoji} ${t.name} · SECTOR ${q.levelId || session.levelId}`, runLabel(session), `Question ${q.index + 1} of ${session.count}${session.mode === 'placement' ? '' : ` · paper ${q.paper}`}`);
+// ---- a session (v2 3110-3208): the status row, the timer bar, the flash, the question sheet, and v2's keypad beside Go,
+// Restart and Quit. The browser only sends the answer: the server marks it, rules on the time and pays for it. ----
+const STREAK_AT = [4, 9, 14, 18]; // v2's ladder (60-65): the combo shout, the sheet's heat and the pet's charge climb together
+const streakTier = (s) => STREAK_AT.filter((at) => s >= at).length; // 0 cold, then 1-4
+let playStart = { id: null, at: 0 }; // when this device first showed the session: the footer's minutes, display only
+// the question on the sheet (QuestionView 1517-1554): a word problem with its blanks, a column sum, a line, or fractions
+function questionView(d) {
+  if (d.layout === 'word') { const box = el('div', null, 'q-word'); String(d.text).split('___').forEach((part, i) => { if (i) box.append(el('span', ' ', 'blank')); box.append(part); }); return box; }
+  if (d.layout === 'stack') { // right-aligned digits, each row padded to the widest, the operator in cyan over v2's rule
+    const top = String(d.top), bottom = String(d.bottom), width = Math.max(top.length, bottom.length), box = el('div', null, 'q-stack'), op = el('div', null, 'q-op');
+    op.append(el('span', d.sym, 'q-sym'), bottom.padStart(width + 1, ' ')); box.append(el('div', top.padStart(width + 2, ' ')), op); return box;
+  }
+  if (d.layout === 'inline') return el('div', d.text, 'q-inline');
+  const box = el('div', null, 'q-frac');
+  if (d.pre) box.append(el('span', d.pre, 'q-pre'));
+  for (const p of d.parts || []) {
+    if (p.sym) { box.append(el('span', p.sym, 'q-sym')); continue; }
+    const frac = el('span', null, 'frac'); frac.append(el('span', String(p.n)), el('span', null, 'frac-bar'), el('span', String(p.d))); box.append(frac);
+  }
+  box.append(el('span', '=', 'q-eq'), el('span', '?', 'q-ask')); return box;
+}
+// after: what the last answer left for this screen — the flash (or combo) to show, and whether a paper just closed (a burst)
+function playView(session, q, after = {}) {
+  transientView = true;
+  const T = TRACK[q.track || session.track], w = gameModel?.wallet || {}, tier = streakTier(playStreak), choice = q.answerType === 'choice';
+  const box = panel('', '', '', 'play'); box.replaceChildren();
   onBack = refresh; // to the child's home: the session stays open there under "Continue", nothing is quit or lost
-  applyLook(gameModel?.wallet);
-  const shout = gameModel?.wallet?.activeShout, tier = playStreak >= 18 ? 3 : playStreak >= 14 ? 2 : playStreak >= 9 ? 1 : playStreak >= 4 ? 0 : -1;
-  if (tier >= 0) box.append(el('p', lookup(SHOUT_PACKS, shout, SHOUT_PACKS.default).labels[tier], 'combo'));
-  box.append(el('p', displayText(q.display), 'question'));
-  if (q.read && window.speechSynthesis && window.SpeechSynthesisUtterance) box.append(button('🔊 Read aloud', () => { window.speechSynthesis.cancel(); window.speechSynthesis.speak(new window.SpeechSynthesisUtterance(q.read)); }, 'text-button'));
-  const timerSkin = gameModel?.wallet?.activeTimer || ''; const clock = el('p', `${q.seconds} s`, `clock ${timerSkin}`); box.append(clock); let left = q.seconds;
-  timer = setInterval(() => { left--; clock.textContent = `${Math.max(0, left)} s`; if (left <= 0) stopTimer(); }, 1000);
+  applyLook(w); root.setAttribute('aria-live', 'off'); // each question repaints the screen: the flash slot alone speaks
+  if (playStart.id !== session.id) playStart = { id: session.id, at: Date.now() };
   const attemptId = crypto.randomUUID();
-  const submit = async (answer) => { stopTimer(); const r = await api('/learn/answer', { sessionId: session.id, index: q.index, attemptId, answer }); playStreak = r.correct ? playStreak + 1 : 0; const fx = lookup(FX_SETS, gameModel?.wallet?.activeFx, null)?.[0]; if (fx && r.correct) note(`${fx} ${fx} ${fx}`);
-    gameSound(r.correct ? 'correct' : 'wrong'); if (r.done) summaryView(session, r.summary); else playView({ ...session, index: r.question.index }, r.question); note(r.correct ? '✓ Correct' : r.result === 'timeout' ? `⏱ Too slow — it was ${r.expected}` : `✗ It was ${r.expected}`); };
-  const submitForm = (fields, read) => { const form = el('form', null, 'answer-form'); for (const f of fields) form.append(f.wrap); const go = el('button', 'Answer', 'primary'); go.type = 'submit'; form.append(go); form.onsubmit = (event) => { event.preventDefault(); run(() => submit(read())); }; box.append(form); fields[0].input.focus(); };
-  if (q.answerType === 'choice') q.display.choices.forEach((c, i) => box.append(button(c, () => submit(String(i)), 'primary')));
-  else if (q.answerType === 'frac') { const n = field('Numerator', 'text', { inputMode: 'numeric', pattern: '(0|[1-9][0-9]{0,3})', maxLength: 4, autocomplete: 'off' }); const d = field('Denominator', 'text', { inputMode: 'numeric', pattern: '[1-9][0-9]{0,3}', maxLength: 4, autocomplete: 'off' }); submitForm([n, d], () => ({ n: n.input.value.trim(), d: d.input.value.trim() })); }
-  else { const a = field('Your answer', 'text', { inputMode: q.answerType === 'dec' ? 'decimal' : 'numeric', maxLength: 10, autocomplete: 'off' }); submitForm([a], () => a.input.value.trim()); }
-  box.append(button('Leave this session', async () => { stopTimer(); await api('/learn/quit', { sessionId: session.id }); await refresh(); }, 'text-button'));
+  const submit = async (answer) => {
+    stopTimer(); try { window.speechSynthesis?.cancel(); } catch { /* no speech */ }
+    const r = await api('/learn/answer', { sessionId: session.id, index: q.index, attemptId, answer });
+    const paperDone = r.correct && session.mode !== 'placement' && (q.index + 1) % T.qpp === 0; // the last question of a paper
+    playStreak = r.correct ? playStreak + 1 : 0;
+    if (r.correct) sound(paperDone ? 'paper' : 'correct'); else if (r.result !== 'timeout') sound('wrong'); // a timeout plays nothing (v2 2164)
+    if (r.done) { summaryView(session, r.summary); return; }
+    const flash = r.correct ? (streakTier(playStreak) ? { combo: playStreak } : { kind: 'ok', text: `⭐ Correct! ${r.expected}` })
+      : r.result === 'timeout' ? { kind: 'late', text: `⏰ Time's up — it was ${r.expected}` } : { kind: 'bad', text: `✗ Not quite — it was ${r.expected}` };
+    playView({ ...session, index: r.question.index }, r.question, { flash, burst: paperDone });
+  };
+  // ↺ Restart: this run is quit and the same one started again (no restart route: the log keeps the quit, port plan section 7)
+  const restart = async () => { stopTimer(); await api('/learn/quit', { sessionId: session.id }); await startRun(session.mode === 'scan' ? { track: 'engine', mode: 'scan' } : { track: session.track }); };
+  // the status row (3112-3125): the avatar in its ring, the track, where the run is, read-aloud, the pet charging, the clock
+  const row = el('div', null, 'status-row'), where = el('span', null, 'q-count'), clock = el('span', null, 'clock');
+  const place = session.mode === 'boss' ? `👑 CHECK POINT T${session.tierEnd / 20}` : session.mode === 'scan' ? '🧠 SCAN' : session.mode === 'placement' ? '🎯 PLACEMENT'
+    : session.mode === 'practice' ? `Practice ${q.paper}` : `Paper ${q.paper}`;
+  where.append(avatarBadge(model.child, w, 22), el('span', T.emoji, 'q-track'), el('span', ` ${T.name}`, 'sr-only'), ` ${place} · ${q.index + 1}/${session.count}`);
+  if (q.read && window.speechSynthesis && window.SpeechSynthesisUtterance) { const tts = el('button', '🔊', 'tts'); tts.type = 'button'; tts.append(el('span', ' Read aloud', 'sr-only')); tts.onclick = () => speak(q.read); where.append(tts); }
+  const pet = petBadge(w, 16, tier || 'sway'); if (pet) where.append(pet);
+  row.append(where, clock);
+  // the timer bar (3126-3128), in the equipped skin until red takes over at 8 s
+  const bar = el('div', null, 'timer-track'), fill = el('div', null, 'timer-fill'), skin = lookup(TBAR_CLASS, w.activeTimer); bar.append(fill);
+  // the flash slot (3131-3143): the last answer's result, or from four right in a row the combo shout in the pack's words
+  const slot = el('div', null, 'flash-slot'), f = after.flash; slot.setAttribute('role', 'status');
+  if (f?.combo) { const pack = lookup(SHOUT_PACKS, w.activeShout, SHOUT_PACKS.default), t = streakTier(f.combo); slot.append(el('span', `🔥 ${f.combo} ${pack.labels[t - 1]}`, `combo streak-${t}${pack.cls ? ` ${pack.cls}` : ''}`)); }
+  else if (f) slot.append(el('div', f.text, `flash ${f.kind} fade`));
+  // the sheet (3145-3172), warming with the streak; the answer box sits on it and is the one field on this screen
+  const sheet = el('div', null, tier ? `sheet sheet-hot-${tier}` : 'sheet'), view = el('div', null, 'qin'); view.append(questionView(q.display)); sheet.append(view);
+  const form = el('form', null, 'answer-form'), rtl = q.display?.layout === 'stack'; let input = null;
+  if (choice) { const grid = el('div', null, 'choice-grid'); (q.display.choices || []).forEach((c, i) => grid.append(button(c, () => submit(String(i)), 'choicebtn'))); sheet.append(grid); }
+  else {
+    input = el('input', null, 'answer-box');
+    Object.assign(input, { type: 'text', inputMode: coarse() ? 'none' : q.answerType === 'dec' ? 'decimal' : 'numeric', maxLength: 12, autocomplete: 'off', placeholder: 'answer…' });
+    input.setAttribute('aria-label', 'Your answer'); sheet.append(input);
+    if (rtl) sheet.append(el('p', 'start with the ones digit — the answer fills right to left', 'subtle'));
+  }
+  // the keypad (3174-3199): 7 8 9 / 4 5 6 / 1 2 3 / 0, the fraction bar for a fraction and the point for a decimal, ⌫. A
+  // column sum is typed from the ones digit, as it is worked: each new digit goes in front (2353-2362).
+  const pad = el('div', null, 'pad'), actions = el('div', null, 'action-col'), padRow = el('div', null, 'pad-row');
+  if (choice) pad.append(el('p', 'tap your answer above 👆', 'pad-hint'));
+  else {
+    const put = (k) => { const v = input.value; if (v.length >= 12 || ((k === '/' || k === '.') && (!v || v.includes(k)))) return; input.value = rtl ? k + v : v + k; };
+    const back = () => { input.value = rtl ? input.value.slice(1) : input.value.slice(0, -1); };
+    for (const d of '7894561230') pad.append(padKey(d, () => put(d)));
+    if (q.answerType === 'frac') pad.append(padKey('∕', () => put('/'), 'slash', 'fraction bar'), padKey('⌫', back, 'back', 'Delete'));
+    else if (q.answerType === 'dec') pad.append(padKey('.', () => put('.'), 'slash', 'decimal point'), padKey('⌫', back, 'back', 'Delete'));
+    else pad.append(padKey('⌫', back, 'back wide', 'Delete'));
+  }
+  // the action column (3200-3204): Go! is the form's submit; a placement test has no Restart (leaving it counts as a quit)
+  const go = el('button', 'Go!', 'go-btn'); go.type = 'submit'; go.disabled = choice; actions.append(go);
+  if (session.mode !== 'placement') actions.append(button('↺ Restart', restart, 'restart-btn'));
+  actions.append(button('✕ Quit', async () => { stopTimer(); await api('/learn/quit', { sessionId: session.id }); await refresh(); }, 'quit-btn'));
+  padRow.append(pad, actions); form.append(sheet, padRow);
+  let left = q.seconds;
+  form.onsubmit = (event) => {
+    event.preventDefault(); if (choice) return;
+    const v = input.value.trim(), [n, d = '1'] = v.split('/'); // a fraction goes as {n, d}; a whole number typed for one as n/1
+    if (!v || (q.answerType === 'frac' && (!n.trim() || !d.trim()))) {
+      input.className = 'answer-box'; void input.offsetWidth; input.className = 'answer-box shake';
+      if (!left) note('Type an answer, then tap Go!'); return;
+    }
+    run(() => submit(q.answerType === 'frac' ? { n: n.trim(), d: d.trim() } : v));
+  };
+  // the clock is display only: at 0 it asks for the answer, and the server rules on the time when the answer arrives
+  const paint = () => {
+    const hurry = left <= 8; clock.textContent = `⏱ ${left}s`; clock.className = hurry ? 'clock hurry' : 'clock';
+    fill.className = hurry ? 'timer-fill hurry' : `timer-fill${skin ? ` ${skin}` : ''}`; setVar(fill, '--w', `${Math.max(0, (left / q.seconds) * 100)}%`);
+  };
+  paint();
+  timer = setInterval(() => {
+    left = Math.max(0, left - 1); paint();
+    if (!left) { stopTimer(); slot.replaceChildren(el('div', choice ? '⏰ Time\'s up — tap your answer!' : '⏰ Time\'s up — tap Go!', 'flash late fade')); }
+  }, 1000);
+  box.append(row, bar, ...(after.burst ? [moneySplash('mini')] : []), slot, form, el('p', `${Math.floor((Date.now() - playStart.at) / 60000)} min elapsed · target: under 20`, 'subtle play-foot'));
+  if (input && !coarse()) input.focus();
 }
 function summaryView(session, s) {
   transientView = true;
