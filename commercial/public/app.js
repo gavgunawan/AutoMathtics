@@ -698,7 +698,8 @@ function pinPane(child) {
   if (!coarse()) pin.focus();
 }
 // ---- secure learning + migrated v2 game layer ----
-const TRACK = { engine: { name: 'ENGINE', emoji: '⚙️' }, nav: { name: 'NAVIGATOR', emoji: '🧭' } };
+// qpp: questions per paper (display mirror of progress.mjs Q_PER_PAPER); c: the track's colour class (v2 170-173)
+const TRACK = { engine: { name: 'ENGINE', label: 'Engine', emoji: '⚙️', qpp: 5, c: 'c-cyan' }, nav: { name: 'NAVIGATOR', label: 'Navigator', emoji: '🧭', qpp: 3, c: 'c-gold' } };
 const EQUIP_SLOT = { pet: 'activePet', fx: 'activeFx', snd: 'activeSnd', bg: 'activeBg', ring: 'ring', outfit: 'activeOutfit', shout: 'activeShout', timer: 'activeTimer', title: 'activeTitle', namefx: 'activeNameFx', map: 'activeMap', vehicle: 'activeVehicle', base: 'activeBase' };
 // The v2 look (main:src/automathtics-src.jsx): display constants only. Prices, crate rolls, unlocks and every other outcome
 // stay with the server; these say how a result it sent is drawn.
@@ -816,45 +817,178 @@ function gameSound(kind) {
 }
 const runLabel = (s) => s.mode === 'boss' ? `👑 Check point T${s.tierEnd / 20}` : s.mode === 'scan' ? '🧠 SYSTEM SCAN · ×2 LOOT' : s.mode === 'placement' ? '🎯 Placement test' : s.mode === 'practice' ? 'Practice run' : `Papers ${s.startPaper}–${s.startPaper + 4}`;
 const gameItem = (id) => gameModel?.catalog?.find((x) => x.id === id) || null;
-// the old home's hero, dressed by the cosmetics layer until the home is rebuilt in v2's layout (port plan step 6)
-function gameHero(box, child, g) {
-  const w = g.wallet, hero = el('div', null, 'game-hero'), pet = petBadge(w, 26), chip = titleChip(w), vehicle = gameItem(w.activeVehicle);
-  hero.append(avatarBadge(child, w, 40)); if (pet) hero.append(pet);
-  const info = el('div'); info.append(nameSpan(child.nickname, w)); if (chip) info.append(chip);
-  if (vehicle?.kind === 'vehicle') info.append(el('span', `${vehicle.emoji} ${vehicle.name}`, 'card-meta'));
-  hero.append(info); box.append(hero);
-  const card = lookup(BGCARD_CLASS, w.activeBg); if (card) box.className += ` ${card}`; if (w.activeBase === 'base_deck') box.className += ' base-deck';
+// ---- the child's home (v2 2859-3073): the header above the card, the card, and the child's log below it ----
+const LEVEL_IDS = 'ABCDEF', LAST_LEVEL = 5, EGG_PASSES = 5; // display mirrors of the server's six sectors and the egg's five passes
+// v2's full-screen button (1095-1106, 1611-1613): only where the browser offers it, and not in an iPhone home-screen app
+const fsOn = () => Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+const fsAble = () => Boolean(document.fullscreenEnabled || document.webkitFullscreenEnabled) && !globalThis.navigator?.standalone;
+function toggleFullscreen() {
+  const d = document, e = d.documentElement;
+  try { (fsOn() ? (d.exitFullscreen || d.webkitExitFullscreen)?.call(d) : (e?.requestFullscreen || e?.webkitRequestFullscreen)?.call(e))?.catch?.(() => {}); } catch { /* refused: the page stays as it is */ }
 }
+async function switchUser() { await api('/session/select', {}); channel?.postMessage('changed'); await refresh(); }
+// one way into a run: a track (the server picks paper, check point or practice), the weekly scan, or the placement test
+async function startRun(body) {
+  playStreak = 0; const r = await api('/learn/session', body);
+  if (r.settled) return summaryView({ mode: 'placement', track: 'engine' }, r.summary); // an abandoned placement test was graded as it stood
+  playView(r.session, r.question);
+}
+// the header (2861-2886): avatar with its ring, the pet, a warming egg; the name, the sector(s) and the title; the level's name
+function homeHeader(child, st, w) {
+  const e = st.engine, n = st.nav, header = el('header', null, `home-header ${accClass(child)}`), who = el('div', null, 'home-who');
+  who.append(avatarBadge(child, w, 40));
+  const pet = petBadge(w, 26); if (pet) who.append(pet);
+  if (w.egg && !w.egg.hatched) {
+    const have = Math.max(0, Math.min(EGG_PASSES, st.stats.passes - (w.egg.passesAt || 0))), egg = el('span', '🥚', 'eggwrap');
+    egg.setAttribute('aria-label', `Mystery Egg, ${have} of ${EGG_PASSES} passes`); egg.append(el('span', `${have}/${EGG_PASSES}`, 'eggcount')); who.append(egg);
+  }
+  const words = el('div', null, 'home-words'), kicker = el('p', null, 'kicker'), chip = titleChip(w);
+  kicker.append(nameSpan(child.nickname, w), e.level === n.level ? ` · SECTOR ${e.levelId}` : ` · ⚙️ SECTOR ${e.levelId} · 🧭 SECTOR ${n.levelId}`); if (chip) kicker.append(chip);
+  words.append(kicker, el('h1', e.level === n.level ? LEVEL_NAMES[e.level] : `${LEVEL_NAMES[e.level]} / ${LEVEL_NAMES[n.level]}`));
+  who.append(words);
+  const tools = el('span', null, 'home-tools');
+  if (fsAble()) { const fs = el('button', fsOn() ? '⤢' : '⛶', 'tiny fs'); fs.type = 'button'; fs.setAttribute('aria-label', fsOn() ? 'Exit full screen' : 'Full screen'); fs.onclick = toggleFullscreen; tools.append(fs); }
+  tools.append(button('Switch user', switchUser, 'tiny'));
+  header.append(who, tools); return header;
+}
+// the card's opening lines (2892-2902)
+function homeIntro(e, n) {
+  const p = el('p', null, 'intro'), b = (text) => el('b', text);
+  if (e.done && n.done && e.level === LAST_LEVEL && n.level === LAST_LEVEL) p.append('🏆 All sectors complete — both tracks! Incredible work. Tap a track below to practice any papers again.');
+  else if (e.level === n.level) p.append('Sector ', b(e.levelId), ` · ${LEVEL_NAMES[e.level]}. Two tracks: `, b('⚙️ Engine'), ' drills the numbers, ', b('🧭 Navigator'), ' reads and reasons. Both to 100 to jump.');
+  else p.append(b('⚙️ Engine'), ' is in Sector ', b(e.levelId), ' · ', b('🧭 Navigator'), ' is in Sector ', b(n.levelId), '. Each track jumps on when the other has finished that sector too.');
+  return p;
+}
+// the day streak (2913-2920): three pass days in a row pay a bonus block. The run is the server's (S2); shields are held ones.
+function streakNote(run, shields) {
+  const left = 3 - (run % 3);
+  const text = run > 0 && run % 3 === 0 ? `🔥 ${run}-day streak — bonus banked! Keep it going!`
+    : run > 0 ? `🔗 Day ${run % 3} of 3 — ${left} more day${left > 1 ? 's' : ''} in a row for +⚡50 🏆100!` : 'Pass today to start a 3-day streak (+⚡50 🏆100 bonus)!';
+  return el('p', `${text}${shields > 0 ? ` · 🛡️×${shields}` : ''}`, 'streak-note');
+}
+// a track card (2929-2957): the track's colour (mint once the sector is done), what comes next, the sector's five check
+// points as v2's tier map (crowns and numbers, never colour alone), and the button that starts the run the server picks
+function trackCard(t, p, canStart) {
+  const T = TRACK[t], done = p.done, due = p.bossDue, passed = Math.min(p.paper - 1, 100), sp = Math.min(p.paper, 100);
+  const live = Math.min(5, Math.floor(passed / 20) + (passed > 0 && passed % 20 === 0 ? 0 : 1));
+  const card = el('div', null, `track-card ${done ? 'c-mint' : T.c}`), head = el('div', null, 'track-head'), status = el('p', null, 'track-status');
+  head.append(el('span', `${T.emoji} ${T.name} · ${p.levelId}`, 'section-label'), el('span', done ? '✓ COMPLETE' : `${5 * T.qpp} q`, 'track-q'));
+  if (done) status.append('Sector done — practise any papers while the other track catches up.');
+  else if (due) status.append(el('b', `👑 CHECK POINT T${p.bossCleared + 1} is due`, 'due'));
+  else status.append('Next: ', el('b', `papers ${sp}–${Math.min(sp + 4, 100)}`), ' · 100% to unlock');
+  const map = el('div', null, 'tier-map'); map.setAttribute('aria-label', `${T.label} tier map`);
+  for (let k = 1; k <= 5; k++) {
+    const cleared = passed >= k * 20, beat = p.bossCleared >= k, here = k === live && !done, stop = el('span', null, 'tier-stop');
+    stop.setAttribute('title', `Check point ${k} — papers ${k * 20 - 19}–${k * 20}`);
+    stop.append(el('span', beat || cleared ? '👑' : '🔒', `tier-node${beat ? ' beat' : cleared ? ' boss' : here ? ' lit' : ''}`),
+      el('span', here ? `${passed}/100` : done && k === 5 ? '100/100' : String(k * 20), `tier-label${here ? ' lit' : cleared ? ' passed' : ''}`));
+    map.append(el('span', null, `tier-bar${cleared ? ' passed' : here ? ' lit' : ''}`), stop);
+  }
+  card.append(head, status, map);
+  if (canStart) card.append(button(due ? `👑 CHECK POINT T${p.bossCleared + 1} ▶` : done ? '🔁 Practice ▶' : `${T.emoji} Start ${T.label} ▶`,
+    () => startRun({ track: t }), `primary track-go${due || (!done && t === 'nav') ? ' gold' : done ? ' done' : ''}`));
+  return card;
+}
+// a pending placement test stands where the track cards would (they wait for it)
+function placementCard(st) {
+  const card = el('div', null, 'track-card c-violet');
+  card.append(el('span', `🎯 PLACEMENT TEST · SECTOR ${LEVEL_IDS[st.placement.level] || 'A'}`, 'section-label'),
+    el('p', 'Engine and Navigator questions from the middle of the sector. Timed — answer as quickly as you can. Each track will start where you are ready.', 'track-status'));
+  if (!st.active) card.append(button('Start the placement test', () => startRun({ track: 'engine', mode: 'placement' }), 'primary violet track-go'));
+  return card;
+}
+// the jump line (2959-2976): both tracks to 100 and five crowns before the next sector, as progress.mjs canJump has it
+function jumpBanner(e, n) {
+  const can = (me, other) => me.done && me.level < LAST_LEVEL && (other.level > me.level || (other.level === me.level && other.done));
+  const ready = [['engine', e, n], ['nav', n, e]].filter(([, me, other]) => can(me, other)).map(([t]) => `${TRACK[t].emoji} ${TRACK[t].label}`);
+  let text;
+  if (e.done && n.done && e.level === LAST_LEVEL && n.level === LAST_LEVEL) text = '🏆 ALL SECTORS COMPLETE';
+  else if (ready.length) text = `⬆ ${ready.join(' and ')} ready to jump — pass any session to make the jump`;
+  else if (e.level === n.level) text = `⬆ Jump to Sector ${LEVEL_IDS[Math.min(LAST_LEVEL, e.level + 1)]} needs ⚙️ Engine ${e.done ? '✓' : 'to 100 + 5 crowns'} and 🧭 Navigator ${n.done ? '✓' : 'to 100 + 5 crowns'}`;
+  else {
+    const [aheadT, A, behindT, B] = e.level > n.level ? ['engine', e, 'nav', n] : ['nav', n, 'engine', e], ahead = TRACK[aheadT], behind = TRACK[behindT];
+    const aL = LEVEL_IDS[A.level], bL = LEVEL_IDS[B.level];
+    text = `${behind.emoji} ${behind.label} jumps ahead as soon as Sector ${bL} is done · ${ahead.emoji} ${ahead.label} ${A.done ? 'has finished' : 'can\'t leave'} Sector ${aL} ${A.done ? 'and waits' : 'until'} ${behind.label} ${A.done ? 'for' : 'has finished'} ${behindT === 'nav' && B.level < A.level ? `Sectors ${bL}–${aL}` : `Sector ${aL}`}${A.done ? '' : ' too'}`;
+  }
+  return el('p', text, ready.length ? 'jump-banner ready' : 'jump-banner');
+}
+// the Family Rocket (2977-3015): the tank with the rocket riding its fill, each crew member's fuel (the server sends nicknames
+// and amounts, no ids: the owner's choice, 11 Sep 2026), and a crew member's fuel buttons. The balance only greys a button
+// out: the server decides every pour and the launch.
+function rocketPanel(g) {
+  const r = g.rocket; if (!r?.prize) return null;
+  const launched = r.status === 'launched', rp = r.currency === 'rp', sym = rp ? '🏆' : '⚡', min = r.minEach || 0, bal = rp ? g.wallet.rp : g.wallet.gc;
+  const box = el('div', null, launched ? 'rocket-panel launched' : 'rocket-panel'), head = el('div', null, 'rocket-head');
+  head.append(el('span', '🚀 FAMILY ROCKET', 'section-label'), el('span', `${r.prize.emoji} ${r.prize.name}`, 'rocket-prize'));
+  const tank = el('div', null, 'rocket-track'); setVar(tank, '--w', `${Math.min(100, Math.round((r.totalFuel / (r.goal || 1)) * 100))}%`);
+  tank.setAttribute('aria-label', `rocket fuel ${r.totalFuel} of ${r.goal}`);
+  const rider = el('span', '🚀', launched ? 'rocket-rider rocket-fly' : 'rocket-rider rocket-ride'); rider.setAttribute('aria-hidden', 'true');
+  tank.append(el('span', null, 'rocket-fill'), rider);
+  const crew = el('p', null, 'rocket-crew'); crew.append(el('span', `${sym}${r.totalFuel} / ${r.goal}`, 'rocket-total'));
+  for (const c of Array.isArray(r.crew) ? r.crew : []) crew.append(el('span', `${c.nickname} ${sym}${c.fuel}${min ? (c.metMin ? ' ✓' : ` / ${min}`) : ''}`, min && c.metMin ? 'met' : ''));
+  box.append(head, tank, crew);
+  if (launched) box.append(el('p', `🎉 LIFT-OFF! ${r.prize.emoji} ${r.prize.name} is yours — ask your parent for it.`, 'rocket-note lift'));
+  else if (!r.isCrew) box.append(el('p', 'you\'re not on this rocket\'s crew — ask your parent', 'rocket-note'));
+  else {
+    const pour = el('div', null, 'rocket-fuel'); pour.append(el('span', `⛽ fuel it with ${rp ? 'reward points' : 'grid coins'}:`, 'rocket-note'));
+    for (const amount of rp ? [100, 200, 500] : [50, 100, 250]) {
+      const b = button(`${sym}${amount}`, async () => { await api('/game/rocket/fuel', { rocketId: r.id, amount, operationId: crypto.randomUUID() }); await childScreen(); }, `tiny ${rp ? 'c-gold' : 'c-violet'}`);
+      b.disabled = bal < amount; b.setAttribute('aria-label', `Fuel ${sym}${amount}`); pour.append(b);
+    }
+    if (min > 0 && (r.myFuel || 0) < min) pour.append(el('span', `everyone needs ${sym}${min} in for lift-off`, 'rocket-note due'));
+    box.append(pour);
+  }
+  return box;
+}
+// the log below the card (3034-3071): one row per session, newest first; a quit row says where it stopped
+const mmss = (secs) => (Number.isFinite(secs) ? `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}` : '—');
+const whenOf = (h) => (Number.isFinite(h.ts) ? `${new Date(h.ts).toLocaleDateString()} ${new Date(h.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : h.date || '—');
+function homeLog(child, history) {
+  if (!history?.length) return null;
+  const box = el('div', null, 'logbox'), table = el('table', null, 'logtable'), thead = el('thead'), head = el('tr'), body = el('tbody');
+  for (const th of ['Date & time', 'Papers', 'Score', '✓', '✗', '⏰', 'Time', 'Result']) head.append(el('th', th));
+  thead.append(head);
+  for (const h of history) {
+    const row = el('tr'), td = (text, className) => { const c = el('td', text, className); row.append(c); return c; };
+    td(whenOf(h)); td(`${h.levelId} · ${h.track === 'nav' ? '🧭 ' : ''}${h.papers}`);
+    if (h.quit) td(`✕ quit at Q${(Number(h.atQ) || 0) + 1}`, 'log-quit').setAttribute('colspan', '6');
+    else {
+      const [word, tone] = h.mode === 'placement' ? ['🎯 PLACED', 'placed'] : !h.passed ? ['retry', 'retry'] : h.mode === 'boss' ? ['👑 CP', 'cp'] : h.mode === 'scan' ? ['🧠 SCAN', 'scan'] : ['PASS', 'pass'];
+      td(`${h.correct}/${h.total}`, 'log-score'); td(String(h.correct), 'log-ok'); td(String(h.incorrect), 'log-bad'); td(String(h.timeout), 'log-late'); td(mmss(h.secs)); td(word, `log-result ${tone}`);
+    }
+    body.append(row);
+  }
+  table.append(thead, body); box.append(el('p', `${child.nickname}'s log`, 'log-title'), table); return box;
+}
+// The home: root.replaceChildren(header, card, log). The card wears the background's colours, the deck and the vehicle.
 async function childScreen() {
-  stopTimer(); playStreak = 0; const child = model.child;
+  stopTimer(); playStreak = 0; transientView = false; const child = model.child;
   const [st, g] = await Promise.all([api('/learn/state'), api('/game/state')]); gameModel = g;
-  const box = panel('YOUR GRID', `Welcome, ${child.nickname}.`, 'Pick a track and go. Every mark, coin and crown is kept safe by the grid.');
-  applyLook(g.wallet); gameHero(box, child, g);
-  const wallet = el('div', null, 'allowance'); wallet.append(el('strong', `⚡ ${g.wallet.gc}`, 'count'), el('span', 'grid coins'), el('strong', `🏆 ${g.wallet.rp}`, 'count'), el('span', 'reward points'), el('span', `🛡️ ${g.wallet.shields}`, 'badge')); box.append(wallet);
-  if (g.wallet.egg && !g.wallet.egg.hatched) box.append(el('p', `🥚 Mystery Egg warming · ${Math.max(0, st.stats.passes - g.wallet.egg.passesAt)} / 5 passes`, 'notice'));
-  if (st.active) box.append(el('p', `A ${st.active.session.mode === 'placement' ? 'placement test' : `${TRACK[st.active.session.track].name} session`} is open at question ${st.active.session.index + 1} of ${st.active.session.count}.`, 'notice'), button('Continue', () => playView(st.active.session, st.active.question), 'primary'));
-  if (st.placement?.status === 'pending') { // the test comes first; the track cards wait
-    const card = el('div', null, 'track');
-    card.append(el('strong', `🎯 PLACEMENT TEST · SECTOR ${'ABCDEF'[st.placement.level]}`), el('span', 'Engine and Navigator questions from the middle of the sector. Timed — answer as quickly as you can. Each track will start where you are ready.', 'card-meta'));
-    if (!st.active) card.append(button('Start the placement test', async () => { playStreak = 0; const r = await api('/learn/session', { track: 'engine', mode: 'placement' }); if (r.settled) return summaryView({ mode: 'placement', track: 'engine' }, r.summary); playView(r.session, r.question); }, 'primary')); // settled: an abandoned test was graded as it stood
-    box.append(card);
+  const w = g.wallet, e = st.engine, n = st.nav, deck = w.activeBase === 'base_deck', veh = gameItem(w.activeVehicle)?.kind === 'vehicle' ? gameItem(w.activeVehicle) : null;
+  const pending = st.placement?.status === 'pending';
+  const box = panel('', '', '', ['home', lookup(BGCARD_CLASS, w.activeBg), deck && 'base-deck', (veh || deck) && 'has-top'].filter(Boolean).join(' '));
+  applyLook(w); box.replaceChildren();
+  if (deck) { // the Command Deck's radar and ticker (2889-2890)
+    const radar = el('span', null, 'deck-radar'), ticker = el('p', null, 'deck-ticker'); radar.setAttribute('aria-hidden', 'true');
+    ticker.append(el('b', '◉'), ` COMMAND DECK ONLINE · ${child.nickname.toUpperCase()} · ⚙️ ${e.levelId} · 🧭 ${n.levelId} · ALL SYSTEMS GO`); box.append(radar, ticker);
   }
-  for (const t of st.placement?.status === 'pending' ? [] : ['engine', 'nav']) {
-    const p = st[t], card = el('div', null, 'track');
-    const next = p.next.mode === 'boss' ? `👑 Check point T${p.next.tierEnd / 20} is due` : p.next.mode === 'practice' ? 'Sector done — practice until the other track catches up' : `Next: papers ${p.next.startPaper}–${p.next.startPaper + 4}`;
-    card.append(el('strong', `${TRACK[t].emoji} ${TRACK[t].name} · SECTOR ${p.levelId}`), el('span', `${Math.min(p.paper - 1, 100)} / 100 papers · ${p.bossCleared} / 5 crowns`, 'card-meta'), el('span', next, 'card-meta'));
-    if (!st.active) card.append(button(`Start ${TRACK[t].name}`, async () => { playStreak = 0; const r = await api('/learn/session', { track: t }); playView(r.session, r.question); }, 'primary')); box.append(card);
+  if (veh) { const v = el('span', veh.emoji, 'vehicle'); v.setAttribute('aria-hidden', 'true'); box.append(v); }
+  const tiles = el('div', null, 'wallet-row'); // the two wallet tiles (2903-2912)
+  for (const [big, sub, c] of [[`⚡ ${w.gc.toLocaleString()}`, 'grid coins · spend in 🛒', 'c-cyan'], [`🏆 ${w.rp.toLocaleString()}`, 'reward points', 'c-gold']]) {
+    const tile = el('div', null, `wallet-tile ${c}`); tile.append(el('span', big, 'yen'), el('span', sub, 'wallet-sub')); tiles.append(tile);
   }
-  if (st.scan?.available && !st.active) box.append(button('🧠 SYSTEM SCAN · WEEKLY ×2 LOOT', async () => { playStreak = 0; const r = await api('/learn/session', { track: 'engine', mode: 'scan' }); playView(r.session, r.question); }, 'scan-button'));
-  else if (st.scan?.unlocked) box.append(el('p', '🧠 System Scan done this week · resets Monday', 'small muted'));
-  if (g.rocket) {
-    const r = g.rocket, mine = r.myFuel || 0, rocket = el('div', null, 'rocket-card');
-    rocket.append(el('strong', `🚀 FAMILY ROCKET · ${r.prize.emoji} ${r.prize.name}`), el('span', `${r.totalFuel} / ${r.goal} ${r.currency === 'rp' ? '🏆' : '⚡'} · you: ${mine}${r.minEach ? ` / ${r.minEach} min` : ''}`, 'card-meta'));
-    if (r.status === 'fueling' && r.isCrew) for (const amt of (r.currency === 'rp' ? [100, 200, 500] : [50, 100, 250])) rocket.append(button(`Fuel ${r.currency === 'rp' ? '🏆' : '⚡'}${amt}`, async () => { await api('/game/rocket/fuel', { rocketId: r.id, amount: amt, operationId: crypto.randomUUID() }); await childScreen(); }, 'ghost'));
-    if (r.status === 'launched') rocket.append(el('span', '🎉 LIFT-OFF! Ask your parent for the prize.', 'notice')); box.append(rocket);
-  }
-  if (st.history.length) { const log = el('div', null, 'log'); for (const h of st.history.slice(0, 6)) log.append(el('span', `${h.date} · ${h.mode === 'scan' ? '🧠' : TRACK[h.track].emoji} ${h.levelId} ${h.papers} · ${h.quit ? `left at Q${h.atQ + 1}` : h.passed ? 'PASS' : `${h.correct}/${h.total}`}`, 'card-meta')); box.append(log); }
-  const actions = el('div', null, 'actions'); actions.append(button('🛒 Shop & rewards', shopScreen, 'ghost'), button('🗺 Map & fluency', mapScreen, 'ghost'), button('Switch child', async () => { await api('/session/select', {}); channel?.postMessage('changed'); await refresh(); }, 'ghost'), button('Parent sign-in', () => signInScreen(), 'text-button')); box.append(actions);
+  box.append(homeIntro(e, n), tiles, streakNote(g.liveRun || 0, w.shields || 0));
+  if (st.active) { const s = st.active.session; box.append(el('p', `A ${s.mode === 'placement' ? 'placement test' : `${TRACK[s.track].name} session`} is open at question ${s.index + 1} of ${s.count}.`, 'notice'), button('Continue', () => playView(s, st.active.question), 'primary')); }
+  const tracks = el('div', null, 'track-grid');
+  if (pending) tracks.append(placementCard(st)); else for (const t of ['engine', 'nav']) tracks.append(trackCard(t, st[t], !st.active));
+  box.append(tracks); if (!pending) box.append(jumpBanner(e, n));
+  const rocket = rocketPanel(g); if (rocket) box.append(rocket);
+  const nav = el('div', null, 'row-buttons home-nav'); nav.append(button('🛒 Shop', shopScreen, 'ghost'), button('🗺 Map', mapScreen, 'ghost')); box.append(nav);
+  if (st.scan?.available && !st.active && !pending) box.append(button('🧠 SYSTEM SCAN — weekly ×2 loot ▶', () => startRun({ track: 'engine', mode: 'scan' }), 'ghost c-violet scan-go'));
+  else if (st.scan?.doneThisWeek) box.append(el('p', '🧠 System Scan done this week · resets Monday', 'subtle'));
+  box.append(button('Parent sign-in', () => signInScreen(), 'text-button'));
+  const log = homeLog(child, st.history);
+  root.replaceChildren(homeHeader(child, st, w), box, ...(log ? [log] : []));
 }
 async function shopScreen() {
   transientView = true; const g = await api('/game/state'); gameModel = g; const box = panel('GRID SHOP', 'Spend what you earned.', 'Cosmetics and utilities use ⚡ Grid Coins. Family rewards use 🏆 Reward Points. Prices and outcomes come from the server.');

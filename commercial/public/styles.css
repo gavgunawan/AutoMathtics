@@ -324,6 +324,67 @@ html[data-mode=kid][data-bg] body:after,html[data-mode=kid][data-bg=bg_space] bo
 /* the route map's panel, its grid in the map theme's colour (--grid from MAP_THEMES through setVar; 3383, 4307-4309) */
 .tronmap{position:relative;overflow:hidden;background:var(--mapbg);border:1px solid var(--v2line);border-radius:14px;padding:16px 10px 10px}
 .tronmap:before{content:"";position:absolute;inset:0;pointer-events:none;opacity:.5;background-image:linear-gradient(var(--grid,rgba(53,224,255,.06)) 1px,transparent 1px),linear-gradient(90deg,var(--grid,rgba(53,224,255,.06)) 1px,transparent 1px);background-size:22px 22px;-webkit-mask-image:linear-gradient(to top,#000 30%,transparent);mask-image:linear-gradient(to top,#000 30%,transparent)}
+/* ---- the child's home (v2 2859-3073): the header above the card, the card, the log below ---- */
+.home-header{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;width:100%;max-width:640px;margin:0 auto 12px;animation:screenIn .36s cubic-bezier(.16,1,.3,1) both}
+.home-who{display:flex;align-items:center;gap:10px;min-width:0}
+.home-words{flex:1;min-width:0}
+.home-tools{display:inline-flex;gap:6px;align-items:center;flex:0 0 auto}
+.tiny.fs{font-size:15px;line-height:1;color:var(--cyan);border-color:var(--v2line)}
+.panel>.kicker:empty{display:none}
+.wallet-row{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin:12px 0 4px}
+.wallet-tile{display:inline-flex;flex-direction:column;gap:2px;min-width:130px;padding:10px 16px;border:2px solid var(--c);border-radius:14px;background:var(--void)}
+.wallet-tile.c-cyan{box-shadow:0 0 14px rgba(53,224,255,.15)}.wallet-tile.c-gold{box-shadow:0 0 18px rgba(255,176,32,.15)}
+.yen{font:600 26px/1.1 var(--mono);color:var(--c)}
+.wallet-sub{font-size:12px;font-weight:700;color:var(--dim)}
+.streak-note{margin:2px 0 0;font:600 13px/1.5 var(--mono);color:var(--magenta)}
+.track-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;margin:14px 0 0}
+.track-card{padding:10px 10px 12px;border:1.5px solid var(--c);border-radius:12px;background:var(--void);text-align:left}
+.track-card.c-cyan{box-shadow:0 0 14px #35E0FF22}.track-card.c-gold{box-shadow:0 0 14px #FFB02022}.track-card.c-mint{box-shadow:0 0 14px #2DFFB322}.track-card.c-violet{box-shadow:0 0 14px #8A5CFF22}
+.track-head{display:flex;align-items:center;gap:6px}
+.track-q{margin-left:auto;font:600 10.5px var(--mono);color:var(--dim)}
+.track-status{min-height:18px;margin:6px 0 0;font-size:12.5px;line-height:1.45;color:var(--txt)}
+.track-status .due{color:var(--gold)}
+.tier-map{display:flex;align-items:flex-start;gap:3px;margin:10px 0 2px}
+.tier-bar{flex:1;min-width:6px;height:4px;margin-top:10px;border-radius:99px;background:var(--v2line)}
+.tier-bar.lit{background:var(--c)}.tier-bar.passed{background:var(--mint)}
+.tier-stop{flex:0 0 auto;display:inline-flex;flex-direction:column;align-items:center;gap:2px}
+.tier-node{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:7px;font-size:12px;line-height:1;background:var(--void);border:2px solid var(--v2line)}
+.tier-node.lit{border-color:var(--c)}.tier-node.boss{border-color:var(--magenta)}.tier-node.beat{background:var(--mint);border-color:var(--mint)}
+.tier-label{font:600 9.5px/1 var(--mono);white-space:nowrap;color:var(--dim)}
+.tier-label.lit{font-size:10.5px;color:var(--c)}.tier-label.passed{color:var(--mint)}
+.track-go{width:100%;margin-top:8px;padding:10px 12px;font-size:15px}
+.primary.gold,.primary.violet{color:var(--on-bright)}
+.jump-banner{margin:10px 0 0;padding:8px 12px;border-radius:10px;border:1px dashed var(--v2line);background:var(--void);font-size:12px;font-weight:700;line-height:1.45;color:var(--dim);text-align:center}
+.jump-banner.ready{background:var(--jump-fill);border-color:var(--mint);color:var(--mint)}
+/* the Family Rocket (2977-3015) */
+.rocket-panel{position:relative;margin:14px 0 0;padding:10px 12px 12px;border-radius:12px;background:var(--void);border:1.5px solid var(--violet);box-shadow:0 0 14px rgba(138,92,255,.25);text-align:left;--c:var(--violet)}
+.rocket-panel.launched{border-color:var(--gold);box-shadow:0 0 22px rgba(255,176,32,.35);--c:var(--gold)}
+.rocket-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.rocket-prize{margin-left:auto;font-size:12.5px;font-weight:700;color:var(--txt)}
+.rocket-track{position:relative;height:14px;margin:10px 0 4px;border-radius:99px;background:var(--panel);border:1px solid var(--v2line)}
+.rocket-fill{display:block;width:var(--w);height:100%;border-radius:99px;background:linear-gradient(90deg,#35E0FF,#8A5CFF);box-shadow:0 0 10px rgba(138,92,255,.6);transition:width .6s cubic-bezier(.2,.8,.2,1)}
+.launched .rocket-fill{background:linear-gradient(90deg,#FFB020,#FF2DA8)}
+.rocket-rider{position:absolute;top:-9px;left:calc(var(--w) - 12px);font-size:20px;line-height:1;transition:left .6s cubic-bezier(.2,.8,.2,1)}
+.rocket-ride{animation:petSway 2.2s ease-in-out infinite;filter:drop-shadow(0 0 6px #8A5CFF)}
+.rocket-fly{animation:launchUp 1.8s cubic-bezier(.5,0,.3,1) forwards;filter:drop-shadow(0 0 8px #FFB020)}
+.rocket-crew{display:flex;flex-wrap:wrap;gap:4px 12px;margin:0;font:600 11.5px/1.5 var(--mono);color:var(--dim)}
+.rocket-total{color:var(--txt)}.rocket-crew .met{color:var(--mint)}
+.rocket-fuel{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px}
+.rocket-note{margin:8px 0 0;font-size:11.5px;color:var(--dim)}
+.rocket-fuel .rocket-note{margin:0}
+.rocket-note.due{font-size:11px;color:var(--gold)}
+.rocket-note.lift{font-size:13.5px;font-weight:700;color:var(--gold)}
+.home-nav{margin-top:14px}
+.scan-go{margin-top:8px}
+/* the log below the card (st.logBox 3803, st.table 3829-3831) */
+.logbox{width:100%;max-width:640px;margin:20px auto 0;padding:16px 14px;overflow-x:auto;background:var(--panel);border:1px solid var(--v2line);border-radius:14px;text-align:left}
+.logtable{width:100%;border-collapse:collapse;font-size:12px}
+.logtable th{padding:6px;border-bottom:1.5px solid var(--v2line);text-align:left;font-size:11px;font-weight:700;color:var(--dim)}
+.logtable td{padding:6px;border-bottom:1px solid var(--row);white-space:nowrap;color:var(--txt)}
+.logtable .log-score{font-weight:700;color:var(--cyan)}.logtable .log-ok{color:var(--mint)}.logtable .log-bad{color:var(--red)}.logtable .log-late{color:var(--gold)}
+.logtable .log-quit{font-weight:700;color:var(--dim)}
+.logtable .log-result{font-weight:700}.log-result.pass{color:var(--mint)}.log-result.cp{color:var(--gold)}.log-result.scan,.log-result.placed{color:var(--violet)}.log-result.retry{color:var(--red)}
+@media(max-width:760px){.home-header{flex-wrap:wrap;align-items:center}.home-tools{margin-left:auto}}
 /* no motion: nothing animates, and neither the decor layer (static columns of symbols would only sit on the screen) nor a
    coin burst is drawn; the crate's prize shows at once */
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}html[data-mode] #decor,.splash{display:none}.crate-item,.crate-name{opacity:1}}
@@ -332,14 +393,12 @@ html[data-mode=kid][data-bg] body:after,html[data-mode=kid][data-bg=bg_space] bo
 .question { font-size: 2rem; font-weight: 700; letter-spacing: 0.02em; margin: 0.6rem 0 0.2rem; word-break: break-word; }
 .clock { font-variant-numeric: tabular-nums; opacity: 0.7; margin: 0 0 0.8rem; }
 .track { display: grid; gap: 0.35rem; padding: 0.9rem 1rem; margin: 0.6rem 0; border: 1px solid rgba(255,255,255,0.12); border-radius: 12px; }
-.log { display: grid; gap: 0.2rem; margin: 0.8rem 0; }
 .answer-form { display: grid; gap: 0.6rem; margin: 0.4rem 0 0.8rem; }
 
 /* ---- migrated v2 game layer ---- */
-.game-hero{display:flex;align-items:center;gap:18px;margin:20px 0;padding:18px 20px;border:1px solid #8a5cff44;border-radius:18px;background:linear-gradient(135deg,#171337aa,#0b1429aa)}
 .shop-row,.approval{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:10px;margin:8px 0;padding:11px 13px;border:1px solid #8aa0ef22;border-radius:12px;background:#081126aa}.shop-name{font-weight:750;overflow-wrap:anywhere}.shop-cost{font:750 12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#ffcf70;white-space:nowrap}.shop-row button,.approval button{margin:0;min-height:38px;padding:8px 11px;font-size:11px}
-.rocket-card{display:grid;gap:7px;margin:16px 0;padding:15px 17px;border:1px solid #8a5cff66;border-radius:15px;background:linear-gradient(120deg,#17133eaa,#0b0e23);box-shadow:0 0 22px #8a5cff18}.rocket-card button{justify-self:start}.heat-row{display:flex;justify-content:space-between;gap:16px;align-items:center;margin:6px 0;padding:10px 12px;border-left:3px solid #57e8f8;background:#57e8f808;border-radius:8px}.combo{text-align:center;font-weight:950;letter-spacing:.12em;color:#ffb020;text-shadow:0 0 18px #ff2da888;animation:comboPop .3s ease-out}.scan-button{width:100%;background:linear-gradient(110deg,#8a5cff,#ff2da8);border-color:transparent;box-shadow:0 0 26px #8a5cff33}
+.heat-row{display:flex;justify-content:space-between;gap:16px;align-items:center;margin:6px 0;padding:10px 12px;border-left:3px solid #57e8f8;background:#57e8f808;border-radius:8px}.combo{text-align:center;font-weight:950;letter-spacing:.12em;color:#ffb020;text-shadow:0 0 18px #ff2da888;animation:comboPop .3s ease-out}
 .tbar_bolt{color:#35e0ff;text-shadow:0 0 8px #35e0ff}.tbar_lava{color:#ff7a2d;text-shadow:0 0 8px #ff5a2d}.tbar_rainbow{background:linear-gradient(90deg,#ff2da8,#ffb020,#2dffb3,#35e0ff,#8a5cff);-webkit-background-clip:text;background-clip:text;color:transparent}.tbar_pixel{color:#2dffb3;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 @keyframes comboPop{from{transform:scale(.82);opacity:.4}to{transform:scale(1);opacity:1}}
-@media(max-width:760px){.game-hero{padding:14px}.shop-row,.approval{grid-template-columns:1fr auto}.shop-row button,.approval button{grid-column:1/-1;width:100%}.heat-row{align-items:flex-start;flex-direction:column;gap:3px}}
+@media(max-width:760px){.shop-row,.approval{grid-template-columns:1fr auto}.shop-row button,.approval button{grid-column:1/-1;width:100%}.heat-row{align-items:flex-start;flex-direction:column;gap:3px}}
 .map_lava{background:linear-gradient(145deg,#2b0e1d,#0d1027)!important;border-color:#ff5a2d55!important}.map_ice{background:linear-gradient(145deg,#102b42,#0d1027)!important;border-color:#35e0ff66!important}.map_matrix{background:repeating-linear-gradient(90deg,#2dffb307 0 1px,transparent 1px 22px),#07150f!important;border-color:#2dffb355!important}.map_gold{background:linear-gradient(145deg,#2c2410,#101225)!important;border-color:#ffb02066!important}

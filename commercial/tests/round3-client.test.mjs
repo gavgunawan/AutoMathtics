@@ -19,7 +19,7 @@ test('a parent changes the mobile number in the app: a fresh sign-in, a code to 
 test('a kids\' device whose child session was refused goes back to the launch pad, never a dead screen', async (t) => {
   const h = await uiFixture(t); const kid = (await h.f.child(h.a.ctx)).child; await h.api.refresh();
   await h.click('Hand over to kids'); await h.nodes('BUTTON').find((n) => n.className === 'player-card').onclick();
-  h.nodes('INPUT')[0].value = '763829'; await h.click('Enter my grid'); assert.ok(h.root.textContent.includes('Welcome,'));
+  h.nodes('INPUT')[0].value = '763829'; await h.click('Enter my grid'); assert.ok(h.root.textContent.includes('grid coins · spend in 🛒'));
   // the parent, elsewhere, resets the PIN: the child session is revoked under the device
   h.f.advance(2000); const parent = await h.f.login('parentA'); await h.f.service.resetPin(parent.ctx, kid.id, '111111'); // a token minted after the handover
   await h.api.refresh();

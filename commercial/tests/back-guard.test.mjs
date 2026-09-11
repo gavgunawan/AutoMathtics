@@ -42,10 +42,10 @@ test('Back on the kids\' side: from the PIN pad to the launch pad, from the shop
   await h.back(); assert.ok(launchPad(), 'the PIN pad goes back to the launch pad');
   await h.nodes('BUTTON').find((n) => n.className === 'player-card').onclick();
   h.nodes('INPUT')[0].value = '763829'; await h.click('Enter my grid');
-  const home = () => h.root.textContent.includes('Welcome,'); assert.ok(home());
-  await h.click('🛒 Shop & rewards'); assert.ok(h.root.textContent.includes('GRID SHOP')); await h.back(); assert.ok(home(), 'from the shop');
-  await h.click('🗺 Map & fluency'); assert.ok(h.root.textContent.includes('MISSION MAP')); await h.back(); assert.ok(home(), 'from the map');
-  await h.click('Start ENGINE'); assert.ok(h.root.textContent.includes('Question 1 of 25')); assert.equal(h.intervals(), 1, 'the question clock runs');
+  const home = () => h.root.textContent.includes('grid coins · spend in 🛒'); assert.ok(home());
+  await h.click('🛒 Shop'); assert.ok(h.root.textContent.includes('GRID SHOP')); await h.back(); assert.ok(home(), 'from the shop');
+  await h.click('🗺 Map'); assert.ok(h.root.textContent.includes('MISSION MAP')); await h.back(); assert.ok(home(), 'from the map');
+  await h.click('⚙️ Start Engine ▶'); assert.ok(h.root.textContent.includes('Question 1 of 25')); assert.equal(h.intervals(), 1, 'the question clock runs');
   await h.back(); assert.ok(home(), 'from a game'); assert.ok(h.root.textContent.includes('Continue'), 'the session is kept, not quit'); assert.equal(h.intervals(), 0, 'and its clock stopped');
   for (let i = 0; i < 5; i++) { await h.back(); assert.ok(home(), `press ${i + 1} on the home screen`); }
   assert.equal(h.history.left, 0); assert.deepEqual(marks(h), ['app', 'guard']); assert.equal(h.history.index, 1);

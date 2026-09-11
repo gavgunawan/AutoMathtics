@@ -43,11 +43,11 @@ test('Allison and Geralt wear their looks: the launch pad\'s cards, then the fal
   assert.ok(all(h.root).some((n) => n.className === 'titlechip' && n.textContent === 'COMBO MASTER'), 'the title is its name alone, in the chip');
 
   // the decor is built once per background, not per screen
-  await h.click('🛒 Shop & rewards'); assert.equal(h.html.attrs['data-bg'], 'bg_symbols', 'the shop wears it too');
+  await h.click('🛒 Shop'); assert.equal(h.html.attrs['data-bg'], 'bg_symbols', 'the shop wears it too');
   assert.equal(h.decor.children[0], column, 'the same columns, still falling');
   await h.back(); assert.equal(h.decor.children[0], column);
 
-  await h.click('Switch child');
+  await h.click('Switch user');
   assert.equal(h.html.attrs['data-mode'], 'select'); assert.equal(h.html.attrs['data-bg'], undefined); assert.equal(h.decor.children.length, 0);
 
   await enter(h, 'Geralt');

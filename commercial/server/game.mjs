@@ -198,8 +198,20 @@ export const rocketFuel = (r) => Object.values(r?.fuel || {}).reduce((a, b) => a
 export const rocketReady = (r) => r?.status === 'fueling' && rocketFuel(r) >= r.goal && (!r.minEach || r.crewChildIds.every((id) => (r.fuel[id] || 0) >= r.minEach));
 const publicRocket = (r) => !r ? null : ({ id: r.id, status: r.status, prize: r.prize, currency: r.currency, goal: r.goal, minEach: r.minEach,
   crewChildIds: r.crewChildIds, fuel: r.fuel, totalFuel: rocketFuel(r), createdAt: r.createdAt, launchedAt: r.launchedAt || null });
-const childRocket = (r, childId) => !r ? null : ({ id: r.id, status: r.status, prize: r.prize, currency: r.currency, goal: r.goal, minEach: r.minEach,
-  totalFuel: rocketFuel(r), myFuel: r.fuel?.[childId] || 0, isCrew: r.crewChildIds?.includes(childId) || false, createdAt: r.createdAt, launchedAt: r.launchedAt || null });
+const childRocket = (r, childId, crew = null) => !r ? null : ({ id: r.id, status: r.status, prize: r.prize, currency: r.currency, goal: r.goal, minEach: r.minEach,
+  totalFuel: rocketFuel(r), myFuel: r.fuel?.[childId] || 0, isCrew: r.crewChildIds?.includes(childId) || false, createdAt: r.createdAt, launchedAt: r.launchedAt || null, ...(crew ? { crew } : {}) });
+// The Family Rocket's crew as a child's screen shows it (owner, 11 Sep 2026: each sibling's name and fuel, as v2 did): a
+// nickname, the amount poured and whether the minimum is met, in the crew's order — never an id: crewChildIds and the
+// fuel map keyed by child id stay out of every child projection.
+async function rocketCrew(tx, familyId, r) {
+  const crew = [];
+  for (const id of r?.crewChildIds || []) {
+    const c = await tx.get(`families/${familyId}/children/${id}`); if (!c) continue;
+    const fuel = Number.isSafeInteger(r.fuel?.[id]) ? r.fuel[id] : 0;
+    crew.push({ nickname: c.nickname, fuel, metMin: fuel >= (r.minEach || 0) });
+  }
+  return crew;
+}
 
 export class Game {
   constructor({ foundation, store, now = Date.now, pickIndex = (n) => randomInt(n) }) { this.foundation = foundation; this.store = store; this.now = now; this.pickIndex = pickIndex; }
@@ -219,9 +231,11 @@ export class Game {
     return this.store.transaction(async (tx) => {
       const { prog, cfg, family, s } = await this.child(tx, ctx);
       const rewards = cfg.rewards.filter((r) => !r.childIds?.length || r.childIds.includes(s.childId)).filter((r) => !r.hidden || prog.wallet.rp >= r.cost).map(rewardChildPublic);
-      const timeZone = family.timeZone || 'Asia/Singapore';
-      return { wallet: this.publicWallet(prog.wallet), catalog: this.catalogFor(prog, timeZone), rewards, rocket: childRocket(cfg.rocket, s.childId), heatmap: heatmap(prog), pacePercent: prog.pacePercent,
-        scan: scanState(prog, this.now(), timeZone) };
+      const timeZone = family.timeZone || 'Asia/Singapore', crew = cfg.rocket ? await rocketCrew(tx, s.familyId, cfg.rocket) : null;
+      return { wallet: this.publicWallet(prog.wallet), catalog: this.catalogFor(prog, timeZone), rewards, rocket: childRocket(cfg.rocket, s.childId, crew), heatmap: heatmap(prog), pacePercent: prog.pacePercent,
+        scan: scanState(prog, this.now(), timeZone),
+        // the home's streak note (port plan S2): today's run of pass days, shield days bridging, as the Thunder Hawk's unlock counts it
+        liveRun: liveLocalRun([...(prog.passDays || []), ...prog.wallet.shieldDays], this.now(), timeZone) };
     }, { readOnly: true });
   }
   async operation(tx, p, operationId, action, fingerprint) {
