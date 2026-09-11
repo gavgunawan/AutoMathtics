@@ -418,15 +418,16 @@ Block G (`scripts/cloudshell/07-report-job.sh`) is a copy of block E. It sets TT
 `node scripts/report.mjs send` with `APP_MODE`, `FIREBASE_PROJECT_ID`, `CONFIRM_PROJECT`, `OPERATOR_ID=scheduler@PROJECT_ID`,
 `APP_ORIGIN`, `EMAIL_PROVIDER` and `EMAIL_FROM`, the secret `SESSION_SECRET=am-v3-session:1` and, with Resend only,
 `EMAIL_API_KEY=am-v3-email-key:1`. It schedules `automathtics-v3-report-weekly` at `0 7 * * 1` Asia/Singapore, then does a dry
-run. A run in which any family fails exits 2, so Cloud Run shows it failed; one family's failure never stops the others.
+run. A run in which any family fails, or is found still held by another run (`busy`: a claim younger than 15 minutes), exits 2,
+so Cloud Run shows it failed; one family's failure never stops the others.
 Executing the job again retries what failed. Each send carries the Idempotency-Key `report:FAMILY:WEEK`, which Resend keeps for
 24 hours: a retry inside them with the same bytes gets the first answer back and no second email, and the same report does
 render the same bytes, because every button's expiry follows from the week and nothing else in the email moves with the clock.
 If the email changed meanwhile (the parent changed a pace between the attempts, say), Resend refuses the key as reused with
-another body (409 `invalid_idempotent_request`), as it does a key whose first request is still in flight (409
-`concurrent_idempotent_requests`): either means an email under that key reached Resend already, so the family is recorded as
-`sent_unconfirmed` and never sent again. A retry more than 24 hours after a first attempt whose answer was lost can deliver a
-second email.
+another body (409 `invalid_idempotent_request`): an email under that key reached Resend already, so the family is recorded as
+`sent_unconfirmed` and never sent again. A key whose first request is still in flight (409 `concurrent_idempotent_requests`)
+says nothing yet: the family is recorded as `failed` (`PROVIDER_IN_FLIGHT`), and the next run retries it, when Resend answers
+with the first email. A retry more than 24 hours after a first attempt whose answer was lost can deliver a second email.
 
 ```bash
 source <(curl -fsSL https://raw.githubusercontent.com/gavgunawan/AutoMathtics/release/v3.0/commercial/scripts/cloudshell/07-report-job.sh)
@@ -434,9 +435,11 @@ source <(curl -fsSL https://raw.githubusercontent.com/gavgunawan/AutoMathtics/re
 
 To see every family's decision without sending anything, execute the job with overrides:
 `gcloud run jobs execute automathtics-v3-report --region asia-southeast1 --args scripts/report.mjs,send,--dry-run --wait`, then
-read its log (one line per family: `sent`, `sent_unconfirmed`, `skipped` with the reason, or `failed` with its code; never an
-address or a token). `--family FAMILY_UUID` and `--week 2026-W36` narrow a run; `preview FAMILY_UUID` prints one family's email
-with inert links. The arguments are strict: an unknown word, a repeated option or an option without its value exits 64 with the
+read its log (one line per family: `sent`, `sent_unconfirmed`, `skipped` with the reason, `busy` while another run holds it, or
+`failed` with its code; never an address or a token). `--family FAMILY_UUID` and `--week 2026-W36` narrow a run; `preview
+FAMILY_UUID` prints one family's email with inert links. A past week's email goes out without the pace and scan-focus buttons
+once they have expired (14 days after the week), with a line that says so and points to the app; a week whose stop-the-report
+link would be dead (a year after it) is refused (`WEEK_TOO_OLD`), since no email may carry a dead link. The arguments are strict: an unknown word, a repeated option or an option without its value exits 64 with the
 usage, so a slip can never widen a run to every family.
 
 ## 5c. Feedback

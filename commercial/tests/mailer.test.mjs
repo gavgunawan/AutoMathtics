@@ -53,11 +53,10 @@ test('resend failures: unreachable, the 10-second deadline, a refusal, an answer
   await assert.rejects(odd.send(message()), (e) => e.code === 'PROVIDER_ERROR');
 });
 
-test('resend: its key refused as reused with another body, or as still in flight, means an email under it is there already: sent, unconfirmed, not a failure', async () => {
-  for (const name of ['invalid_idempotent_request', 'concurrent_idempotent_requests']) {
-    const m = createMailer({ provider: 'resend', apiKey: KEY, fetch: provider({ status: 409, json: { statusCode: 409, name, message: 'Same idempotency key used with a different request payload.' } }).fetch });
-    assert.deepEqual(await m.send(message()), { id: null, provider: 'resend', unconfirmed: name }, name);
-  }
+test('resend: a key refused as reused with another body means an email under it is there already (sent, unconfirmed, not a failure); a key still in flight says nothing yet: a failure to retry', async () => {
+  const conflict = (name) => createMailer({ provider: 'resend', apiKey: KEY, fetch: provider({ status: 409, json: { statusCode: 409, name, message: 'Same idempotency key used with a different request payload.' } }).fetch });
+  assert.deepEqual(await conflict('invalid_idempotent_request').send(message()), { id: null, provider: 'resend', unconfirmed: 'invalid_idempotent_request' });
+  await assert.rejects(conflict('concurrent_idempotent_requests').send(message()), (e) => e.code === 'PROVIDER_IN_FLIGHT' && e.status === 502 && clean(e), 'the first request under the key is still being handled');
   const other = createMailer({ provider: 'resend', apiKey: KEY, fetch: provider({ status: 409, json: { name: 'something_else' } }).fetch });
   await assert.rejects(other.send(message()), (e) => e.code === 'PROVIDER_ERROR' && e.provider.status === 409, 'any other conflict stays an error');
 });
