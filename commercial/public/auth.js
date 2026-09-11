@@ -58,9 +58,9 @@ export async function resendEmail() {
 // The function at the provider is the authority, and its refusal may never reach this page with its seconds, so
 // the device remembers when it sent codes and applies the same schedule: that is what the Send button counts
 // down from, and it replaces the old flat minute between codes so the first three can go 30 seconds apart.
-// One record per destination, under a SHA-256 of it: the typed E.164 number when enrolling or changing the
-// number, the enrolled factor's uid (or its masked hint) on a sign-in challenge. The hash only keeps the number
-// out of plain text on the parent's own device; it is not a secret, and nothing here leaves the device.
+// One record per destination, under an HMAC of it keyed on this device (below): the typed E.164 number when
+// enrolling or changing the number, the enrolled factor's uid (or its masked hint) on a sign-in challenge. Nothing
+// here leaves the device.
 // A send is recorded once the provider has accepted it — and also when it fails in a way that may be the ladder
 // (sms-schedule.js possibleRefusal): the function refused without its seconds reaching this page, so the server is
 // at least a rung ahead of this device, or the function allowed it and the provider failed, so the server spent a
@@ -76,6 +76,9 @@ let enrolling = null; // the E.164 number the last accepted enrolment code went 
 // read this device's storage: the key sits next to them and phone numbers are few enough to try one by one. What
 // it does guarantee is that nothing identifying leaves the device and that a record does not outlive its run.
 const DEVICE_KEY = STORE + 'key', HOLD = '.hold';
+// No wait the server names is longer than its longest rung, so a hold further off was written under a wrong clock (a
+// tablet set a year ahead, then corrected): it is ignored and swept, never counted down (review of PR #44).
+const MAX_WAIT = Math.max(...ladder.SMS_LADDER_MS);
 let deviceKey = null;
 async function hmacKey() {
   if (deviceKey) return deviceKey;
@@ -90,7 +93,7 @@ async function hmacKey() {
 }
 // A wait the provider named (its SMS_WAIT seconds) is kept per destination too, so retyping the same number, leaving
 // the screen or coming back later keeps counting from it instead of re-enabling Send while the server still refuses.
-function readHold(key) { try { const v = Number(localStorage.getItem(key + HOLD)); return Number.isSafeInteger(v) && v > Date.now() ? v : 0; } catch { return 0; } }
+function readHold(key) { try { const v = Number(localStorage.getItem(key + HOLD)), now = Date.now(); return Number.isSafeInteger(v) && v > now && v <= now + MAX_WAIT ? v : 0; } catch { return 0; } }
 function writeHold(key, until) { try { localStorage.setItem(key + HOLD, String(Math.floor(until))); } catch { /* no storage */ } }
 // Records expire: on every load, any record whose run is over and any hold that has passed is removed, so nothing
 // here lasts more than a day after the last code to that destination.
@@ -101,7 +104,7 @@ function sweep() {
     if (!k || !k.startsWith(STORE) || k === DEVICE_KEY) continue;
     let raw = null; try { raw = localStorage.getItem(k); } catch { return; }
     let live = false;
-    if (k.endsWith(HOLD)) live = Number(raw) > now;
+    if (k.endsWith(HOLD)) live = Number(raw) > now && Number(raw) <= now + MAX_WAIT;
     else try { const sends = JSON.parse(raw); live = Array.isArray(sends) && ladder.currentRun(sends, now).length > 0; } catch { live = false; }
     if (!live) try { localStorage.removeItem(k); } catch { return; }
   }

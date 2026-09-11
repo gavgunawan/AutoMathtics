@@ -301,9 +301,9 @@ failing rather than our refusal being forwarded. `public/sms-schedule.js` reads 
 well as its message, because a provider string with no ` : ` in it is folded whole into the code. Otherwise the
 button counts from the device's own copy of the ladder: `public/sms-schedule.js` carries the same table
 (`tests/sms-ladder.test.mjs` fails if it ever differs from `functions/ladder.mjs`), and `public/auth.js` keeps
-the times of the codes the provider accepted from this device in `localStorage`, one record per destination
-under a SHA-256 of it (the typed number, or the enrolled factor on a sign-in challenge), never the number in
-clear. That copy is display only and is also the device's throttle between sends; the function stays the
+the times of the codes this device asked for in `localStorage` (those the provider accepted, and failures that
+may have been the ladder's refusal), one record per destination under an HMAC keyed on the device (the typed
+number, or the enrolled factor on a sign-in challenge), never the number in clear. That copy is display only and is also the device's throttle between sends; the function stays the
 authority. With neither the provider's seconds nor a record on the device, `public/app.js` answers a refusal
 that carries nothing with a sentence covering both a spaced-out code and a provider fault.
 
@@ -313,9 +313,9 @@ parent hitting a delivery fault is pushed past the two 30-second rungs to 2 minu
 failures alone. When that happens, clear the number's record before asking them to try again. The ids in
 `smsLadder` are opaque HMACs that nobody can map back to a number, so during the pilot delete the collection's
 documents in the Firestore console (they hold only timestamps and expire by TTL after two days anyway).
-Clearing the record does not reach the parent's device: its countdown counts the codes the provider accepted
-there, so a device that sent codes which never arrived still counts down to its own next rung. The parent can
-wait for zero, or use a private window, where the device keeps no record. Or have the parent open the app once with `?resetsms` added to its address (for example `https://automathtics-v3-staging.web.app/?resetsms`): that removes every countdown record on that device, and the address is tidied again at once.
+Clearing the record does not reach the parent's device: its countdown counts the codes it asked for, so a device
+that sent codes which never arrived still counts down to its own next rung. The parent can wait for zero, or use a
+private window, which starts with no record. Or have the parent open the app once with `?resetsms` added to its address (for example `https://automathtics-v3-staging.web.app/?resetsms`): that removes every countdown record on that device, and the address is tidied again at once.
 
 The provider gives a blocking function 7 seconds and treats silence as an error, so the function keeps its own
 clock: no record is written once 4 s have passed (a commit landing after the provider gave up would count a

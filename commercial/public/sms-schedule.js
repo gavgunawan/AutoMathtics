@@ -32,7 +32,7 @@ export function withSend(sends, now) { return [...currentRun(sends, now), now]; 
  */
 export function refusalSeconds(error) {
   const wait = /sms[_-]wait:(\d+)/i.exec(`${error?.code || ''} ${error?.message || ''}`);
-  return wait && Number(wait[1]) > 0 ? Number(wait[1]) : null;
+  return wait && Number(wait[1]) > 0 ? Math.min(Number(wait[1]), Math.max(...SMS_LADDER_MS) / SECOND) : null; // never past the longest rung
 }
 /**
  * A failed send that may be the ladder's refusal with its seconds lost on the way, or a send the ladder allowed

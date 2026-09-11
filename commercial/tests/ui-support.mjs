@@ -26,7 +26,8 @@ export function control(root, label) {
 }
 // clock: a function returning the time the page reads from Date.now(), for tests that count down (omit for real time)
 // storage: a stand-in for the page's localStorage (omit: the page has none, as in a browser that blocks site data)
-export async function uiFixture(t, { family = true, signedIn = true, clock = null, storage = null } = {}) {
+// location: the page's address, e.g. { search: '?resetsms', pathname: '/' } (omit: no location, as before)
+export async function uiFixture(t, { family = true, signedIn = true, clock = null, storage = null, location = null } = {}) {
   const f = fixture();
   const a = signedIn ? (family ? await f.family('parentA', 2) : await f.login('parentA')) : null;
   const cfg = { origin: 'http://127.0.0.1', secret, emulator: true, web: { authDomain: 'demo-am-foundation.firebaseapp.com' } };
@@ -62,7 +63,7 @@ export async function uiFixture(t, { family = true, signedIn = true, clock = nul
   const window = { BroadcastChannel: Channel, speechSynthesis, SpeechSynthesisUtterance, history, addEventListener: (name, fn) => { windowEvents[name] = fn; } };
   // Intervals are held, never run on their own: a test ticks them (and moves its clock) explicitly.
   const intervals = new Map(); let intervalId = 0;
-  const context = vm.createContext({ document, window, history, BroadcastChannel: Channel, crypto: webcrypto, fetch: fetchForPage, console, ...(storage ? { localStorage: storage } : {}),
+  const context = vm.createContext({ document, window, history, BroadcastChannel: Channel, crypto: webcrypto, fetch: fetchForPage, console, TextEncoder, URLSearchParams, ...(storage ? { localStorage: storage } : {}), ...(location ? { location } : {}),
     setInterval: (fn) => { intervals.set(++intervalId, fn); return intervalId; }, clearInterval: (id) => { intervals.delete(id); },
     setTimeout: (fn) => { fn(); return 0; },
     ...(clock ? { Date: class extends Date { static now() { return clock(); } } } : {}) });

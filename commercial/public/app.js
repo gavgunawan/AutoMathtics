@@ -5,7 +5,12 @@ let reauthEpoch = 0, sessionRefreshPending = false, keepSdkSession = false; // k
 // rememberChoice: the parent's answer to “Remember this device” on a sign-in's SMS step, sent with the session request;
 // undefined on the fresh check of a parent action, where the server keeps whatever the device already had
 let rememberChoice;
-const REMEMBER_PREF = 'automathtics.remember'; // this device's last answer, so the box comes back as the parent left it
+const REMEMBER_PREF = 'automathtics.remember'; // the account that last ticked the box here (accountTag), so it comes back ticked for that account only
+// a SHA-256 tag of the sign-in email: another account on the same device finds the box unticked (review of PR #44)
+async function accountTag(email) {
+  const text = String(email || '').trim().toLowerCase(); if (!text) return '';
+  try { return [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`remember:${text}`)))].map((b) => b.toString(16).padStart(2, '0')).join(''); } catch { return ''; }
+}
 // screenId: which panel is on screen, so a late answer never touches a button that has gone; onBack: what the browser's
 // Back does on this screen (null: stay put); sendClock: the one ticking Send countdown. panel() resets all three.
 let screenId = 0, onBack = null, sendClock = null;
@@ -229,14 +234,14 @@ async function authStep(result, afterReady = null) {
   const rememberLabel = !enrolling && !afterReady ? el('label', null, 'check') : null;
   if (rememberLabel) {
     remember = el('input'); remember.type = 'checkbox';
-    try { remember.checked = localStorage.getItem(REMEMBER_PREF) === '1'; } catch { /* no storage: unticked */ }
+    accountTag(result.email).then((tag) => { try { if (tag && localStorage.getItem(REMEMBER_PREF) === tag) remember.checked = true; } catch { /* no storage: unticked */ } });
     const words = el('span', 'Remember this device for 30 days');
     words.append(el('small', 'Opening the app again from a bookmark or home-screen shortcut skips signing in. Tick it only on a device you trust. \u201cHand over to kids\u201d still locks parent access, and changing your password signs every remembered device out.'));
     rememberLabel.append(remember, words);
   }
   box.append(send.button, captchaBox(), otp.wrap, ...(rememberLabel ? [rememberLabel] : []),
     button('Verify code', async () => {
-      if (remember) { rememberChoice = remember.checked; try { if (remember.checked) localStorage.setItem(REMEMBER_PREF, '1'); else localStorage.removeItem(REMEMBER_PREF); } catch { /* no storage */ } }
+      if (remember) { rememberChoice = remember.checked; const tag = await accountTag(result.email); try { if (remember.checked && tag) localStorage.setItem(REMEMBER_PREF, tag); else localStorage.removeItem(REMEMBER_PREF); } catch { /* no storage */ } }
       return authStep(await (await auth()).confirmCode(otp.input.value), afterReady);
     }, 'primary'));
   armCaptcha();
@@ -439,7 +444,7 @@ async function parentScreen() {
     const r = model.recovery, when = new Date(r.requestedAt).toLocaleDateString();
     box.append(el('p', r.status === 'completed' ? `Account recovery requested on ${when} was completed and a new mobile was verified. If that wasn\u2019t you, reset your password now and contact support.`
       : `Account recovery was requested on ${when} and ${r.status === 'cancelled_by_operator' ? 'cancelled by support' : 'cancelled by your sign-in'}. If you didn\u2019t request it, reset your password now.`, 'notice'),
-      button('It was me', async () => { await api('/auth/recovery/ack', {}); await refresh(); }, 'ghost'));
+      button('It was me', async () => { try { await api('/auth/recovery/ack', {}); } catch (error) { if (error.code !== 'REAUTHENTICATE') throw error; reauthenticate(async () => { await api('/auth/recovery/ack', {}); await refresh(); }); return; } await refresh(); }, 'ghost')); // a fresh sign-in first: a remembered device must not let anyone hide this
   }
   const summary = el('div', null, 'allowance');
   const STATE = { trial: 'FREE TRIAL', active: 'SUBSCRIBED', grace: 'RENEWAL DUE', past_due: 'PAYMENT OVERDUE', cancelled: 'CANCELLED', expired: 'EXPIRED' };
@@ -793,11 +798,15 @@ await run(refresh);
 // Back from a hosted checkout (Stage 4.1). The redirect proves nothing: the provider's signed webhook
 // is what changes the plan, so tell the parent what to expect and look again shortly.
 const returned = typeof location === 'object' && location?.search ? new URLSearchParams(location.search) : null;
-if (returned?.get('checkout')) {
 // Support's reset for this device's SMS countdown: opening the app with ?resetsms removes every record the Send
-// countdown keeps (auth.js), for when an operator has cleared the server's count after a delivery fault. It runs
-// before the address is tidied below, which drops the flag again.
-try { if (/[?&]resetsms(=|&|$)/.test(location.search)) for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && k.startsWith('automathtics.sms.')) localStorage.removeItem(k); } } catch { /* no storage, or no location here */ }
+// countdown keeps (auth.js), for when an operator has cleared the server's count after a delivery fault. The address is
+// tidied at once, so a reload or a bookmark made now does not repeat it.
+if (returned?.has('resetsms')) {
+  try { for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && k.startsWith('automathtics.sms.')) localStorage.removeItem(k); } } catch { /* no storage */ }
+  if (typeof history === 'object' && history?.replaceState) history.replaceState(null, '', location.pathname);
+  note('The SMS countdown on this device was reset.');
+}
+if (returned?.get('checkout')) {
   if (typeof history === 'object' && history?.replaceState) history.replaceState(null, '', location.pathname);
   if (returned.get('result') === 'success') { note('Payment received. Your plan updates as soon as the payment provider confirms it; this page checks again in a moment.'); setTimeout(() => { if (!working) run(refresh); }, 4000); }
   else note('Checkout cancelled. Nothing was charged.');

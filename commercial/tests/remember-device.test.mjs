@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { createApp } from '../server/http.mjs';
 import { grantEntitlement } from '../server/service.mjs';
+import { sha256 } from '../server/security.mjs';
 import { fixture, secret, rejected } from './support.mjs';
 
 const MINUTE = 60_000, DAY = 24 * 60 * MINUTE;
@@ -69,6 +70,17 @@ test('the fresh check of a parent action keeps the device remembered; an explici
   await assert.rejects(f.service.authenticate(kept), rejected('SIGN_IN_REQUIRED'), 'and the old cookie is gone');
 });
 
+test('the re-check inherits only from a live, remembered session of the same account (review of PR #44)', async () => {
+  const f = fixture();
+  const plain = await f.service.login(f.token('parentA'), null, { remember: false });
+  const recheck = await f.service.login(f.token('parentA'), plain); // no answer, and the old session was not remembered
+  assert.equal((await row(f, recheck)).expiresAt, f.now() + 30 * MINUTE, 'nothing to inherit');
+  const kept = await f.service.login(f.token('parentA'), recheck, { remember: true });
+  f.advance(30 * DAY); // that remembered session has just ended
+  const late = await f.service.login(f.token('parentA'), kept);
+  assert.equal((await row(f, late)).expiresAt, f.now() + 30 * MINUTE, 'an ended session passes nothing on');
+});
+
 test('nothing else relaxes: a sensitive action still needs a sign-in within five minutes, and a password change signs the remembered device out', async () => {
   const f = fixture(), p = await f.family('parentA', 1);
   const cookie = await f.service.login(f.token('parentA'), p.cookie, { remember: true });
@@ -76,6 +88,7 @@ test('nothing else relaxes: a sensitive action still needs a sign-in within five
   const { child: kid } = await f.child(ctx);
   f.advance(6 * MINUTE);
   await assert.rejects(f.service.resetPin(ctx, kid.id, '482915'), rejected('REAUTHENTICATE'));
+  await assert.rejects(f.recovery.acknowledge(ctx), rejected('REAUTHENTICATE'), 'hiding a recovery notice too');
   f.resetPassword('parentA');
   f.advance(2 * MINUTE);
   await assert.rejects(f.service.authenticate(cookie), rejected('SESSION_REVOKED'));
@@ -98,7 +111,7 @@ async function serverTest(t) {
     if (set && r.ok) { cookie = set.split(';')[0]; csrf = (await (await fetch(`${base}/api/bootstrap`, { headers: { Cookie: cookie } })).json()).csrf; }
     return r;
   };
-  return { f, call };
+  return { f, call, token: () => cookie.slice(cookie.indexOf('=') + 1) };
 }
 
 test('the cookie lives exactly as long as its session: 30 days when remembered, at sign-in, family creation and the handover; the answer must be true or false', async (t) => {
@@ -117,4 +130,28 @@ test('the cookie lives exactly as long as its session: 30 days when remembered, 
   f.advance(DAY);
   const lock = await call('/api/session/lock', {});
   assert.match(lock.headers.get('set-cookie'), /Max-Age=2505600(;|$)/, 'what is left of the 30 days: 29');
+});
+
+test('entering and leaving a child carry the same remaining life, and a read-back that fails after a rotation still answers, sized by the ceiling (review of PR #44)', async (t) => {
+  const { f, call, token } = await serverTest(t);
+  await call('/api/auth/session', { idToken: f.token('parentA'), remember: true });
+  await call('/api/family', { label: 'Fam', adultAttestation: true, consentVersion: 'pilot-v1' });
+  const me = await (await call('/api/me')).json();
+  await grantEntitlement(f.store, { familyId: me.family.id, seatLimit: 1, accessUntil: f.now() + 90 * DAY, reason: 'cookie test', actor: 'test-operator' }, f.now());
+  const kid = (await (await call('/api/children', { nickname: 'Fox', icon: 'fox', pin: '763829' }, { 'Idempotency-Key': crypto.randomUUID() })).json()).child;
+  f.advance(2 * DAY);
+  // the rotation commits, then the read of the new row fails: the answer must still carry the new cookie
+  const read = f.store.get.bind(f.store); let armed = false;
+  f.store.get = async (path) => { if (armed && path.startsWith('sessions/') && path !== `sessions/${sha256(token())}`) throw new Error('read failed'); return read(path); };
+  armed = true; const lock = await call('/api/session/lock', {}); armed = false;
+  assert.equal(lock.status, 200, 'the handover answers although the read-back failed');
+  assert.match(lock.headers.get('set-cookie'), /Max-Age=2592000(;|$)/, 'sized by the ceiling');
+  assert.equal((await (await call('/api/me')).json()).role, 'selector', 'and the new cookie works');
+  f.advance(DAY);
+  const enter = await call(`/api/children/${kid.id}/enter`, { pin: '763829' });
+  assert.equal(enter.status, 200);
+  assert.match(enter.headers.get('set-cookie'), /Max-Age=2332800(;|$)/, '27 days left');
+  const select = await call('/api/session/select', {});
+  assert.equal(select.status, 200);
+  assert.match(select.headers.get('set-cookie'), /Max-Age=2332800(;|$)/);
 });

@@ -5,7 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { webcrypto, createHash } from 'node:crypto';
+import { webcrypto, createHash, createHmac } from 'node:crypto';
 import vm from 'node:vm';
 import * as ladder from '../public/sms-schedule.js';
 
@@ -56,7 +56,7 @@ async function load({ store = storage(), start = Date.parse('2026-09-11T10:00:00
   body = body.replace(/^export (async function|function|const) /gm, '$1 ');
   const context = vm.createContext({ __ladder: ladder, __cfg: { emulator: false, firebase: {} }, __app: { initializeApp: () => ({}) }, __sdk: sdk,
     localStorage: store, crypto: webcrypto, TextEncoder, location: { hostname: 'app.example', search: '' }, Date: Clock, console });
-  const mod = await vm.runInContext(`(async()=>{ ${body}\nreturn { sendCode, nextSendAt, confirmCode, signIn, e164 }; })()`, context);
+  const mod = await vm.runInContext(`(async()=>{ ${body}\nreturn { sendCode, nextSendAt, confirmCode, signIn, e164, changeMobileSend, changeMobileConfirm }; })()`, context);
   return { mod, state, store, now: () => now, advance: (ms) => { now += ms; } };
 }
 const refusedWith = (seconds) => (e) => e?.waitSeconds === seconds;
@@ -135,4 +135,26 @@ test('records expire: a finished run and a passed hold are swept on load, a live
   const s = await load({ store: storage({ seed }), start });
   const keys = [...s.store.map.keys()].sort();
   assert.deepEqual(keys, ['automathtics.sms.key', 'automathtics.sms.live', 'unrelated'].sort());
+});
+
+test('a wait written under a wrong clock is not trusted: nothing further off than the longest rung is counted down, and it is swept (review of PR #44)', async () => {
+  const start = Date.parse('2026-09-11T10:00:00Z'), keyHex = 'a'.repeat(64);
+  const hold = 'automathtics.sms.' + createHmac('sha256', Buffer.from(keyHex, 'hex')).update(`sms:${NUMBER}`).digest('hex') + '.hold';
+  const s = await load({ store: storage({ seed: { 'automathtics.sms.key': keyHex, [hold]: String(start + 365 * DAY) } }), start });
+  assert.ok(!s.store.map.has(hold), 'swept on load');
+  s.store.map.set(hold, String(s.now() + 365 * DAY)); // and one that appears later is ignored
+  assert.equal(await s.mod.nextSendAt(NUMBER), 0);
+  await s.mod.sendCode(NUMBER, true); assert.equal(s.state.asked, 1, 'the provider is asked');
+  assert.equal(ladder.refusalSeconds({ message: 'SMS_WAIT:99999999' }), 86_400, 'a relayed wait is capped at the longest rung');
+});
+
+test('a changed mobile number carries its codes to the new factor, so the sign-in straight after counts them', async () => {
+  const s = await load(); const t0 = s.now();
+  s.state.user.factors = [{ uid: 'factor-old', factorId: 'phone', phoneNumber: '+65*******4567' }];
+  await s.mod.changeMobileSend(NUMBER, true);
+  await s.mod.changeMobileConfirm('123456');
+  assert.equal(s.state.user, null, 'signed out to sign in with the new number');
+  s.state.user = { factors: [{ uid: 'factor-new', factorId: 'phone' }], emailVerified: true, reload: async () => {} }; s.state.mfa = true;
+  assert.equal((await s.mod.signIn('p@example.test', 'pw')).stage, 'challenge');
+  assert.equal(await s.mod.nextSendAt(''), t0 + 30 * SECOND, 'the new factor counts the code the new number already had');
 });
