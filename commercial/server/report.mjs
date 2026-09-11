@@ -8,7 +8,7 @@
 import { randomUUID } from 'node:crypto';
 import { fail, uuid } from './security.mjs';
 import { LEVELS, PAPERS_PER_SESSION, dayISO, weekISO, weekStart, trk, scanUnlocked, normalizeProgress } from './progress.mjs';
-import { answersOf, styleStats, classes, quantile, timedOut } from './styles.mjs';
+import { answersOf, styleStats, classes, quantile, timedOut, weakStyles } from './styles.mjs';
 import { effectiveEntitlement } from './subscription.mjs';
 import { AUDIT_RETENTION_MS } from './service.mjs';
 import { prefsOf, prefsPath, signEmailToken, linkExpiry } from './email.mjs';
@@ -58,21 +58,24 @@ export function weekLabel(week) {
 // Floating-point noise must not move a half across the line (100 × 0.62 / 0.8 is 77.49999… or 77.50000…): a half rounds up.
 const snap = (x) => Math.round(x * 1e6) / 1e6, round5 = (x) => Math.round(snap(x) / PACE_RULES.round) * PACE_RULES.round, ceil5 = (x) => Math.ceil(snap(x) / PACE_RULES.round) * PACE_RULES.round;
 /**
- * The pace that fits the week's answers. p is the pace now (the percentage of the base time each question allows), q the 80th
- * percentile of the share of its allowance a right answer used. Never faster under 80 % right or above 10 % timeouts; with
- * that many timeouts at least 15 % slower, rounded up so it stays at least that. Rounded to 5, clamped to 30–200 and to 25
- * points from p; within 10 points of p it is in the zone, unless the child is timing out, which is never the zone.
+ * The pace that fits the week's answers. p is the pace now (the percentage of the base time each question allows; a parent may
+ * set 10–200), q the 80th percentile of the share of its allowance a right answer used. Never faster under 80 % right or above
+ * 10 % timeouts; with that many timeouts at least 15 % slower, rounded up so it stays at least that. Rounded to 5, kept within 25
+ * points of p and within 30–200, but a bound never pushes against the evidence: a pace under 30 with fast right answers stays
+ * where it is rather than being raised to 30. `limit` names the bound that held the pace, for the sentence. Within 10 points of p
+ * it is in the zone, unless the child is timing out, which is never the zone.
  */
 export function goldilocks(items, pacePercent) {
   const R = PACE_RULES, p = Number.isInteger(pacePercent) ? pacePercent : 100, n = items.length;
-  if (n < R.minAnswers) return { current: p, suggested: p, direction: 'keep', enough: false, held: false, evidence: { q: null, accuracy: null, timeoutRate: null, n } };
+  if (n < R.minAnswers) return { current: p, suggested: p, direction: 'keep', enough: false, held: false, limit: null, evidence: { q: null, accuracy: null, timeoutRate: null, n } };
   const right = items.filter((x) => x.ok), q = quantile(right.map((x) => x.s / x.a), R.quantile), accuracy = right.length / n, timeoutRate = items.filter(timedOut).length / n;
   const timingOut = timeoutRate > R.timeouts, guarded = accuracy < R.accuracy || timingOut;
   let s = round5(Math.max(q === null ? p : (p * q) / R.target, guarded ? p : 0));
   if (timingOut) s = Math.max(s, ceil5(p * R.slower));
-  s = Math.min(p + R.step, Math.max(p - R.step, Math.min(R.max, Math.max(R.min, s))));
+  const lo = Math.min(R.min, p), hi = Math.max(R.max, p), beyond = s < lo ? 'floor' : s > hi ? 'ceiling' : null; // the bounds, widened to take in p
+  s = Math.min(p + R.step, Math.max(p - R.step, Math.min(hi, Math.max(lo, s))));
   if (Math.abs(s - p) < R.zone && !timingOut) s = p;
-  return { current: p, suggested: s, direction: s < p ? 'faster' : s > p ? 'slower' : 'keep', enough: true, held: guarded && s === p, evidence: { q, accuracy, timeoutRate, n } };
+  return { current: p, suggested: s, direction: s < p ? 'faster' : s > p ? 'slower' : 'keep', enough: true, held: guarded && s === p, limit: s === p ? beyond : null, evidence: { q, accuracy, timeoutRate, n } };
 }
 const pct = (x) => `${Math.round(x * 100)}%`;
 /** The pace in one plain sentence, the child named, no pronoun guessed. */
@@ -85,6 +88,8 @@ export function paceSentence(name, g) {
     : `${name} needs ${within} on 8 in 10 correct answers, at ${pct(acc)} accuracy: the goldilocks pace is ${s}% (now ${p}%) — more room to think.`;
   if (timingOut) return `${name} ran out of time on ${pct(tr)} of questions; the pace is already ${p}%, at the most time a question can have.`;
   if (acc < PACE_RULES.accuracy) return `${name} got ${pct(acc)} right this week: the pace stays at ${p}%, and gets faster only once accuracy is back to 80%.`;
+  if (g.limit === 'floor') return `${name} uses ${within} on 8 in 10 correct answers, at ${pct(acc)} accuracy: the pace stays at ${p}%, as the goldilocks pace never goes under ${PACE_RULES.min}%.`;
+  if (g.limit === 'ceiling') return `${name} needs ${within} on 8 in 10 correct answers, at ${pct(acc)} accuracy: the pace stays at ${p}%, as the goldilocks pace never goes over ${PACE_RULES.max}%.`;
   return `${name} uses ${within} on 8 in 10 correct answers, at ${pct(acc)} accuracy: the pace of ${p}% is already in the goldilocks zone.`;
 }
 
@@ -104,8 +109,11 @@ export function buildChildReport({ history, pacePercent, scanFocus, lastScanWeek
     sessions: played.length, left: rows.length - played.length, passes: passed(), papersPassed: PAPERS_PER_SESSION * passed('paper'), checkpoints: passed('boss') };
   const scan = { status: lastScanWeek === week || passed('scan') ? 'passed' : scanUnlocked(levels?.engine || { level: 0, paper: 1 }) ? 'available' : 'locked', focus: scanFocus === true, tried: played.some((r) => r.mode === 'scan') };
   const pace = goldilocks(items, pacePercent), named = (st) => ({ ...st, label: styleLabel(st) });
+  // The scan focus is offered on the very list a focused scan would use (learning.mjs → styles.mjs weakStyles): all kept history,
+  // Engine only, none above the sector now, as it stands when the report is made. The week's three lists are another cut.
+  const focusStyles = weakStyles(kept, levels?.engine?.level ?? 0).map((w) => named({ ...w, track: 'engine' }));
   return { nickname, week, answered: items.length > 0, totals, trouble: lists.trouble.map(named), slow: lists.slow.map(named), strong: lists.strong.map(named),
-    engineWeak: [...lists.trouble, ...lists.slow].some((st) => st.track === 'engine'), scan, pace: { ...pace, sentence: paceSentence(nickname, pace) },
+    focusStyles, scan, pace: { ...pace, sentence: paceSentence(nickname, pace) },
     partial: kept.length >= HISTORY_KEPT && inWeek(kept[kept.length - 1]) };
 }
 /** The family's week: every child given (the seated ones), in order; a child without an answer that week gets one line. */

@@ -41,16 +41,18 @@ test('the subject names who played, the missions and the accuracy; each child\'s
   assert.ok(r.text.indexOf('Subtracting fractions') < r.text.indexOf('Adding fractions'), 'the slowest first');
 });
 
-test('buttons only when due: the pace when a change is suggested, the scan focus to offer where Engine styles are weak, or to switch off; none for a child who did not play', () => {
+test('buttons only when due: the pace when a change is suggested, the scan focus to offer when the focused scan has styles to use, or to switch off; none for a child who did not play', () => {
   const d = family(), r = renderReport(d, links(d));
   assert.deepEqual(d.children.map(buttonsFor), [{ pace: 75, focus: null }, { pace: 115, focus: true }, { pace: null, focus: null }]);
   for (const [label, href] of [['Set Allison’s pace to 75%', `${ORIGIN}/#email=v1.pace0.sig`], ['Set Geralt’s pace to 115%', `${ORIGIN}/#email=v1.pace1.sig`], ['Focus Geralt’s System Scan on these', `${ORIGIN}/#email=v1.focus1.sig`]]) {
     assert.ok(r.html.includes(`href="${href}"`) && r.html.includes(`>${label}</a>`), label); assert.ok(r.text.includes(`${label}: ${href}`), label);
   }
-  assert.ok(r.text.includes('Next week’s scan can focus on the styles above: about 75% of its questions on what Geralt gets wrong or slow, 25% recap.'));
+  assert.ok(r.text.includes(['Next week’s scan can focus on what Geralt finds hardest in all recent play, not only this week: about 75% of its questions on these styles, 25% recap.', '🎯 Scan focus',
+    '  - Division · difficulty 4 of 5 — wrong again and again', '  - Subtracting fractions · difficulty 3 of 5 — right but slow', '  - Adding fractions · difficulty 2 of 5 — right but slow',
+    `  Focus Geralt’s System Scan on these: ${ORIGIN}/#email=v1.focus1.sig`].join('\n')), 'the styles the focused scan would use, named, then the button');
   assert.ok(!/Focus Allison|scan focus off|Set Mia/.test(r.html + r.text), 'nothing weak, nothing to switch, nobody who did not play');
   const on = family({ geraltFocus: true }), s = renderReport(on, links(on));
-  assert.ok(s.html.includes('Switch Geralt’s scan focus off') && s.text.includes('Geralt’s System Scan is focused on weak spots: about 75% of its questions.')); assert.ok(!s.html.includes('Focus Geralt’s System Scan'));
+  assert.ok(s.html.includes('Switch Geralt’s scan focus off') && s.text.includes('Geralt’s System Scan is focused on these styles: about 75% of its questions, 25% recap.\n🎯 Scan focus\n  - Division · difficulty 4 of 5 — wrong again and again')); assert.ok(!s.html.includes('Focus Geralt’s System Scan'));
   const without = renderReport(d, { ...links(d), children: {} }); assert.ok(!/Set Allison|Focus Geralt/.test(without.html), 'no link given, no button');
   // a locked scan says when it opens and offers nothing; a pace in the zone or a short week has no button
   const locked = one({ engine: { level: 0, paper: 50, bossCleared: 2 }, history: [row('2026-09-01', [...times(11, () => ans('engine', 0, 3, 40, true)), ...times(4, () => ans('engine', 0, 3, 50, false))])] });
@@ -63,9 +65,36 @@ test('buttons only when due: the pace when a change is suggested, the scan focus
   assert.ok(z.text.includes('already in the goldilocks zone')); assert.ok(!z.html.includes('pace to')); assert.equal(z.subject, 'Allison this week: 1 mission, 100% right');
 });
 
+test('the scan focus is offered on the focused scan\'s own list, and only when it has one: all recent play, Engine only, none above the sector now', () => {
+  const E = { level: 3, paper: 41, bossCleared: 2 }, fast = row('2026-09-01', times(20, () => ans('engine', 3, 3, 30, true)));
+  // nothing weak this week, but Multiplication went wrong again and again three weeks ago: the focused scan would practise it, so it is offered and named
+  const earlier = one({ engine: E, history: [fast, row('2026-08-12', [...times(2, () => ans('engine', 2, 3, 40, true)), ...times(4, () => ans('engine', 2, 3, 50, false))])] }), e = renderReport(earlier, links(earlier));
+  assert.deepEqual([earlier.children[0].trouble.length, earlier.children[0].slow.length], [0, 0]); assert.equal(buttonsFor(earlier.children[0]).focus, true);
+  assert.ok(e.text.includes('🎯 Scan focus\n  - Multiplication · difficulty 3 of 5 — wrong again and again\n  Focus Allison’s System Scan on these:'), e.text);
+  // wrong again and again this week, but in Sector E while a placement has the child in Sector D: the scan would not use it, so no offer
+  const above = one({ engine: E, history: [row('2026-09-01', [...times(11, () => ans('engine', 4, 2, 40, true)), ...times(3, () => ans('engine', 4, 2, 50, false))])] });
+  assert.equal(above.children[0].trouble.length, 1); assert.equal(buttonsFor(above.children[0]).focus, null); assert.ok(!/Scan focus|System Scan on these/.test(renderReport(above, links(above)).text));
+  // Navigator trouble only: the scan is all Engine, no offer
+  const nav = one({ engine: E, history: [row('2026-09-01', [...times(11, () => ans('nav', 3, 3, 40, true)), ...times(3, () => ans('nav', 3, 3, 50, false))], { track: 'nav' })] });
+  assert.equal(nav.children[0].trouble.length, 1); assert.equal(buttonsFor(nav.children[0]).focus, null);
+  // the focus on with nothing weak: said so, with the way to switch it off
+  const idle = one({ engine: E, scanFocus: true, history: [fast] }), i = renderReport(idle, links(idle));
+  assert.equal(buttonsFor(idle.children[0]).focus, false); assert.ok(i.text.includes('Allison’s System Scan focus is on, but no Engine style is weak right now, so the scan asks its usual questions.\n  Switch Allison’s scan focus off:'), i.text);
+});
+
+test('a pace held by a bound gets no button, and its sentence says which bound: 25% with fast right answers is not raised to 30%', () => {
+  const E = { level: 3, paper: 41, bossCleared: 2 };
+  const low = one({ engine: E, pacePercent: 25, history: [row('2026-09-01', times(20, () => ans('engine', 3, 3, 30, true)))] }), l = renderReport(low, links(low));
+  assert.equal(buttonsFor(low.children[0]).pace, null); assert.ok(!l.html.includes('pace to'));
+  assert.ok(l.text.includes('⏱ Pace: Allison uses under half the time allowed on 8 in 10 correct answers, at 100% accuracy: the pace stays at 25%, as the goldilocks pace never goes under 30%.'), l.text);
+  const high = one({ engine: E, pacePercent: 195, history: [row('2026-09-01', times(20, () => ans('engine', 3, 3, 100, true)))] }), h = renderReport(high, links(high));
+  assert.equal(buttonsFor(high.children[0]).pace, null); assert.ok(h.text.includes('the pace stays at 195%, as the goldilocks pace never goes over 200%.'), h.text);
+});
+
 test('the footer says why, how to stop, where the settings are and who sent it; a busy week and a left-early week say so; many children shorten the subject', () => {
   const d = family(), r = renderReport(d, links(d));
-  assert.ok(r.text.includes('Why this email: you created an AutoMathtics parent account and agreed to account and progress emails.'));
+  const why = 'You get this email because weekly reports are switched on for your AutoMathtics parent account. They come every Monday until you switch them off.';
+  assert.ok(r.text.includes(why) && r.html.includes(why)); assert.ok(!/agreed|you created/i.test(r.text), 'true of every account, the owner\'s too, which predates the sign-up boxes');
   assert.ok(r.text.includes(`Stop weekly reports: ${ORIGIN}/#email=v1.unsub.sig`) && r.text.includes(`Email settings: ${ORIGIN}/`)); assert.ok(r.html.includes('>Stop weekly reports</a>') && r.html.includes('>Email settings</a>'));
   assert.ok(r.text.includes('AutoMathtics · Mission Control for parents · pilot.example.test'));
   const busy = one({ engine: { level: 3, paper: 41, bossCleared: 2 }, history: times(60, () => row('2026-09-02', times(5, () => ans('engine', 3, 3, 40, true)))) });

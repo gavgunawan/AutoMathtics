@@ -75,7 +75,7 @@ test('goldilocks: 8 in 10 right answers inside 80 % of the time; not enough play
   assert.deepEqual(PACE_RULES, { minAnswers: 20, quantile: 0.8, target: 0.8, accuracy: 0.8, timeouts: 0.1, slower: 1.15, round: 5, min: 30, max: 200, step: 25, zone: 10 });
   const few = goldilocks(right(19, 40), 100); assert.equal(few.enough, false); assert.equal(few.direction, 'keep'); assert.equal(few.suggested, 100); assert.equal(few.evidence.n, 19);
   const fast = goldilocks([...right(16, 45), ...right(4, 90)], 100);
-  assert.deepEqual(fast, { current: 100, suggested: 75, direction: 'faster', enough: true, held: false, evidence: { q: 0.45, accuracy: 1, timeoutRate: 0, n: 20 } }, '56.25 → 55, then 25 points in one week');
+  assert.deepEqual(fast, { current: 100, suggested: 75, direction: 'faster', enough: true, held: false, limit: null, evidence: { q: 0.45, accuracy: 1, timeoutRate: 0, n: 20 } }, '56.25 → 55, then 25 points in one week');
   assert.deepEqual(pace(right(20, 64)), ['faster', 80], 'exactly on target: 80');
   assert.deepEqual(pace(right(20, 76)), ['keep', 100], '95 is within 10 points: in the zone');
   assert.deepEqual(pace(right(20, 72)), ['faster', 90], '90 is 10 points away: a change');
@@ -100,6 +100,18 @@ test('goldilocks guards: never faster under 80 % right or above 10 % timeouts; w
   assert.deepEqual(pace(timeout(20)), ['slower', 115]);
 });
 
+test('goldilocks never clamps against the evidence: a pace under 30 with fast right answers stays put, a bound that holds a pace is named, and a pace under 30 still goes slower when the evidence says so', () => {
+  const held = (items, p) => { const g = goldilocks(items, p); return [g.direction, g.suggested, g.limit]; };
+  assert.deepEqual(held(right(20, 30), 25), ['keep', 25, 'floor'], 'fast and right at 25%: not raised to 30%');
+  assert.deepEqual(held(right(20, 30), 10), ['keep', 10, 'floor'], 'the least a parent can set');
+  assert.deepEqual(held(right(20, 30), 30), ['keep', 30, 'floor'], 'at the floor');
+  assert.deepEqual(held(right(20, 30), 35), ['keep', 35, 'floor'], 'five points of room: the zone, and the floor is why');
+  assert.deepEqual(held(right(20, 30), 40), ['faster', 30, null], 'room down to the floor: down to it');
+  assert.deepEqual(held(right(20, 200), 10), ['slower', 25, null], 'under 30 and needing more time: slower, as the evidence says');
+  assert.deepEqual(held(right(20, 100), 195), ['keep', 195, 'ceiling'], '245 wanted, 200 the most: five points, the zone, and the ceiling is why');
+  assert.deepEqual(held(right(20, 64), 100), ['faster', 80, null]); assert.equal(goldilocks(right(19, 30), 25).limit, null, 'not enough play: no bound to speak of');
+});
+
 test('the pace in one sentence, with the child named and no pronoun guessed', () => {
   const say = (items, p = 100) => paceSentence('Allison', goldilocks(items, p));
   assert.equal(say([...right(16, 45), ...right(4, 90)]), 'Allison uses under half the time allowed on 8 in 10 correct answers, at 100% accuracy: the goldilocks pace is 75% (now 100%) — more push, still room to think.');
@@ -109,6 +121,9 @@ test('the pace in one sentence, with the child named and no pronoun guessed', ()
   assert.equal(say([...right(15, 40), ...wrongIn(5)]), 'Allison got 75% right this week: the pace stays at 100%, and gets faster only once accuracy is back to 80%.');
   assert.equal(say([...right(17, 50), ...timeout(3)], 200), 'Allison ran out of time on 15% of questions; the pace is already 200%, at the most time a question can have.');
   assert.equal(say(right(12, 40)), 'Not enough play this week to suggest a pace (12 answers; 20 needed).'); assert.equal(say(right(1, 40)), 'Not enough play this week to suggest a pace (1 answer; 20 needed).');
+  assert.equal(say(right(20, 30), 25), 'Allison uses under half the time allowed on 8 in 10 correct answers, at 100% accuracy: the pace stays at 25%, as the goldilocks pace never goes under 30%.');
+  assert.equal(say(right(20, 30), 35), 'Allison uses under half the time allowed on 8 in 10 correct answers, at 100% accuracy: the pace stays at 35%, as the goldilocks pace never goes under 30%.');
+  assert.equal(say(right(20, 100), 195), 'Allison needs up to 100% of the time allowed on 8 in 10 correct answers, at 100% accuracy: the pace stays at 195%, as the goldilocks pace never goes over 200%.');
   for (const items of [right(20, 40), right(20, 90), wrongIn(20), timeout(20)]) assert.doesNotMatch(say(items), /\b(he|she|his|her|him)\b/i);
 });
 
@@ -156,7 +171,18 @@ test('a child\'s week: rows dated in the week only, quits apart, the totals, pap
   // the lists carry words for the parent, never an id
   const mixed = buildChildReport({ history: [row('2026-09-01', [...right(11, 40, 3, 2), ...wrongIn(3, 3, 2), ...times(5, () => ans('nav', 3, 3, 90, true))])], levels: { engine: { level: 3, paper: 41 } }, week });
   assert.deepEqual(mixed.trouble.map((s) => s.label), ['Division · difficulty 2 of 5']); assert.deepEqual(mixed.slow.map((s) => s.label), ['Word problems · Sector D (percentages, ratio, rate and averages) · difficulty 3 of 5']);
-  assert.equal(mixed.engineWeak, true);
+  assert.deepEqual(mixed.focusStyles.map((w) => [w.key, w.cls, w.label]), [['engine:3:2', 'trouble', 'Division · difficulty 2 of 5']], 'the scan focus is Engine only');
+});
+
+test('the scan focus the report offers is the focused scan\'s own list: all kept history, Engine only, none above the sector now', () => {
+  const week = '2026-W36', levels = { engine: { level: 3, paper: 41 } };
+  const history = [row('2026-09-01', right(20, 30, 3, 1)), row('2026-08-10', [...right(2, 40, 2, 3), ...wrongIn(4, 2, 3)]), row('2026-08-03', [...right(11, 40, 4, 2), ...wrongIn(3, 4, 2)])];
+  const r = buildChildReport({ history, levels, week, nickname: 'Allison' });
+  assert.deepEqual([r.trouble.length, r.slow.length], [0, 0], 'nothing weak this week');
+  assert.deepEqual(r.focusStyles.map(({ label, track, ...w }) => w), weakStyles(history, 3), 'exactly what learning.mjs would give a focused scan today');
+  assert.deepEqual(r.focusStyles.map((w) => [w.key, w.label]), [['engine:2:3', 'Multiplication · difficulty 3 of 5']], 'a miss from weeks ago counts; the Sector E style above the sector now does not');
+  assert.deepEqual(buildChildReport({ history, levels: { engine: { level: 4, paper: 1 } }, week }).focusStyles.map((w) => w.key), ['engine:2:3', 'engine:4:2'], 'in Sector E it does');
+  assert.deepEqual(buildChildReport({ history: [row('2026-09-01', right(20, 30, 3, 1))], levels, week }).focusStyles, [], 'nothing weak anywhere: an empty list, so no offer');
 });
 
 test('style words: the operation (by tier in the fraction sectors) or the word-problem sector and its topics, with the difficulty', () => {

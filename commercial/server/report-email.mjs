@@ -9,10 +9,13 @@ const pct = (x) => `${Math.round((x || 0) * 100)}%`;
 const count = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const names = (list) => (list.length <= 1 ? list.join('') : list.length <= 3 ? `${list.slice(0, -1).join(', ')} and ${list.at(-1)}` : `${list.slice(0, 2).join(', ')} and ${list.length - 2} more`);
 
-/** The buttons a child's section carries: the pace when a change is suggested; the scan focus to offer or to switch off, unless the scan is locked. */
+/**
+ * The buttons a child's section carries: the pace when a change is suggested (none when a bound holds it: 'keep'); the scan focus
+ * to switch off, or to offer only when the focused scan would have styles to use (report.mjs focusStyles); none while it is locked.
+ */
 export function buttonsFor(c) {
   if (!c.answered) return { pace: null, focus: null };
-  return { pace: c.pace.enough && c.pace.direction !== 'keep' ? c.pace.suggested : null, focus: c.scan.status === 'locked' ? null : c.scan.focus ? false : c.engineWeak ? true : null };
+  return { pace: c.pace.enough && c.pace.direction !== 'keep' ? c.pace.suggested : null, focus: c.scan.status === 'locked' ? null : c.scan.focus ? false : c.focusStyles?.length ? true : null };
 }
 /** "Allison and Geralt this week: 4 missions, 92% right" — the children who answered, the family's missions and accuracy. */
 export function subjectFor(data) {
@@ -37,8 +40,11 @@ function childBlocks(c, links) {
   if (c.scan.status === 'locked') blocks.push({ kind: 'line', text: '🧠 System Scan unlocks at Engine Sector B, paper 21.' });
   else {
     blocks.push({ kind: 'line', text: c.scan.status === 'passed' ? '🧠 System Scan: passed this week.' : c.scan.tried ? '🧠 System Scan: tried this week, not passed yet (a pass needs all 25 right). It resets every Monday.' : '🧠 System Scan: not done this week. It resets every Monday.' });
-    if (b.focus === true && url.focus) blocks.push({ kind: 'line', text: `Next week’s scan can focus on the styles above: about 75% of its questions on what ${name} gets wrong or slow, 25% recap.` }, { kind: 'button', label: `Focus ${name}’s System Scan on these`, href: url.focus });
-    if (b.focus === false && url.focus) blocks.push({ kind: 'line', text: `${name}’s System Scan is focused on weak spots: about 75% of its questions.` }, { kind: 'button', label: `Switch ${name}’s scan focus off`, href: url.focus });
+    // the styles named are the focused scan's own list (report.mjs focusStyles), read from all kept play, not the week's lists above
+    const focus = c.focusStyles || [], focusList = { kind: 'list', title: '🎯 Scan focus', items: focus.map((w) => ({ label: w.label, detail: w.cls === 'trouble' ? 'wrong again and again' : 'right but slow' })) };
+    if (b.focus === true && url.focus) blocks.push({ kind: 'line', text: `Next week’s scan can focus on what ${name} finds hardest in all recent play, not only this week: about 75% of its questions on these styles, 25% recap.` }, focusList, { kind: 'button', label: `Focus ${name}’s System Scan on these`, href: url.focus });
+    if (b.focus === false && url.focus) blocks.push(...(focus.length ? [{ kind: 'line', text: `${name}’s System Scan is focused on these styles: about 75% of its questions, 25% recap.` }, focusList]
+      : [{ kind: 'line', text: `${name}’s System Scan focus is on, but no Engine style is weak right now, so the scan asks its usual questions.` }]), { kind: 'button', label: `Switch ${name}’s scan focus off`, href: url.focus });
   }
   return blocks;
 }
@@ -64,7 +70,8 @@ export function renderReport(data, links) {
   const subject = subjectFor(data), host = (() => { try { return new URL(links.app).host; } catch { return 'AutoMathtics'; } })();
   const played = data.children.filter((c) => c.answered), quiet = data.children.filter((c) => !c.answered), t = data.totals;
   const summary = `${data.weekLabel} · ${count(t.sessions, 'mission')} · ${pct(t.accuracy)} right across ${count(t.questions, 'question')}`;
-  const why = 'Why this email: you created an AutoMathtics parent account and agreed to account and progress emails. The weekly report comes every Monday while it is switched on.';
+  // true of every account, the owner's included, which predates the sign-up boxes: the switch is what sends it
+  const why = 'You get this email because weekly reports are switched on for your AutoMathtics parent account. They come every Monday until you switch them off.';
   const sender = `AutoMathtics · Mission Control for parents · ${host}`;
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark light"><title>${esc(subject)}</title></head>`
     + `<body style="margin:0;padding:0;background:${C.navy};"><div style="display:none;max-height:0;overflow:hidden;">${esc(summary)}</div>`
