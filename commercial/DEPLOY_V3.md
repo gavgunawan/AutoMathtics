@@ -268,8 +268,9 @@ a given release, not a line in a terminal. The nightly sweep job does not carry 
 image; `gcloud run jobs describe` shows the image digest).
 
 **Open tabs learn of a new release.** `/api/bootstrap` carries the same `release` (the version when there is no commit). The app
-remembers the first one it saw and asks again on every refresh, whenever the tab comes back into view, and every five minutes
-while it is in view; a different release shows a bar, *A new version of AutoMathtics is ready.*, whose *Update now* reloads the
+remembers the first one it saw and compares again on every refresh, and in the background (GET `/api/health`, which reads and
+sets no cookie, and never while a request is in flight) whenever the tab comes back into view and every five minutes while it
+is in view; a different release shows a bar, *A new version of AutoMathtics is ready.*, whose *Update now* reloads the
 page. It never reloads by itself, and on the kids' tablet it waits until a paper ends. Tabs opened before the first release that
 has this checker need one manual reload (`ACCEPTANCE.md` U1).
 

@@ -1,7 +1,9 @@
 // Update now (the owner's request of 12 Sep 2026): /api/bootstrap names the running release (RELEASE_SHA, else the version); the
-// app remembers the first it saw and, when a later bootstrap or the five-minute check names another, shows a bar whose Update now
-// reloads the page. Never a reload by itself; parents see it on any screen, kid mode only outside a running question session,
-// and a release seen during play shows once play ends. The check is an interval the tests tick like any other.
+// app remembers the first it saw and, when a later bootstrap or a background check names another, shows a bar whose Update now
+// reloads the page. The background checks (five-minute tick, a tab back in view) ask /api/health, which reads and sets no cookie,
+// and nothing while a request is in flight (review of 12 Sep 2026). Never a reload by itself; parents see it on any screen, kid mode
+// only outside a running question session, and a release seen during play shows once play ends. The check is an interval the
+// tests tick like any other.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
@@ -51,4 +53,19 @@ test('UI: in kid mode the bar waits for the end of a question session: never dur
   h.visibility(); await h.idle(); assert.ok(h.root.textContent.includes('Question 1 of 25') && !h.root.textContent.includes(BAR), 'back in view mid-game: still the question, still no bar');
   await h.click('Leave this session'); assert.ok(h.root.textContent.includes('Welcome,') && h.root.textContent.includes(BAR), 'once play ends');
   await h.click('🛒 Shop & rewards'); assert.ok(h.root.textContent.includes('GRID SHOP') && h.root.textContent.includes(BAR), 'and on the screens after it');
+});
+
+test('UI: the background check asks /api/health, which reads no cookie and sets none, and asks nothing while a request is in flight; a foreground bootstrap still compares', async (t) => {
+  const h = await uiFixture(t, { location: reloader() }), since = (n) => h.requests.slice(n).map((r) => r.path), jar = h.cookie();
+  let n = h.requests.length; await h.tick(); assert.deepEqual(since(n), ['/api/health'], 'the five-minute check asks the health endpoint alone');
+  h.api.addChildScreen(); n = h.requests.length; h.visibility(); await h.tick();
+  assert.deepEqual(since(n), ['/api/health', '/api/health'], 'back in view on a draft, then the next check: health, never bootstrap');
+  // the cookie a concurrent rotation has just set is never overwritten: even a token the server no longer knows stays in the jar as it is
+  h.setCookie('a-token-a-rotation-just-set'); await h.tick(); h.visibility(); await h.tick();
+  assert.equal(h.cookie(), '__session=a-token-a-rotation-just-set', 'no Set-Cookie from a background check'); h.setCookie(jar.slice('__session='.length));
+  h.api.setWorking(true); n = h.requests.length; await h.tick(); h.visibility(); h.api.setWorking(false);
+  assert.deepEqual(since(n), [], 'nothing asked while a request is in flight');
+  h.setRelease(NEXT); await h.api.refresh(); assert.ok(h.root.textContent.includes(BAR), 'a refresh bootstraps, and a bootstrap still compares');
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  assert.ok(!/const checkRelease = [^\n]*\/bootstrap/.test(app), 'the background check never asks /api/bootstrap');
 });

@@ -155,7 +155,11 @@ function showUpdate() {
   root.append(updateBar);
 }
 async function bootstrap() { const b = await api('/bootstrap'); sawRelease(b.release); return b; }
-const checkRelease = () => api('/bootstrap').then((b) => sawRelease(b.release), () => {}); // in the background: never touches csrf, never shows an error
+// In the background (the five-minute tick; a tab back in view on a screen that is not refreshed) the page asks GET /api/health, which
+// reads no cookie and sets none, and asks nothing while a request is in flight (`working`): /api/bootstrap could hand out a fresh
+// pre-authentication cookie over the session cookie a hand-over, a PIN, Switch child or a sign-in has just set (review of 12 Sep
+// 2026). Health names the deployed commit, or null with the version beside it: bootstrap's value either way. Never an error shown.
+const checkRelease = () => (working ? Promise.resolve() : api('/health').then((h) => sawRelease(h.release || h.version), () => {}));
 // ---- the Send countdown (the SMS resend ladder, DEPLOY_V3.md section 5) ----
 // H:MM:SS with the hours unbounded, so a day's wait reads 24:00:00 rather than a clock that wrapped to 0:00:00.
 function hms(seconds) {
