@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { Fault, fail, equal, object, preauth, preauthCsrf, sha256 } from './security.mjs';
 import { WEBHOOK_BODY_LIMIT } from './payments.mjs';
+import { FEEDBACK_BUDGETS } from './feedback.mjs';
 import { REMEMBER_MS } from './service.mjs';
 
 // Firebase Hosting forwards only the specially named __session cookie to Cloud Run.
@@ -36,13 +37,17 @@ const peerAddress = (req) => {
   return /^[A-Za-z0-9.:]{1,64}$/.test(ip || '') ? ip : 'unknown';
 };
 // An IPv6 client counts by its /64 (the feedback route's address budget): a subscriber is handed a whole /64 and can walk through
-// it at will, so a budget per full address would be a budget per request (RFC 6177). IPv4 and IPv4-mapped addresses stay as they are.
-const by64 = (ip) => {
-  if (!ip.includes(':') || /^::ffff:[\d.]+$/i.test(ip)) return ip;
+// it at will, so a budget per full address would be a budget per request (RFC 6177). A signed-out sender is counted by its /56 as
+// well, the most a subscriber is commonly delegated, so rotating through its 256 /64s buys nothing. IPv4 and IPv4-mapped addresses
+// have no such prefix: they stay as they are (by64) and have no /56 (by56).
+const groupsOf = (ip) => {
+  if (!ip.includes(':') || /^::ffff:[\d.]+$/i.test(ip)) return null;
   const [head, tail] = ip.split('::'), left = head ? head.split(':') : [], right = tail ? tail.split(':') : [];
   const groups = ip.includes('::') ? [...left, ...Array(Math.max(0, 8 - left.length - right.length)).fill('0'), ...right] : ip.split(':');
-  return groups.length >= 4 ? `${groups.slice(0, 4).map((g) => (parseInt(g, 16) || 0).toString(16)).join(':')}::/64` : ip;
+  return groups.length >= 4 ? groups.map((g) => parseInt(g, 16) || 0) : null;
 };
+const by64 = (ip) => { const g = groupsOf(ip); return g ? `${g.slice(0, 4).map((x) => x.toString(16)).join(':')}::/64` : ip; };
+const by56 = (ip) => { const g = groupsOf(ip); return g ? `${g.slice(0, 3).map((x) => x.toString(16)).join(':')}:${(g[3] & 0xff00).toString(16)}::/56` : null; };
 async function rawBody(req, limit) {
   if ((req.headers['content-type'] || '').split(';')[0].trim() !== 'application/json') fail(415, 'JSON_REQUIRED');
   if (req.headers['content-encoding'] && req.headers['content-encoding'] !== 'identity') fail(415, 'ENCODING_UNSUPPORTED');
@@ -99,6 +104,8 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
   // One sign-up token or one email link is good for `maximum` uses an hour: looked at before the work, counted after it (throttle
   // with no ceiling) only when the token passed its check, so junk never adds a key and the map stays the size of real use.
   const reused = (key, maximum) => { const h = hits.get(key); if (h && h.until > service.now() && h.count >= maximum) fail(429, 'TOO_MANY_ATTEMPTS'); };
+  // Gives back a slot taken with throttle() (the feedback route's instance slot, when its note is refused or turns out to be a retry).
+  const release = (key) => { const h = hits.get(key); if (h && h.count > 0) h.count--; };
   const server = createServer(async (req, res) => {
     const json = (status, value) => {
       res.statusCode = status; res.setHeader('Content-Type', 'application/json; charset=utf-8'); res.end(JSON.stringify(value));
@@ -250,21 +257,30 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
       // Feedback (server/feedback.mjs): from the sign-in screen with the pre-authentication CSRF token, or inside a parent's session,
       // authenticated here (the identity recheck: a password change revokes it, as on /api/me) and authorized in the note's own
       // transaction like every session route's. The session, never the body, says who sent it; a child's or the launch pad's session
-      // is refused, as no free text ever comes from a child (PRIVACY.md). A malformed body, and the retry of a note kept already, are
-      // answered before any budget. The budgets are then all checked before any is spent, and spent only for a note that is kept:
-      // five an hour per address (an IPv6 /64 is one address) with the peer's twenty-fold share (Hosting's front end is everyone's),
-      // ten a day per session or pre-authentication cookie, and a hundred kept notes an hour per instance, so one address cannot use
-      // the instance's allowance up. The day's caps on signed-out notes and on the owner's copies are in the transaction too.
+      // is refused before anything else, a retry included, as no free text ever comes from a child (PRIVACY.md). A malformed body, and
+      // the retry of a note kept already, are answered before any budget. The budgets (feedback.mjs FEEDBACK_BUDGETS) are signed-out
+      // senders' and parents' apart, keys and all, so no signed-out traffic (a forged X-Forwarded-For straight at the run.app host, an
+      // IPv6 /56 rotating its /64s through Hosting) can spend what a parent needs: signed out, per address (an IPv6 /64), per IPv6 /56,
+      // per peer (a small allowance of its own), per pre-authentication cookie and per instance; parents, per address, per peer (the
+      // address's times peerFactor: Hosting's front end is every parent's), per session and per instance. The instance's slot is taken
+      // at its check and given back if the note is refused or turns out to be a retry, so requests arriving together never all pass
+      // one check; the store-backed budgets are peeked before the note's transaction, as login does, so a flood of refusals takes no
+      // lock on the shared counters, and spent inside it, only for a note that is kept. The day's caps on signed-out notes and on the
+      // owner's copies are in that transaction too.
       if (feedback && req.method === 'POST' && path === '/api/feedback') {
-        const input = feedback.parse(data);
-        if (await feedback.kept(input.id)) return json(200, { ok: true });
-        const live = stored && stored.expiresAt > service.now() ? stored : null;
+        const input = feedback.parse(data), live = stored && stored.expiresAt > service.now() ? stored : null;
         if (live && live.role !== 'parent') fail(403, 'PARENT_REQUIRED');
-        const ctx = live ? await service.authenticate(token) : null;
-        reused('feedback:all', 100);
-        const client = by64(clientAddress(req, cfg.proxyHops)), peer = peerAddress(req);
-        const budgets = [[`feedback:${client}`, 5, 60 * 60_000], ...(client === peer ? [] : [[`feedback:peer:${peer}`, 5 * peerFactor, 60 * 60_000]]), [`feedback:session:${sha256(token)}`, 10, 24 * 60 * 60_000]];
-        if (!(await feedback.record(input, { ctx, budgets })).replay) throttle('feedback:all', Infinity, 60 * 60_000); // the instance counts the notes it kept, never a refusal
+        if (await feedback.kept(input.id)) return json(200, { ok: true });
+        const b = live ? FEEDBACK_BUDGETS.parent : FEEDBACK_BUDGETS.signedOut, kind = live ? 'feedback-parent' : 'feedback-out', hour = 60 * 60_000;
+        const client = clientAddress(req, cfg.proxyHops), peer = peerAddress(req), net56 = live ? null : by56(client);
+        const budgets = [[`${kind}:${by64(client)}`, b.address, hour], ...(net56 ? [[`${kind}:56:${net56}`, b.net56, hour]] : []),
+          ...(client === peer ? [] : [[`${kind}:peer:${peer}`, live ? b.address * peerFactor : b.peer, hour]]), [`${kind}:session:${sha256(token)}`, b.session, 24 * hour]];
+        const slot = `${kind}:all`; throttle(slot, b.instance, hour); // the instance's slot, taken now
+        let kept = false;
+        try {
+          for (const [bucket, maximum] of budgets) await service.peek(bucket, maximum); // a spent budget refuses here, before any lock
+          kept = !(await feedback.record(input, { ctx: live ? await service.authenticate(token) : null, budgets })).replay;
+        } finally { if (!kept) release(slot); } // a refusal, or a retry found in the transaction, gives the slot back
         return json(200, { ok: true });
       }
       if (stored) throttle(`session:${sha256(token)}`, 120, 60_000);

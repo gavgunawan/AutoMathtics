@@ -1,10 +1,11 @@
-// Send feedback (the owner's request of 12 Sep 2026; hardened after the review of 12 Sep 2026): the words, the screen, the page's
+// Send feedback (the owner's request of 12 Sep 2026; hardened after the reviews of 12 Sep 2026): the words, the screen, the page's
 // own operation id and, signed out, an address to be answered at, sent from the sign-in screen with the pre-authentication CSRF
 // token or from a parent's session, which is checked as on every session route; who sent it is the session's to say, never the
-// body's, and a child never sends one; a retried send is one note; every budget is checked before any is spent, and spent only for
-// a kept note, an IPv6 /64 counting as one address; the UTC day caps signed-out notes and the owner's copies; kept 400 days,
-// audited by id alone, in the family's export and gone with the family or the account; the operator's read; the paper trail; the
-// button in the app, never on a device in kid mode, which the device remembers.
+// body's, and a child never sends one, not even a retry; a retried send is one note, also when eight arrive at once; the budgets
+// are signed-out senders' and parents' apart, peeked before the note's transaction and spent in it only for a kept note, an IPv6
+// /64 counting as one address and a /56 capped too, an instance's slot taken at its check; the UTC day caps signed-out notes and
+// the owner's copies; kept 400 days, audited by id alone, in the family's export and gone with the family or the account; the
+// operator's read; the paper trail; the button in the app, never on a device in kid mode, which the device remembers.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
@@ -16,7 +17,8 @@ import { fileURLToPath } from 'node:url';
 import { fixture, secret } from './support.mjs';
 import { uiFixture } from './ui-support.mjs';
 import { createApp } from '../server/http.mjs';
-import { Feedback, FEEDBACK_TTL_MS, FEEDBACK_MAIL_TIMEOUT_MS, FEEDBACK_DAY } from '../server/feedback.mjs';
+import { mac } from '../server/security.mjs';
+import { Feedback, FEEDBACK_TTL_MS, FEEDBACK_MAIL_TIMEOUT_MS, FEEDBACK_DAY, FEEDBACK_BUDGETS } from '../server/feedback.mjs';
 import { createMailer } from '../server/mailer.mjs';
 import { RETENTION, DELETION_GRACE_MS } from '../server/support.mjs';
 
@@ -38,6 +40,14 @@ const notes = async (f) => (await f.store.entries('feedback')).map(([id, d]) => 
 const sentRows = async (f) => (await f.store.list('audit')).filter((a) => a.action === 'feedback.sent');
 const from = (ip) => ({ 'X-Forwarded-For': ip });
 const storage = () => { const m = new Map(); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { m.set(k, String(v)); }, removeItem: (k) => { m.delete(k); }, key: (i) => [...m.keys()][i] ?? null, get length() { return m.size; } }; };
+// a store whose every read, inside a transaction or not, takes `ms` to answer (the transactions still run one at a time), so that
+// requests sent together really are inside the route together; the function returned puts the store back as it was
+const slow = (f, ms = 30) => {
+  const store = f.store, proto = Object.getPrototypeOf(store), wait = () => new Promise((r) => setTimeout(r, ms));
+  store.get = async (p) => { await wait(); return proto.get.call(store, p); };
+  store.transaction = (fn, opts) => proto.transaction.call(store, (tx) => fn({ ...tx, get: async (p) => { await wait(); return tx.get(p); } }), opts);
+  return () => { delete store.get; delete store.transaction; };
+};
 
 test('signed out: the words, the screen and an address to answer, with the pre-authentication CSRF token; kept under its operation id with the release for 400 days, counted for the day and audited by its id alone; Origin, CSRF and fetch metadata still guard it', async (t) => {
   const f = fixture(), s = await listen(t, f), day = new Date(f.now()).toISOString().slice(0, 10), operationId = randomUUID();
@@ -55,16 +65,17 @@ test('signed out: the words, the screen and an address to answer, with the pre-a
   assert.equal((await notes(f)).length, 2, 'the refused ones kept nothing');
 });
 
-test('inside a session the session names the sender: a parent\'s uid and family, never the body\'s; an address sent beside a session is dropped; the launch pad\'s and a child\'s sessions are refused', async (t) => {
-  const f = fixture(), p = await f.family('parentA', 1), { child } = await f.child(p.ctx), s = await listen(t, f);
+test('inside a session the session names the sender: a parent\'s uid and family, never the body\'s; an address sent beside a session is dropped; the launch pad\'s and a child\'s sessions are refused, a replay of a kept note\'s id included', async (t) => {
+  const f = fixture(), p = await f.family('parentA', 1), { child } = await f.child(p.ctx), s = await listen(t, f), kept = randomUUID();
   await s.as((await f.login('parentA')).cookie);
-  assert.equal((await s.send({ text: 'From Mission Control', page: 'mission-control', contact: 'elsewhere@example.test' })).status, 200);
+  assert.equal((await s.send({ text: 'From Mission Control', page: 'mission-control', contact: 'elsewhere@example.test', operationId: kept })).status, 200);
   const [n] = await notes(f); assert.deepEqual([n.uid, n.familyId, 'contact' in n], ['parentA', p.familyId, false], 'answered at the account address instead');
   const [a] = await sentRows(f); assert.deepEqual([a.uid, a.familyId, a.feedbackId], ['parentA', p.familyId, n.id]);
+  const refused = async (body) => { const r = await s.send(body); assert.equal(r.status, 403, JSON.stringify(body)); assert.equal((await r.json()).error, 'PARENT_REQUIRED'); };
   const launchPad = await f.service.lock(p.ctx); await s.as(launchPad);
-  let r = await s.send({ text: 'from the tablet', page: 'who-is-on-a-mission' }); assert.equal(r.status, 403); assert.equal((await r.json()).error, 'PARENT_REQUIRED');
+  await refused({ text: 'from the tablet', page: 'who-is-on-a-mission' }); await refused({ text: 'a replay from the tablet', page: 'who-is-on-a-mission', operationId: kept });
   await s.as(await f.service.selectChild(await f.service.authenticate(launchPad), child.id, '763829'));
-  r = await s.send({ text: 'from a child', page: 'your-grid' }); assert.equal(r.status, 403); assert.equal((await r.json()).error, 'PARENT_REQUIRED');
+  await refused({ text: 'from a child', page: 'your-grid' }); await refused({ text: 'a replay from a child', page: 'your-grid', operationId: kept });
   assert.equal((await notes(f)).length, 1, 'no free text from a child, nor from the launch pad');
 });
 
@@ -103,25 +114,75 @@ test('a retried send is one note: the operation id is the note\'s id and its cop
   assert.equal((await s.send({ text: 'the sixth note', page: 'sign-in' })).status, 429);
 });
 
-test('budgets, all checked before any is spent: ten a day per session whatever the address, five an hour per address whatever the session, and an IPv6 /64 is one address however it is written', async (t) => {
-  const f = fixture(), s = await listen(t, f, { proxyHops: 1 });
+test('budgets, each looked at before the note\'s transaction and spent in it only for a kept note: ten a day per session whatever the address, five an hour per address whatever the session, an IPv6 /64 as one address however written, and ten an hour per IPv6 /56 however its /64s rotate', async (t) => {
+  const f = fixture(), s = await listen(t, f, { proxyHops: 1 }), hour = 60 * 60_000;
   for (let i = 0; i < 10; i++) assert.equal((await s.send({ text: `n${i}`, page: 'x' }, from(`10.0.0.${i}`))).status, 200);
   assert.equal((await s.send({ text: 'eleventh', page: 'x' }, from('10.0.0.10'))).status, 429, 'the eleventh from one session in a day');
   for (let i = 0; i < 5; i++) { await s.renew(); assert.equal((await s.send({ text: `a${i}`, page: 'x' }, from('10.0.0.10'))).status, 200, 'the refused eleventh spent none of its address\'s five'); }
   await s.renew(); assert.equal((await s.send({ text: 'sixth from one address', page: 'x' }, from('10.0.0.10'))).status, 429, 'the sixth from one address in an hour');
+  f.advance(hour + 1000); // a fresh hour, and a fresh twenty for the instance's signed-out notes
   for (let i = 1; i <= 5; i++) { await s.renew(); assert.equal((await s.send({ text: `v${i}`, page: 'x' }, from(`2001:db8:1:2::${i.toString(16)}`))).status, 200); }
   await s.renew(); assert.equal((await s.send({ text: 'v6 again', page: 'x' }, from('2001:0db8:0001:0002:ffff:ffff:ffff:fffe'))).status, 429, 'the same /64, written out in full');
-  await s.renew(); assert.equal((await s.send({ text: 'the next /64', page: 'x' }, from('2001:db8:1:3::1'))).status, 200);
-  f.advance(60 * 60_000 + 1000); await s.renew(); assert.equal((await s.send({ text: 'an hour on', page: 'x' }, from('10.0.0.10'))).status, 200);
+  for (let i = 3; i <= 7; i++) { await s.renew(); assert.equal((await s.send({ text: `the /64 number ${i}`, page: 'x' }, from(`2001:db8:1:${i}::1`))).status, 200, 'another /64 of the same /56'); }
+  await s.renew(); assert.equal((await s.send({ text: 'an eleventh from the /56', page: 'x' }, from('2001:db8:1:ff::1'))).status, 429, 'ten an hour per /56, however its /64s rotate');
+  await s.renew(); assert.equal((await s.send({ text: 'another /56', page: 'x' }, from('2001:db8:2:100::1'))).status, 200);
+  f.advance(hour + 1000); await s.renew(); assert.equal((await s.send({ text: 'an hour on', page: 'x' }, from('10.0.0.10'))).status, 200);
 });
 
-test('the instance\'s hundred an hour counts only the notes it kept: one address\'s refusals cannot use it up for everyone', async (t) => {
+test('signed-out senders and parents are budgeted apart: a caller forging X-Forwarded-For straight at the run.app host is held to twenty an hour behind its one real peer, on every instance, while a parent behind that same front end is still heard', async (t) => {
+  const f = fixture(), one = await listen(t, f, { proxyHops: 2 }), two = await listen(t, f, { proxyHops: 2 }); // Hosting in front: the peer is the entry the Google front end appended
+  assert.deepEqual(FEEDBACK_BUDGETS, { signedOut: { address: 5, net56: 10, peer: 20, session: 10, instance: 20 }, parent: { address: 5, session: 10, instance: 100 } });
+  const forged = (i, peer = '198.51.100.7') => ({ 'X-Forwarded-For': `203.0.113.${i}, ${peer}` }); // a new "client" every time, one real caller
+  for (let i = 0; i < 20; i++) { if (i % 10 === 0) await one.renew(); assert.equal((await one.send({ text: `junk ${i}`, page: 'x' }, forged(i))).status, 200); }
+  await two.renew(); assert.equal((await two.send({ text: 'junk on another instance', page: 'x' }, forged(20))).status, 429, 'twenty an hour for the one caller behind them all, on every instance');
+  assert.equal((await two.send({ text: 'someone else, signed out', page: 'x' }, forged(21, '198.51.100.8'))).status, 200, 'another front end is another peer');
+  await one.as((await f.login('parentA')).cookie);
+  assert.equal((await one.send({ text: 'a parent, same instance, same front end', page: 'mission-control' }, { 'X-Forwarded-For': '192.0.2.10, 198.51.100.7' })).status, 200, 'the parents\' peer and instance allowances are their own');
+});
+
+test('each instance\'s allowance counts only the notes it kept, signed-out senders\' twenty an hour apart from parents\' hundred: one address\'s refusals give their slots back and cannot use it up for everyone', async (t) => {
   const f = fixture(), w = await listen(t, f, { proxyHops: 1 });
   for (let i = 0; i < 5; i++) { await w.renew(); assert.equal((await w.send({ text: `a${i}`, page: 'x' }, from('10.9.9.9'))).status, 200); }
   for (let i = 0; i < 40; i++) { await w.renew(); assert.equal((await w.send({ text: `flood ${i}`, page: 'x' }, from('10.9.9.9'))).status, 429); }
-  for (let i = 0; i < 95; i++) { if (i % 10 === 0) await w.renew(); assert.equal((await w.send({ text: `m${i}`, page: 'x' }, from(`10.1.${i >> 4}.${i}`))).status, 200, `note ${i} from another address`); }
+  for (let i = 0; i < 15; i++) { if (i % 10 === 0) await w.renew(); assert.equal((await w.send({ text: `m${i}`, page: 'x' }, from(`10.1.0.${i}`))).status, 200, `note ${i} from another address`); }
   await w.renew(); const r = await w.send({ text: 'one too many', page: 'x' }, from('10.2.0.1'));
-  assert.equal(r.status, 429); assert.equal((await r.json()).error, 'TOO_MANY_ATTEMPTS', 'a hundred kept notes an hour per instance'); assert.equal((await notes(f)).length, 100);
+  assert.equal(r.status, 429); assert.equal((await r.json()).error, 'TOO_MANY_ATTEMPTS', 'twenty kept signed-out notes an hour per instance'); assert.equal((await notes(f)).length, 20);
+  await w.as((await f.login('parentA')).cookie); assert.equal((await w.send({ text: 'a parent, all the same', page: 'mission-control' }, from('10.2.0.2'))).status, 200, 'the parents\' hundred are apart');
+});
+
+test('notes arriving together at the edge of an instance\'s allowance: the slot is taken at the check, so no more are kept than there are slots', async (t) => {
+  const f = fixture(), w = await listen(t, f, { proxyHops: 1 });
+  for (let i = 0; i < 18; i++) { if (i % 9 === 0) await w.renew(); assert.equal((await w.send({ text: `m${i}`, page: 'x' }, from(`10.1.0.${i}`))).status, 200); }
+  await w.renew(); const restore = slow(f); // every read takes 30 ms now: five requests are inside the route at once
+  const answers = await Promise.all([0, 1, 2, 3, 4].map((i) => w.send({ text: `at once ${i}`, page: 'x' }, from(`10.3.0.${i}`)))); restore();
+  assert.deepEqual(answers.map((r) => r.status).sort(), [200, 200, 429, 429, 429], 'two slots left: two notes kept'); assert.equal((await notes(f)).length, 20);
+});
+
+test('eight sends of one note at once, over a store that answers in 30 ms: one note, one copy, one audit row, one slot of the day and one of the address; the seven retries give their instance slots back', async (t) => {
+  const calls = [], fetch = async (url, init) => { calls.push(init.headers['Idempotency-Key']); return { ok: true, status: 200, json: async () => ({ id: `em_${calls.length}` }) }; };
+  const f = fixture(), day = new Date(f.now()).toISOString().slice(0, 10);
+  const s = await listen(t, f, { proxyHops: 1, feedback: new Feedback({ foundation: f.service, store: f.store, now: f.now, release: 'r1', mailer: createMailer({ provider: 'resend', apiKey: KEY, fetch }), to: OWNER }) });
+  for (let i = 0; i < 12; i++) { if (i % 6 === 0) await s.renew(); assert.equal((await s.send({ text: `before ${i}`, page: 'x' }, from(`10.4.0.${i}`))).status, 200); } // twelve of the instance's twenty
+  await f.store.put(`feedbackDays/${day}`, { ...(await f.store.get(`feedbackDays/${day}`)), copies: 0, copiesSignedOut: 0 }); // the day's copies are still to come
+  await s.renew(); const operationId = randomUUID(), restore = slow(f);
+  const answers = await Promise.all(Array.from({ length: 8 }, () => s.send({ text: 'Only once, please.', page: 'sign-in', operationId }, from('10.7.7.7'))));
+  restore();
+  assert.deepEqual(answers.map((r) => r.status), Array(8).fill(200), 'each answered as the first send was');
+  assert.equal((await notes(f)).filter((n) => n.id === operationId).length, 1); assert.deepEqual(calls.filter((k) => k === `feedback:${operationId}`), [`feedback:${operationId}`], 'one copy');
+  assert.equal((await sentRows(f)).filter((a) => a.feedbackId === operationId).length, 1, 'one audit row');
+  assert.equal((await f.store.get(`feedbackDays/${day}`)).stored, 13, 'one slot of the day: twelve before, this one');
+  assert.equal((await f.store.get(`rateLimits/${mac(secret, 'feedback-out:10.7.7.7')}`)).count, 1, 'one slot of the address');
+  for (let i = 0; i < 7; i++) { if (i % 6 === 0) await s.renew(); assert.equal((await s.send({ text: `after ${i}`, page: 'x' }, from(`10.5.0.${i}`))).status, 200, 'the seven retries gave their instance slots back'); }
+  await s.renew(); assert.equal((await s.send({ text: 'the twenty-first', page: 'x' }, from('10.6.0.1'))).status, 429);
+});
+
+test('a spent budget refuses before the note\'s transaction is opened: a flood of refusals takes no lock on the shared counters', async (t) => {
+  const f = fixture(), s = await listen(t, f, { proxyHops: 1 }), proto = Object.getPrototypeOf(f.store); let opened = 0;
+  f.store.transaction = (...args) => { opened++; return proto.transaction.apply(f.store, args); };
+  for (let i = 0; i < 5; i++) { await s.renew(); assert.equal((await s.send({ text: `a${i}`, page: 'x' }, from('10.8.8.8'))).status, 200); }
+  const before = opened;
+  for (let i = 0; i < 10; i++) { await s.renew(); assert.equal((await s.send({ text: `refused ${i}`, page: 'x' }, from('10.8.8.8'))).status, 429); }
+  assert.equal(opened, before, 'ten refusals, not one transaction'); delete f.store.transaction;
 });
 
 test('a UTC day\'s caps, whatever the addresses: at most a hundred notes from signed-out senders (then FEEDBACK_BUSY for them, never for a parent) and at most twenty copies to the owner, five of them for signed-out notes; past a copy cap the note is kept all the same', async (t) => {
@@ -216,7 +277,8 @@ test('the paper trail: the privacy rows (the notes, the owner\'s copies, the day
   assert.match(RETENTION['feedback/* (sent signed out)'], /TTL 400 days/); assert.match(RETENTION['feedback/* (sent signed out)'], /no export carries them/);
   assert.match(RETENTION['feedback copies (the owner\'s mailbox, Resend\'s log)'], /no family or account deletion reaches it/);
   for (const [name, text] of [['DEPLOY_V3.md', deploy], ['02-permissions.sh', perms]]) { const groups = text.match(/for GROUP in ([^;]+); do/)[1].split(/\s+/); for (const g of ['feedback', 'feedbackDays']) assert.ok(groups.includes(g), `${name}: ${g} expires by TTL`); }
-  for (const s of ['## 5c. Feedback', 'node scripts/report.mjs feedback --days 7', 'export FEEDBACK_TO=', 'IPv6 /64', 'FEEDBACK_BUSY', 'at most 20 copies to the owner, 5 of them', 'all checked before any is spent']) assert.ok(deploy.includes(s), s);
+  for (const s of ['## 5c. Feedback', 'node scripts/report.mjs feedback --days 7', 'export FEEDBACK_TO=', 'IPv6 /64', 'FEEDBACK_BUSY', 'at most 20 copies to the owner, 5 of them', 'signed-out senders\' and parents\' apart', '10 per IPv6 /56', '20 per peer']) assert.ok(deploy.includes(s), s);
+  assert.ok(!deploy.includes('with Hosting\'s shared front end allowed twenty times that'), 'no allowance shared by signed-out senders and parents any more');
   assert.ok(!deploy.includes('Budgets: five an hour per address, ten a day per session, a hundred an\nhour per instance.'), 'the old description is gone');
   assert.match(acceptance, /^\| P10 \| Tap \*Send feedback\*.*reload the tablet/m);
   const readme = await read('../README.md'); for (const s of ['`feedback/{id}`', '`feedbackDays/{YYYY-MM-DD}`']) assert.ok(readme.includes(s), s);
@@ -273,4 +335,23 @@ test('UI: kid mode is remembered on the device: after a reload, or once the laun
   assert.ok(has(later), 'a parent\'s session opened here: the button is back'); assert.equal(device.getItem('automathtics.kidmode'), null, 'and the mark is gone');
   const bare = await uiFixture(t); await bare.f.child(bare.a.ctx); await bare.api.refresh(); await bare.click('Hand over to kids'); assert.ok(!has(bare));
   const reloaded = await uiFixture(t, { signedIn: false }); assert.ok(has(reloaded), 'without storage nothing outlives the page');
+});
+
+test('UI: a Send that meets a revoked session says so in words and takes the tab to sign-in, as a refresh does; nothing is kept', async (t) => {
+  const h = await uiFixture(t); await h.click('Send feedback'); h.nodes('TEXTAREA')[0].value = 'After a reset elsewhere.';
+  h.f.advance(2000); h.f.resetPassword('parentA'); h.f.advance(61_000); // the password was reset from another device; identity rechecks are cached for a minute
+  await h.click('Send');
+  assert.ok(h.root.textContent.includes('Sign in as parent'), 'the sign-in screen, as refresh() shows it');
+  assert.equal(h.message.textContent, 'Your sign-in has ended: the password or the mobile number changed. Please sign in again.');
+  assert.equal((await h.f.store.list('feedback')).length, 0);
+});
+
+test('UI: on the parent-verification screen a session is still open, so no reply address is offered (an answer goes to the account\'s address) and the note is the parent\'s', async (t) => {
+  const h = await uiFixture(t); await h.draft(); // a sensitive action after five minutes: PARENT VERIFICATION, with the session still open
+  await h.click('Send feedback');
+  assert.ok(!h.nodes('INPUT').some((i) => i.type === 'email' && i.required === false), 'no address field while a session is live');
+  assert.ok(h.root.textContent.includes('Any answer goes to your account’s email address.'));
+  h.nodes('TEXTAREA')[0].value = 'The verification step is clear.'; await h.click('Send');
+  const [n] = await h.f.store.list('feedback'); assert.deepEqual([n.text, n.page, n.uid, n.contact], ['The verification step is clear.', 'parent-verification', 'parentA', undefined]);
+  assert.ok(h.root.textContent.includes('PARENT VERIFICATION'), 'and the verification goes on, undisturbed');
 });

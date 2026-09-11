@@ -450,9 +450,13 @@ add an address to be answered at. The server decides who sent it: a parent's ses
 sign-in screen names nobody, and a child's or the launch pad's session is refused. Each note is kept in `feedback/{id}` for 400
 days (TTL, block B), with the release it was sent from. A parent's session is rechecked as on every
 session route: one revoked by a password change, or superseded, sends nothing. A retried send carries the same operation id and
-stays one note. Budgets, all checked before any is spent and spent only for a note that is kept: five an hour per address (an
-IPv6 /64 counts as one address), with Hosting's shared front end allowed twenty times that; ten a day per session or
-pre-authentication cookie; a hundred kept notes an hour per instance. Per UTC day (`feedbackDays/{day}`, TTL 8 days), whatever the
+stays one note. Budgets are signed-out senders' and parents' apart, so that no signed-out traffic (a forged `X-Forwarded-For` straight at
+the run.app host, or an IPv6 /56 rotating its /64s through Hosting) can spend what a parent needs. Signed out, an hour: 5 per
+address (an IPv6 /64 counts as one address), 10 per IPv6 /56, 20 per peer (the front end the request came through), 20 per
+instance, and 10 a day per pre-authentication cookie. Parents, an hour: 5 per address, twenty times that per peer, 100 per
+instance, and 10 a day per session. Every budget is looked at before the note's transaction, so a flood of refusals locks
+nothing, and spent in it, only for a note that is kept; an instance's slot is taken at its check and given back when the note
+is refused or is a retry. Per UTC day (`feedbackDays/{day}`, TTL 8 days), whatever the
 addresses or cookies: at most 100 notes from signed-out senders, all of them together (after that 429 `FEEDBACK_BUSY` for them,
 never for a parent), and at most 20 copies to the owner, 5 of them for notes sent signed out; past a copy cap the note is still
 kept, and the CLI below reads it. A family's deletion removes the notes its parents sent, and the sign-in account's deletion those it sent

@@ -38,6 +38,7 @@ const messages = {
   LINK_INVALID: 'This link does not work. Nothing was changed.', LINK_EXPIRED: 'This link has expired; the next weekly email brings fresh ones. Nothing was changed.', LINK_GONE: 'The family or child this link was for is no longer there. Nothing was changed.',
   FEEDBACK_TEXT: 'Write your feedback first (up to 2000 characters).', FEEDBACK_CONTACT: 'That email address does not look right. Fix it, or leave it empty.',
   FEEDBACK_BUSY: 'Many notes have come in today. Please try again tomorrow, or sign in to send yours now.',
+  SESSION_REVOKED: 'Your sign-in has ended: the password or the mobile number changed. Please sign in again.',
 };
 // The sign-in provider's own refusals: in the parent's words where the cause is known, otherwise the provider's code and text,
 // so that a failure can be reported and matched against the provider's own log (the one generic sentence used to hide everything).
@@ -118,6 +119,9 @@ function note(text) { status.textContent = text || ''; }
 const KID_MODE = 'automathtics.kidmode';
 let kidMode = (() => { try { return localStorage.getItem(KID_MODE) === '1'; } catch { return false; } })();
 function setKidMode(on) { kidMode = on; try { if (on) localStorage.setItem(KID_MODE, '1'); else localStorage.removeItem(KID_MODE); } catch { /* no storage: this page's memory only */ } }
+// parentLive: a parent's session is open on this page (renderModel), through a re-verification too, which clears the page's model
+// but not the session (signInScreen): the panel then offers no reply address, since the server answers at the account's own.
+let parentLive = false;
 const EMAIL_ADDRESS = /^[^\s@<>"]{1,64}@[^\s@<>"]{1,190}\.[^\s@<>"]{2,}$/;
 function feedbackFoot(where) { // `where`: the screen's own name (sign-in, sign-up…) or else its heading, as the page the note reports
   const foot = el('div', null, 'feedback'), page = String(where || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'screen';
@@ -125,13 +129,17 @@ function feedbackFoot(where) { // `where`: the screen's own name (sign-in, sign-
   function open() {
     const operationId = crypto.randomUUID(), words = el('textarea'); Object.assign(words, { maxLength: 2000, rows: 4, required: true }); // one id per note: Send again after a lost answer is the same note
     const label = el('label', null, 'field'); label.append(el('span', 'Your feedback (up to 2000 characters)'), words);
-    const reply = model ? null : field('Your email, if you would like an answer (optional)', 'email', { required: false, maxLength: 254, autocomplete: 'email' });
-    foot.replaceChildren(label, ...(reply ? [reply.wrap] : []), button('Send', async () => {
+    const reply = model || parentLive ? null : field('Your email, if you would like an answer (optional)', 'email', { required: false, maxLength: 254, autocomplete: 'email' });
+    foot.replaceChildren(label, reply ? reply.wrap : el('p', 'Any answer goes to your account’s email address.', 'small muted'), button('Send', async () => {
       const text = words.value.trim(), contact = reply ? reply.input.value.trim() : '';
       if (!text || text.length > 2000) { note(messages.FEEDBACK_TEXT); return; }
       if (contact && (contact.length > 254 || !EMAIL_ADDRESS.test(contact))) { note(messages.FEEDBACK_CONTACT); return; }
-      if (!model) csrf = (await bootstrap()).csrf; // signed out, the pre-authentication token lives ten minutes: a fresh one
-      await api('/feedback', { text, page, operationId, ...(contact ? { contact } : {}) });
+      if (!model) csrf = (await bootstrap()).csrf; // no page model (signed out, or re-verifying): a token that matches the cookie now
+      try { await api('/feedback', { text, page, operationId, ...(contact ? { contact } : {}) }); }
+      catch (error) { // the session was revoked or superseded meanwhile: to sign-in, as refresh() goes, with the reason in words
+        if (error.code !== 'SESSION_REVOKED' && error.code !== 'SIGN_IN_REQUIRED') throw error;
+        model = null; signInScreen(); note(messages[error.code]); return;
+      }
       closed(); note('Thank you: your feedback was sent.');
     }, 'primary'), button('Cancel', closed, 'ghost'));
   }
@@ -326,7 +334,7 @@ function rail(current) {
   return steps;
 }
 function signInScreen(signup = false, afterReady = null, reauth = false) {
-  if (!reauth) reauthEpoch++;
+  if (!reauth) { reauthEpoch++; parentLive = false; } // a re-verification keeps the parent's session open; any other sign-in screen has none
   model = null;
   const box = panel(reauth ? 'PARENT VERIFICATION' : 'MISSION CONTROL',
     reauth ? 'Confirm it\u2019s you.' : (signup ? 'A new crew starts here.' : 'Big futures. Small steps.'),
@@ -405,6 +413,7 @@ async function signOut() {
 }
 function renderModel() {
   setKidMode(model.role !== 'parent'); // the launch pad or a child: no Send feedback on this device until a parent's session opens here
+  parentLive = model.role === 'parent';
   if (model.role === 'child') return childScreen();
   if (!model.family) return familySetup();
   return model.role === 'parent' ? parentScreen() : selectorScreen();

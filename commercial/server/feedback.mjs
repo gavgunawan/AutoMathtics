@@ -15,6 +15,11 @@ export const FEEDBACK_TTL_MS = 400 * DAY, FEEDBACK_MAIL_TIMEOUT_MS = 3000, FEEDB
 // signed-out ones apart, since they go out under the Resend key the weekly report needs (100 emails a day on the free plan). A
 // note past a copy cap is still kept, and the operator's CLI reads it. Forged addresses and fresh cookies move none of these counts.
 export const FEEDBACK_DAY = Object.freeze({ signedOut: 100, copies: 20, copiesSignedOut: 5 });
+// The route's budgets (http.mjs), signed-out senders' and parents' apart, keys and all, so that no signed-out traffic can spend a
+// parent's (review of 12 Sep 2026). An hour: per address (an IPv6 /64), per IPv6 /56 (signed out only: rotating /64s buys nothing),
+// per peer (signed out, a small allowance of its own; a parent's is the address's times the app's peerFactor, since Hosting's front
+// end is every parent's) and per instance; a day: per session (signed out, per pre-authentication cookie).
+export const FEEDBACK_BUDGETS = Object.freeze({ signedOut: Object.freeze({ address: 5, net56: 10, peer: 20, session: 10, instance: 20 }), parent: Object.freeze({ address: 5, session: 10, instance: 100 }) });
 const SCREEN = /^[a-z0-9][a-z0-9-]{0,39}$/, ADDRESS = /^[^\s@<>"]{1,64}@[^\s@<>"]{1,190}\.[^\s@<>"]{2,}$/;
 const esc = (s) => String(s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
 
