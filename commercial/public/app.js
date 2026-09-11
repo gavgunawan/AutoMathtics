@@ -36,6 +36,7 @@ const messages = {
   EGG_ALREADY_WARMING: 'Your Mystery Egg is already warming.', REWARD_DAILY_LIMIT: 'That reward has reached its daily limit.',
   SCAN_ALREADY_DONE: 'System Scan is already complete this week.', SCAN_LOCKED: 'System Scan unlocks in Sector B after the first tier.',
   LINK_INVALID: 'This link does not work. Nothing was changed.', LINK_EXPIRED: 'This link has expired; the next weekly email brings fresh ones. Nothing was changed.', LINK_GONE: 'The family or child this link was for is no longer there. Nothing was changed.',
+  FEEDBACK_TEXT: 'Write your feedback first (up to 2000 characters).', FEEDBACK_CONTACT: 'That email address does not look right. Fix it, or leave it empty.',
 };
 // The sign-in provider's own refusals: in the parent's words where the cause is known, otherwise the provider's code and text,
 // so that a failure can be reported and matched against the provider's own log (the one generic sentence used to hide everything).
@@ -102,9 +103,34 @@ function panel(kicker, title, subtitle) {
   root.replaceChildren();
   const box = el('section', null, 'panel'); box.setAttribute('data-deck', model?.role === 'child' ? 'GRID // ONLINE' : 'MISSION CONTROL // ONLINE'); // the corner tag every deck carries
   box.append(el('p', kicker, 'kicker'), el('h1', title), el('p', subtitle, 'muted'));
-  root.append(box); return box;
+  root.append(box);
+  if (!kidMode) root.append(feedbackFoot(kicker)); // under the sign-in screen and every parent screen; never in kid mode
+  return box;
 }
 function note(text) { status.textContent = text || ''; }
+// ---- Send feedback (the owner's request of 12 Sep 2026): under the sign-in screen and every parent screen, never in kid mode —
+// kidMode is set from Hand over to kids until a parent signs in again (renderModel). The browser sends the words, the screen and,
+// signed out, an address to be answered at if the sender wants one; the server decides who sent it (server/feedback.mjs).
+let kidMode = false;
+const EMAIL_ADDRESS = /^[^\s@<>"]{1,64}@[^\s@<>"]{1,190}\.[^\s@<>"]{2,}$/;
+function feedbackFoot(kicker) {
+  const foot = el('div', null, 'feedback'), page = String(kicker || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'screen';
+  const closed = () => foot.replaceChildren(button('Send feedback', open, 'text-button'));
+  function open() {
+    const words = el('textarea'); Object.assign(words, { maxLength: 2000, rows: 4, required: true });
+    const label = el('label', null, 'field'); label.append(el('span', 'Your feedback (up to 2000 characters)'), words);
+    const reply = model ? null : field('Your email, if you would like an answer (optional)', 'email', { required: false, maxLength: 254, autocomplete: 'email' });
+    foot.replaceChildren(label, ...(reply ? [reply.wrap] : []), button('Send', async () => {
+      const text = words.value.trim(), contact = reply ? reply.input.value.trim() : '';
+      if (!text || text.length > 2000) { note(messages.FEEDBACK_TEXT); return; }
+      if (contact && (contact.length > 254 || !EMAIL_ADDRESS.test(contact))) { note(messages.FEEDBACK_CONTACT); return; }
+      if (!model) csrf = (await api('/bootstrap')).csrf; // signed out, the pre-authentication token lives ten minutes: a fresh one
+      await api('/feedback', { text, page, ...(contact ? { contact } : {}) });
+      closed(); note('Thank you: your feedback was sent.');
+    }, 'primary'), button('Cancel', closed, 'ghost'));
+  }
+  closed(); return foot;
+}
 // ---- the Send countdown (the SMS resend ladder, DEPLOY_V3.md section 5) ----
 // H:MM:SS with the hours unbounded, so a day's wait reads 24:00:00 rather than a clock that wrapped to 0:00:00.
 function hms(seconds) {
@@ -348,6 +374,7 @@ async function signOut() {
   await api('/auth/logout', {}); if (authModule) await authModule.clear(); channel?.postMessage('changed'); await refresh();
 }
 function renderModel() {
+  kidMode = model.role !== 'parent'; // the launch pad or a child: no Send feedback on this device until a parent signs in again
   if (model.role === 'child') return childScreen();
   if (!model.family) return familySetup();
   return model.role === 'parent' ? parentScreen() : selectorScreen();

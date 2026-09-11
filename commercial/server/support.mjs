@@ -39,6 +39,7 @@ export const RETENTION = Object.freeze({
   'sweeps/*': 'the routine invariant sweep: counts and findings; expires by TTL 90 days after each run',
   'emailPrefs/{uid}': 'the parent account\'s email choices and their history (the consent record): the sign-in account outlives the family; deleted with that account',
   'reports/*': 'weekly report status per family and week (sent or skipped, attempts, provider message id; no content); expires by TTL 400 days after each week',
+  'feedback/* (sent signed out)': 'notes from the sign-in screen name no family and no account, so no deletion can find them; they expire by TTL 400 days after each (a parent\'s own notes go with the family or the sign-in account)',
 });
 export const DELETION_BATCH = 300; // comfortably under Firestore's 500 writes per transaction
 const ACCESS = new Set(['trial', 'active', 'grace']);
@@ -85,10 +86,18 @@ export class Support {
     // email-v1: the owner's email choices, with their history; the address itself stays with the identity provider
     const emailPrefs = [];
     for (const [owner, m] of await tx.entries(`families/${f}/members`)) if (m.role === 'owner') { const d = await tx.get(prefsPath(owner)); emailPrefs.push({ uid: owner, ...prefsOf(d), version: d?.version || null, updatedAt: d?.updatedAt || null, changes: d?.changes || [] }); }
+    // the notes this family's parents sent with Send feedback (feedback.mjs), oldest first; one sent signed out names no family and is not here
+    const feedback = [];
+    for (let after = null; ;) {
+      const page = await tx.queryAfter('feedback', 'familyId', f, after, this.auditPage);
+      for (const [id, d] of page) feedback.push({ id, at: d.at, page: d.page, text: d.text, uid: d.uid || null, release: d.release || null });
+      if (page.length < this.auditPage) break; after = page.at(-1)[0];
+    }
+    feedback.sort((a, b) => a.at - b.at);
     const trail = await this.familyAudit(tx, f), audit = trail.rows.map((a) => ({ action: a.action, at: a.at, childId: a.childId || null })); // every row of this family's, in pages (fourth round)
     return { exportedAt: this.now(), exportedBy: uid,
       family: { id: f, label: family.label, createdAt: family.createdAt, timeZone: family.timeZone || null, activeChildIds: family.activeChildIds || [], deletion: family.deletion || null },
-      entitlement: effectiveEntitlement(family, this.now()), subscription: family.subscription || null, billing, gameConfig: config || null, children, emailPrefs, audit, auditTruncated: trail.truncated };
+      entitlement: effectiveEntitlement(family, this.now()), subscription: family.subscription || null, billing, gameConfig: config || null, children, emailPrefs, feedback, audit, auditTruncated: trail.truncated };
   }
   /** Every audit row of one family, oldest first, read in pages under the reader given (a transaction or the store); `truncated` only past the cap. */
   async familyAudit(reader, familyId) {
@@ -174,6 +183,7 @@ export class Support {
   /** Steps two and three: every session of the uid in bounded batches, the identity at the provider, then the record. A provider fault leaves requestedAt without deletedAt; the operator retries. */
   async finishIdentityDeletion(uid, actor) {
     const sessions = await sweepSessions(this.store, uid, DELETION_BATCH);
+    await this.sweepWhere('feedback', 'uid', uid, DELETION_BATCH, null, 'feedback'); // the notes the account sent (those with a family went with it)
     try { await this.foundation.identity.deleteUser(uid); }
     catch (error) { if (error?.code === 'auth/user-not-found' || /not.found|missing/i.test(String(error?.message))) { /* already gone at the provider: finish the record */ } else throw error; }
     return this.store.transaction(async (tx) => {
@@ -543,6 +553,7 @@ export class Support {
     await this.sweepWhere('sessions', 'familyId', familyId, batch, familyId, 'loginSessions');
     for (const uid of uids) await this.sweepWhere('sessions', 'uid', uid, batch, familyId, 'loginSessions');
     await this.sweepWhere('outbox', 'familyId', familyId, batch, familyId, 'outbox'); // email-v1: the fake mail provider's rendered reports go now, not in 14 days
+    await this.sweepWhere('feedback', 'familyId', familyId, batch, familyId, 'feedback'); // the notes its parents sent with Send feedback (feedback.mjs)
     await this.progress(familyId, 'sessions');
     // phase 2 — each child's learning and game data, bounded batches, then the progress document
     for (const childId of family.childIds || []) {

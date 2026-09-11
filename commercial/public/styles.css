@@ -76,6 +76,9 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--amber);outline-offs
 .message{max-width:850px;margin:18px auto;padding:0 26px;color:#ffd1ec;font:600 16px var(--ui);min-height:24px;overflow-wrap:anywhere}
 .message:not(:empty){animation:screenIn .3s ease-out}
 .captcha{margin:10px 0 4px;min-height:0}.captcha:empty{display:none}
+.feedback{max-width:850px;margin:6px auto 0;padding:0 26px}.feedback .field{max-width:560px}
+.feedback textarea{width:100%;min-height:120px;border:1px solid #35e0ff40;border-radius:12px;background:#080b21;color:var(--ink);padding:12px 15px;font:600 17px/1.45 var(--ui);letter-spacing:.02em;resize:vertical}
+.feedback textarea:focus{outline:none;border-color:var(--cyan);box-shadow:0 0 0 3px #35e0ff2b,0 0 22px #35e0ff33}
 footer{max-width:1000px;margin:34px auto;padding:0 28px 30px;display:flex;justify-content:space-between;gap:20px;color:var(--dim);font:600 9px var(--mono);letter-spacing:.12em}
 [aria-busy=true]{cursor:progress}[aria-busy=true] button{opacity:.65;pointer-events:none}
 @keyframes orbit{to{transform:rotate(360deg)}}

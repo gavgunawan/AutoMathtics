@@ -24,6 +24,7 @@ end of the run. Nothing here requires code; every failure is a ticket for the ne
 | P7 | Sign out; press back | no family data visible; API calls answer 401 |
 | P8 | A sensitive action (PIN reset, plan change, deletion) after 5 minutes idle | a fresh password + SMS check is demanded; cancelling discards the action |
 | P9 | Open the parent workspace in two tabs; sign out in one | the other tab returns to sign-in on its next action |
+| P10 | Tap *Send feedback* under the sign-in screen, write a line and an address to answer, *Send*; sign in and send one from Mission Control; *Hand over to kids* and look for the button on the launch pad, the PIN screen, the child's home, a game, the shop, the map and a summary; from the child's home tap *Parent sign-in* | each note is thanked once; `node scripts/report.mjs feedback --days 1` lists both with their screen and release, the first with the address, the second with the parent and the family; with `FEEDBACK_TO` and Resend each also reaches the owner's inbox and Reply goes to the parent or to the address given; no *Send feedback* anywhere in kid mode, nor on the sign-in screen reached from it |
 
 ## Handover and child
 

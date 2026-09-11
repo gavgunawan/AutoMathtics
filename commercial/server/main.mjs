@@ -10,6 +10,9 @@ import { StripeGateway } from './gateways/stripe.mjs';
 import { Support } from './support.mjs';
 import { Recovery } from './recovery.mjs';
 import { Email } from './email.mjs';
+import { Feedback } from './feedback.mjs';
+import { createMailer } from './mailer.mjs';
+import { VERSION } from './version.mjs';
 import { createApp } from './http.mjs';
 
 const cfg = config(); // Validate BEFORE loading SDKs or opening network connections.
@@ -30,7 +33,10 @@ if (cfg.payments.stripe) gateways.stripe = new StripeGateway({ ...cfg.payments.s
 const payments = new Payments({ foundation: service, store, billing, provider: cfg.payments.provider, gateways });
 const support = new Support({ foundation: service, store, billing, payments });
 const email = new Email({ foundation: service, store, identity, secret: cfg.secret }); // email-v1: sign-up consent, the switches, the email buttons
-const server = createApp(service, cfg, { reportError: (event) => console.error(JSON.stringify(event)), learning, game, billing, payments, support, recovery, email });
+// Send feedback: kept in Firestore; copied to the owner only with FEEDBACK_TO and Resend (config.mjs). The fake provider emails nothing.
+const feedback = new Feedback({ foundation: service, store, mailer: cfg.feedback.mail?.provider === 'resend' ? createMailer(cfg.feedback.mail) : null, to: cfg.feedback.to,
+  release: cfg.releaseSha || VERSION, log: (event) => console.error(JSON.stringify(event)) });
+const server = createApp(service, cfg, { reportError: (event) => console.error(JSON.stringify(event)), learning, game, billing, payments, support, recovery, email, feedback });
 server.listen(cfg.port, cfg.emulator ? '127.0.0.1' : '0.0.0.0', () => {
   console.log(JSON.stringify({ event: 'foundation_ready', mode: cfg.mode, port: cfg.port }));
 });

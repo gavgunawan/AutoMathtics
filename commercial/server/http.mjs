@@ -57,7 +57,7 @@ async function oneClick(req) {
   const text = Buffer.concat(parts).toString('utf8');
   return type === 'multipart/form-data' ? /name="List-Unsubscribe"\r?\n(?:[^\r\n]+\r?\n)*\r?\nOne-Click\r?\n/i.test(text) : new URLSearchParams(text).get('List-Unsubscribe') === 'One-Click';
 }
-export function createApp(service, cfg, { publicDir = new URL('../public/', import.meta.url), reportError = () => {}, learning = null, game = null, billing = null, payments = null, support = null, recovery = null, email = null, peerFactor = 20 } = {}) {
+export function createApp(service, cfg, { publicDir = new URL('../public/', import.meta.url), reportError = () => {}, learning = null, game = null, billing = null, payments = null, support = null, recovery = null, email = null, feedback = null, peerFactor = 20 } = {}) {
   // A session cookie lives exactly as long as the session row it names (F12), read back from the row the service has just
   // written: 30 minutes for a parent, 12 hours on the launch pad, or what is left of 30 days on a remembered device. The
   // rotation has already committed, so a failed read never fails the request (review of PR #44): the cookie then gets the
@@ -238,6 +238,16 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
         if (result.valid === false && result.reason !== 'gone') await failedCheck('email-button', req); // describe answers a spoiled link rather than throwing
         else if (key) throttle(key, Infinity, 60 * 60_000);
         return json(200, result);
+      }
+      // Feedback (server/feedback.mjs): from the sign-in screen with the pre-authentication CSRF token, or inside a parent's session.
+      // The session, never the body, says who sent it; a child's or the launch pad's session is refused, as no free text ever comes
+      // from a child (PRIVACY.md). The body is checked first, so a malformed request spends nothing; then the budgets: a hundred an
+      // hour per instance, five an hour per address (and the peer's share), ten a day per session or pre-authentication cookie.
+      if (feedback && req.method === 'POST' && path === '/api/feedback') {
+        const input = feedback.parse(data), live = stored && stored.expiresAt > service.now() ? stored : null;
+        if (live && live.role !== 'parent') fail(403, 'PARENT_REQUIRED');
+        throttle('feedback:all', 100, 60 * 60_000); await spend('feedback', req, 5, 60 * 60_000); await service.rate(`feedback:session:${sha256(token)}`, 10, 24 * 60 * 60_000);
+        return json(200, await feedback.record(input, live ? { uid: live.uid, familyId: live.familyId || null, email: typeof live.email === 'string' ? live.email : null } : null));
       }
       if (stored) throttle(`session:${sha256(token)}`, 120, 60_000);
       const ctx = await service.authenticate(token);

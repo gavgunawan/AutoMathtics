@@ -8,6 +8,7 @@ import { Payments, FakeGateway } from '../server/payments.mjs';
 import { Support } from '../server/support.mjs';
 import { Recovery } from '../server/recovery.mjs';
 import { Email } from '../server/email.mjs';
+import { Feedback } from '../server/feedback.mjs';
 import { mac } from '../server/security.mjs';
 
 // Firestore rejects `undefined` values and arrays nested directly inside arrays; fail the same way
@@ -31,6 +32,7 @@ export class MemoryStore {
   async query(collectionPath, field, value, limit) { return (await this.entries(collectionPath)).filter(([, v]) => v[field] === value).slice(0, limit); }
   async queryAfter(collectionPath, field, value, afterId, limit) { const all = (await this.entriesAfter(collectionPath, afterId, Number.MAX_SAFE_INTEGER)); return all.filter(([, v]) => v[field] === value).slice(0, limit); }
   async entriesAfter(collectionPath, afterId, limit) { const all = (await this.entries(collectionPath)).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)); const from = afterId ? all.findIndex(([id]) => id > afterId) : 0; return from < 0 ? [] : all.slice(from, from + limit); }
+  async since(collectionPath, field, min, limit) { return (await this.entries(collectionPath)).filter(([, v]) => typeof v[field] === 'number' && v[field] >= min).sort((a, b) => b[1][field] - a[1][field]).slice(0, limit); }
   transaction(fn, { readOnly = false } = {}) {
     const run = this.tail.then(async () => {
       const working = new Map(structuredClone([...this.data])); let written = false, writes = 0;
@@ -76,6 +78,7 @@ export function fixture() {
   const support = new Support({ foundation: service, store, billing, payments, now: () => clock });
   const recovery = new Recovery({ foundation: service, store, identity, secret, now: () => clock });
   const email = new Email({ foundation: service, store, identity, secret, now: () => clock });
+  const feedback = new Feedback({ foundation: service, store, now: () => clock, release: 'test-release' }); // no mailer: nothing is copied to anyone
   // what the identity provider's own password reset changes, as the server sees it
   function resetPassword(uid) { const u = users.get(uid); u.tokensValidAfterTime = new Date(clock).toUTCString(); u.passwordHash = `hash-${randomUUID()}`; }
   function enrollPhone(uid, phoneNumber) { const u = users.get(uid), id = `mfa-${uid}-${randomUUID().slice(0, 8)}`; u.multiFactor = { enrolledFactors: [{ uid: id, factorId: 'phone', phoneNumber }] }; return id; }
@@ -108,7 +111,7 @@ export function fixture() {
     const childCtx = await service.authenticate(await service.selectChild(selCtx, kid.id, '763829'));
     return { p, child: kid, selCtx, childCtx };
   }
-  return { service, learning, game, billing, payments, support, recovery, email, resetPassword, enrollPhone, gateway, store, identity, users, tokens, auth, token, login, family, child, childSession, now: () => clock, advance: (ms) => { clock += ms; } };
+  return { service, learning, game, billing, payments, support, recovery, email, feedback, resetPassword, enrollPhone, gateway, store, identity, users, tokens, auth, token, login, family, child, childSession, now: () => clock, advance: (ms) => { clock += ms; } };
 }
 export const rejected = (code) => (err) => err.code === code;
 // the answer the server holds, in the shape the browser would send — and a nearby wrong one

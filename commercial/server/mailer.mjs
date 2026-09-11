@@ -32,26 +32,27 @@ export function mailerConfig(env = process.env) {
 }
 
 /**
- * send({ to, subject, html, text, headers, idempotencyKey, tags, familyId }) → { id, provider }. `familyId` never leaves the
- * server: the fake provider's outbox row carries it so that a family's deletion takes its previews with it (support.mjs).
+ * send({ to, subject, html, text, headers, idempotencyKey, tags, familyId, replyTo, timeoutMs }) → { id, provider }. `familyId`
+ * never leaves the server: the fake provider's outbox row carries it so that a family's deletion takes its previews with it
+ * (support.mjs). `replyTo` is where Reply goes (feedback.mjs); `timeoutMs` shortens the deadline of a send that must not wait.
  */
 export function createMailer({ provider = 'fake', apiKey = null, from = DEFAULT_FROM, fetch = globalThis.fetch, now = Date.now, store = null, timeoutMs = SEND_TIMEOUT_MS } = {}) {
   if (!['fake', 'resend'].includes(provider)) throw Error('Unknown email provider.');
   if (provider === 'resend' && !KEY.test(apiKey || '')) throw Error('The resend provider needs its API key.');
   const sent = [];
-  async function send({ to, subject, html, text, headers = {}, idempotencyKey = null, tags = [], familyId = null } = {}) {
-    if (!ADDRESS.test(to || '') || typeof subject !== 'string' || !subject || subject.length > 200 || typeof html !== 'string' || typeof text !== 'string') fail(400, 'INVALID_EMAIL');
+  async function send({ to, subject, html, text, headers = {}, idempotencyKey = null, tags = [], familyId = null, replyTo = null, timeoutMs: deadline = timeoutMs } = {}) {
+    if (!ADDRESS.test(to || '') || (replyTo !== null && !ADDRESS.test(replyTo)) || typeof subject !== 'string' || !subject || subject.length > 200 || typeof html !== 'string' || typeof text !== 'string') fail(400, 'INVALID_EMAIL');
     if (provider === 'fake') {
-      const id = `fake_${randomUUID()}`, at = now(), row = { id, provider, from, to, subject, html, text, headers, tags, idempotencyKey, at };
+      const id = `fake_${randomUUID()}`, at = now(), row = { id, provider, from, to, ...(replyTo ? { replyTo } : {}), subject, html, text, headers, tags, idempotencyKey, at };
       sent.push(row);
       if (store) await store.transaction(async (tx) => tx.set(`outbox/${id}`, { ...row, familyId, expireAt: at + OUTBOX_TTL_MS }));
       return { id, provider };
     }
     let res;
     try {
-      res = await fetch(RESEND_API, { method: 'POST', signal: AbortSignal.timeout(timeoutMs),
+      res = await fetch(RESEND_API, { method: 'POST', signal: AbortSignal.timeout(deadline),
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}) },
-        body: JSON.stringify({ from, to: [to], subject, html, text, headers, tags }) });
+        body: JSON.stringify({ from, to: [to], subject, html, text, headers, tags, ...(replyTo ? { reply_to: replyTo } : {}) }) }); // no reply_to, no change: the report's bytes stay the same
     } catch { fail(502, 'PROVIDER_UNREACHABLE'); }
     const json = await res.json().catch(() => ({}));
     if (res.status === 409 && ['invalid_idempotent_request', 'concurrent_idempotent_requests'].includes(json?.name)) return { id: null, provider, unconfirmed: json.name };

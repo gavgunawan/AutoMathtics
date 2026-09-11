@@ -17,6 +17,8 @@ export class FirestoreStore {
   /** A filtered page after a document id: an equality filter ordered by the document id needs no composite index (the single-field index carries the id order). */
   async queryAfter(collectionPath, field, value, afterId, limit) { let q = this.db.collection(collectionPath).where(field, '==', value).orderBy('__name__'); if (afterId) q = q.startAfter(afterId); const snap = await q.limit(limit).get(); return snap.docs.map((d) => [d.id, this.decode(d.data())]); }
   async entriesAfter(collectionPath, afterId, limit) { let q = this.db.collection(collectionPath).orderBy('__name__'); if (afterId) q = q.startAfter(afterId); const snap = await q.limit(limit).get(); return snap.docs.map((d) => [d.id, this.decode(d.data())]); }
+  /** The newest documents whose `field` is at or after `min`, newest first (the feedback read): a range and an order on one field need only its single-field index. */
+  async since(collectionPath, field, min, limit) { const snap = await this.db.collection(collectionPath).where(field, '>=', min).orderBy(field, 'desc').limit(limit).get(); return snap.docs.map((d) => [d.id, this.decode(d.data())]); }
   // readOnly transactions take no document locks, so read-only routes never contend with writers.
   transaction(fn, { readOnly = false } = {}) {
     return this.db.runTransaction((t) => fn({
