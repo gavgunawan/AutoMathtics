@@ -81,7 +81,7 @@ const nowRow = (it, cost, now, timeZone, how = null) => ({ id: it.id, emoji: it.
 // What each child's card shows the launch pad and the parent (v2's player cards; port plan S1): the worn look as catalogue ids
 // and display text, never a balance or the inventory. A slot holding anything but an item of its own kind is worn as nothing.
 // The legendary tags are display text the frozen catalogue does not carry.
-const LEGEND = Object.freeze({ pet_legend: 'legendary', pet_semilegend: 'semi' });
+export const LEGEND = Object.freeze({ pet_legend: 'legendary', pet_semilegend: 'semi' }); // public/app.js keeps the same map (tests/ui-cosmetics.test.mjs holds them equal)
 export function appearanceOf(wallet) {
   const w = normalizeWallet(wallet), worn = (kind) => { const it = BY_ID.get(w[EQUIP_SLOTS[kind]]); return it?.kind === kind ? it : null; };
   const pet = worn('pet'), title = worn('title'), outfit = worn('outfit'), vehicle = worn('vehicle');

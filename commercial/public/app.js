@@ -100,8 +100,8 @@ const e164 = (value) => /^\+[1-9]\d{6,14}$/.test(tidy(value));
 // the robot check belongs on the screen from the moment it opens, not only once Send has been pressed
 function armCaptcha() { auth().then((a) => a.armCaptcha?.()).catch(() => {}); }
 // A child's equipped background dresses that child's screens only (data-bg on <html> and the #decor layer behind #app): the
-// launch pad and every parent screen take it off again.
-function clearLook() { document.documentElement?.removeAttribute('data-bg'); document.getElementById?.('decor')?.replaceChildren(); }
+// launch pad and every parent screen take it off again (applyLook, with the cosmetics layer).
+function clearLook() { applyLook(null); }
 // The shell follows the role: styles.css hides the parents' masthead from the launch pad and a child's screens, and the footer
 // from those. Set as soon as /me answers, so a kid's device does not show the parents' masthead while its first screen loads.
 function setMode() {
@@ -640,10 +640,12 @@ function resetPinScreen(child) {
 // A child's colour is its place in the family (S1 accent, styles.css acc-N: v2's new-player palette).
 const accClass = (child) => `acc-${Number.isInteger(child?.accent) && child.accent >= 0 ? child.accent % 6 : 0}`;
 // A child's avatar: the icon emoji in v2's makeAvatar look (106-107), a dark disc ringed in the child's colour. v3 keeps no
-// photos of children, so the icon stands where v2 showed Allison's and Geralt's (port plan, question 2).
-function avatarBadge(child, size) {
+// photos of children, so the icon stands where v2 showed Allison's and Geralt's (port plan, question 2). Given the wallet, the
+// equipped ring goes round it (v2 2863-2865 on the home header, 3114-3115 in a session, where the spark's orbit is smaller).
+function avatarBadge(child, w, size) {
   const disc = el('span', icons[child?.icon] || icons.robot, `av av-${size} ${accClass(child)}`); disc.setAttribute('aria-hidden', 'true');
-  return disc;
+  const ring = lookup(RING_CLASS, w?.ring); if (!ring) return disc;
+  const wrap = el('span', null, `ring ${ring}${size < 30 ? ' orb-sm' : ''}`); wrap.append(disc); return wrap;
 }
 // v2's player card: the frame with its halo rings, the name in its name effect, and what the child wears (S1: /me sends the
 // look, never the wallet) — the title or MISSION READY, then pet and outfit, then vehicle (v2 2416). The button's class is
@@ -674,7 +676,7 @@ function pinPane(child) {
   transientView = true;
   const box = panel(`${child.nickname} · ENTER PIN`, '', '', 'narrow pin-pane');
   onBack = refresh; // back to the launch pad
-  putFirst(box, avatarBadge(child, 84));
+  putFirst(box, avatarBadge(child, null, 84)); // v2's PIN pad shows the face alone, no ring
   const wrap = el('label', null, 'pin-field'), pin = el('input', null, 'pin-box');
   Object.assign(pin, { type: 'password', inputMode: coarse() ? 'none' : 'numeric', maxLength: 6, pattern: '[0-9]{6}', autocomplete: 'off', required: true, placeholder: 'enter PIN…' });
   wrap.append(el('span', 'Child PIN', 'sr-only'), pin);
@@ -754,6 +756,53 @@ const TBAR_CLASS = { tbar_bolt: 'tbar-tbar_bolt', tbar_lava: 'tbar-tbar_lava', t
 const BGCARD_CLASS = { bg_symbols: 'bgcard-bg_symbols', bg_city: 'bgcard-bg_city', bg_space: 'bgcard-bg_space' };
 // own keys only: an id is the server's, and 'constructor' must not find Object's
 const lookup = (map, id, fallback = '') => (typeof id === 'string' && Object.hasOwn(map, id) ? map[id] : fallback);
+// ---- the cosmetics layer: how each equipped item is drawn (port plan section 3; styles.css draws them) ----
+// The equipped background dresses the whole page on every screen of the child's (v2 2382-2385): data-bg on <html>, which
+// styles.css turns into the page's colours, and the decor it animates in #decor. The decor is built again only when the
+// background changes — never per screen — so each question of a session repaints #app and leaves the falling symbols be.
+let lookBg = null;
+const rnd = (a, b) => a + Math.random() * (b - a), anyOf = (xs) => xs[Math.floor(Math.random() * xs.length)];
+const MRAIN = [...'0123456789+−×÷=πΣ√%<>'], MRAIN_COLORS = ['#FF2DA8', '#35E0FF', '#8A5CFF', '#FF75C6', '#4FC3FF', '#B9A4FF'];
+// one piece of decor: its place, size, colour and timing are custom properties (setVar), never a style
+function decorPiece(className, vars, text) { const s = el('span', text, className); for (const [k, v] of Object.entries(vars)) setVar(s, k, v); return s; }
+const DECOR = {
+  // bg_symbols (MatrixDecor, 1435-1455): sixteen columns of sixteen math glyphs, falling in the palette's neons
+  bg_symbols: () => Array.from({ length: 16 }, () => decorPiece('mrain', { '--l': `${rnd(0, 98).toFixed(1)}%`, '--fs': `${13 + Math.floor(Math.random() * 8)}px`, '--col': anyOf(MRAIN_COLORS),
+    '--op': rnd(0.3, 0.65).toFixed(2), '--dur': `${rnd(4.5, 10).toFixed(1)}s`, '--delay': `${(-Math.random() * 9).toFixed(1)}s` }, Array.from({ length: 16 }, () => anyOf(MRAIN)).join('\n'))),
+  // bg_space (SpaceDecor, 1413-1433): 46 twinkling stars and three rare comets
+  bg_space: () => [
+    ...Array.from({ length: 46 }, () => decorPiece('star', { '--x': `${rnd(0, 100).toFixed(1)}%`, '--y': `${rnd(0, 100).toFixed(1)}%`, '--s': `${rnd(1, 3).toFixed(1)}px`, '--dur': `${rnd(1.6, 4.6).toFixed(2)}s`, '--delay': `${rnd(0, 4).toFixed(2)}s` })),
+    ...Array.from({ length: 3 }, (_, i) => decorPiece('comet', { '--x': `${rnd(25, 90).toFixed(1)}%`, '--y': `${rnd(0, 35).toFixed(1)}%`, '--dur': `${rnd(8, 13).toFixed(1)}s`, '--delay': `${(i * 3.7 + rnd(0, 2)).toFixed(1)}s` })),
+  ],
+  // bg_city (CityDecor, 1457-1477): a lit skyline of fourteen blocks, and five pulsing signs
+  bg_city: () => {
+    const line = el('div', null, 'cityline');
+    line.append(...Array.from({ length: 14 }, () => decorPiece('bld', { '--w': `${Math.round(rnd(34, 86))}px`, '--h': `${Math.round(rnd(60, 190))}px` })));
+    return [line, ...Array.from({ length: 5 }, () => decorPiece('citysign', { '--x': `${rnd(4, 94).toFixed(1)}%`, '--y': `${rnd(55, 85).toFixed(1)}%`, '--col': anyOf(['#FF2DA8', '#35E0FF', '#FFB020']), '--delay': `${rnd(0, 3).toFixed(1)}s` }))];
+  },
+};
+// Runs after panel() on every child screen (panel's setMode takes the look off everywhere else). Only a background the
+// cosmetics layer knows becomes data-bg.
+function applyLook(w) {
+  const bg = typeof w?.activeBg === 'string' && Object.hasOwn(DECOR, w.activeBg) ? w.activeBg : null, html = document.documentElement;
+  if (bg) html?.setAttribute('data-bg', bg); else html?.removeAttribute('data-bg');
+  if (bg === lookBg) return;
+  lookBg = bg; document.getElementById?.('decor')?.replaceChildren(...(bg ? DECOR[bg]() : []));
+}
+// The pet (2866-2870, 3122, 3604-3606): its emoji with the outfit riding its shoulder (an outfit shows only on a pet, 2868,
+// and not on the summary's big pet, 3605). On the home header it idles, legendary ones glowing gold (2867, 4212); in a
+// session it sways, or charges at streak tier 1-4 (4153-4161); on a pass it pops.
+function petBadge(w, size, state = 'idle') {
+  const pet = gameItem(w?.activePet); if (pet?.kind !== 'pet') return null;
+  const motion = state === 'idle' ? `petidle${lookup(LEGEND, pet.id) ? ' petlegend' : ''}` : state === 'pop' ? 'pop2' : state > 0 ? `petcharge petcharge-${Math.min(4, state)}` : 'petsway';
+  const badge = el('span', pet.emoji, `petwrap pet-${size} ${motion}`); badge.setAttribute('aria-hidden', 'true');
+  const fit = gameItem(w.activeOutfit); if (fit?.kind === 'outfit' && state !== 'pop') badge.append(el('span', fit.emoji, 'petfit'));
+  return badge;
+}
+// a title is its name alone, in v2's gold chip (1726, 2877, 4218)
+function titleChip(w) { const t = gameItem(w?.activeTitle); return t?.kind === 'title' ? el('span', t.name, 'titlechip') : null; }
+// the child's name in its name effect (4219-4231), drawn in capitals as v2 wrote it
+function nameSpan(nickname, w) { return el('span', nickname, `caps ${lookup(NAMEFX_CLASS, w?.activeNameFx)}`.trim()); }
 let timer = null, gameModel = null, playStreak = 0, audioCtx = null;
 function stopTimer() { if (timer) { clearInterval(timer); timer = null; } }
 function gameSound(kind) {
@@ -767,22 +816,20 @@ function gameSound(kind) {
 }
 const runLabel = (s) => s.mode === 'boss' ? `👑 Check point T${s.tierEnd / 20}` : s.mode === 'scan' ? '🧠 SYSTEM SCAN · ×2 LOOT' : s.mode === 'placement' ? '🎯 Placement test' : s.mode === 'practice' ? 'Practice run' : `Papers ${s.startPaper}–${s.startPaper + 4}`;
 const gameItem = (id) => gameModel?.catalog?.find((x) => x.id === id) || null;
+// the old home's hero, dressed by the cosmetics layer until the home is rebuilt in v2's layout (port plan step 6)
 function gameHero(box, child, g) {
-  const w = g.wallet, pet = gameItem(w.activePet), outfit = gameItem(w.activeOutfit), title = gameItem(w.activeTitle), vehicle = gameItem(w.activeVehicle);
-  const hero = el('div', null, 'game-hero');
-  const petWrap = el('span', null, `game-pet-wrap ${w.ring || ''}`); petWrap.append(el('span', pet?.emoji || icons[child.icon] || '🤖', 'game-pet'));
-  if (outfit) petWrap.append(el('span', outfit.emoji, 'game-outfit')); hero.append(petWrap);
-  const info = el('div'); info.append(el('strong', child.nickname, `game-name ${w.activeNameFx || ''}`));
-  if (title) info.append(el('span', `${title.emoji} ${title.name}`, 'game-title'));
-  if (vehicle) info.append(el('span', `${vehicle.emoji} ${vehicle.name}`, 'card-meta'));
+  const w = g.wallet, hero = el('div', null, 'game-hero'), pet = petBadge(w, 26), chip = titleChip(w), vehicle = gameItem(w.activeVehicle);
+  hero.append(avatarBadge(child, w, 40)); if (pet) hero.append(pet);
+  const info = el('div'); info.append(nameSpan(child.nickname, w)); if (chip) info.append(chip);
+  if (vehicle?.kind === 'vehicle') info.append(el('span', `${vehicle.emoji} ${vehicle.name}`, 'card-meta'));
   hero.append(info); box.append(hero);
-  if (w.activeBg) box.className += ` game-${w.activeBg}`; if (w.activeBase) box.className += ` ${w.activeBase}`;
+  const card = lookup(BGCARD_CLASS, w.activeBg); if (card) box.className += ` ${card}`; if (w.activeBase === 'base_deck') box.className += ' base-deck';
 }
 async function childScreen() {
   stopTimer(); playStreak = 0; const child = model.child;
   const [st, g] = await Promise.all([api('/learn/state'), api('/game/state')]); gameModel = g;
   const box = panel('YOUR GRID', `Welcome, ${child.nickname}.`, 'Pick a track and go. Every mark, coin and crown is kept safe by the grid.');
-  gameHero(box, child, g);
+  applyLook(g.wallet); gameHero(box, child, g);
   const wallet = el('div', null, 'allowance'); wallet.append(el('strong', `⚡ ${g.wallet.gc}`, 'count'), el('span', 'grid coins'), el('strong', `🏆 ${g.wallet.rp}`, 'count'), el('span', 'reward points'), el('span', `🛡️ ${g.wallet.shields}`, 'badge')); box.append(wallet);
   if (g.wallet.egg && !g.wallet.egg.hatched) box.append(el('p', `🥚 Mystery Egg warming · ${Math.max(0, st.stats.passes - g.wallet.egg.passesAt)} / 5 passes`, 'notice'));
   if (st.active) box.append(el('p', `A ${st.active.session.mode === 'placement' ? 'placement test' : `${TRACK[st.active.session.track].name} session`} is open at question ${st.active.session.index + 1} of ${st.active.session.count}.`, 'notice'), button('Continue', () => playView(st.active.session, st.active.question), 'primary'));
@@ -811,7 +858,7 @@ async function childScreen() {
 }
 async function shopScreen() {
   transientView = true; const g = await api('/game/state'); gameModel = g; const box = panel('GRID SHOP', 'Spend what you earned.', 'Cosmetics and utilities use ⚡ Grid Coins. Family rewards use 🏆 Reward Points. Prices and outcomes come from the server.');
-  onBack = childScreen;
+  onBack = childScreen; applyLook(g.wallet);
   box.append(el('p', `Wallet · ⚡ ${g.wallet.gc} · 🏆 ${g.wallet.rp} · 🛡️ ${g.wallet.shields}`, 'notice'));
   const inv = new Set(g.wallet.inventory || []);
   for (const it of g.catalog.filter((x) => !x.hatch && !x.unlock)) {
@@ -830,7 +877,7 @@ async function shopScreen() {
 }
 async function mapScreen() {
   transientView = true; const [st, g] = await Promise.all([api('/learn/state'), api('/game/state')]); gameModel = g; const box = panel('MISSION MAP', 'Progress & fluency', 'Your map is calculated from server-recorded sessions. Accuracy and time cannot be edited by the browser.'); if (g.wallet.activeMap) box.className += ` ${g.wallet.activeMap}`;
-  onBack = childScreen;
+  onBack = childScreen; applyLook(g.wallet);
   for (const t of ['engine', 'nav']) { const p = st[t], card = el('div', null, 'track'); card.append(el('strong', `${TRACK[t].emoji} ${TRACK[t].name} · Sector ${p.levelId}`), el('span', `${Math.min(100, p.paper - 1)} papers · ${p.bossCleared} crowns`, 'card-meta')); box.append(card); }
   if (!g.heatmap.length) box.append(el('p', 'Complete some sessions to light up the fluency grid.', 'muted'));
   for (const c of g.heatmap.sort((a,b) => a.track.localeCompare(b.track) || a.level-b.level || a.tier-b.tier)) { const row = el('div', null, 'heat-row'); row.append(el('strong', `${TRACK[c.track].emoji} ${c.levelId} · Tier ${c.tier}`), el('span', `${c.accuracy}% · ${c.avgSeconds ?? '—'} s avg · ${c.attempts} questions`, 'card-meta')); box.append(row); }
@@ -840,6 +887,7 @@ function displayText(d) { if (d.layout === 'stack') return `${d.top} ${d.sym} ${
 function playView(session, q) {
   stopTimer(); transientView = true; const t = TRACK[q.track || session.track], box = panel(`${t.emoji} ${t.name} · SECTOR ${q.levelId || session.levelId}`, runLabel(session), `Question ${q.index + 1} of ${session.count}${session.mode === 'placement' ? '' : ` · paper ${q.paper}`}`);
   onBack = refresh; // to the child's home: the session stays open there under "Continue", nothing is quit or lost
+  applyLook(gameModel?.wallet);
   const shout = gameModel?.wallet?.activeShout, tier = playStreak >= 18 ? 3 : playStreak >= 14 ? 2 : playStreak >= 9 ? 1 : playStreak >= 4 ? 0 : -1;
   if (tier >= 0) box.append(el('p', lookup(SHOUT_PACKS, shout, SHOUT_PACKS.default).labels[tier], 'combo'));
   box.append(el('p', displayText(q.display), 'question'));
@@ -859,7 +907,7 @@ function summaryView(session, s) {
   transientView = true;
   if (s.placement) { // the test is done: where each track begins
     const box = panel('🎯 PLACEMENT COMPLETE', 'Your grid is set.', `${s.correct} out of ${s.total} in the test. Coins start with your first real papers.`);
-    onBack = refresh;
+    onBack = refresh; applyLook(gameModel?.wallet);
     const words = { ahead: 'ready for the next sector', 'on-level': 'right in the middle of the sector', building: 'building up through the sector', foundations: 'from the start of the sector', previous: 'a sector back, from the middle', 'previous-start': 'a sector back, from the start' };
     for (const tr of ['engine', 'nav']) { const p = s.placement[tr]; box.append(el('p', `${TRACK[tr].emoji} ${TRACK[tr].name}: starts at Sector ${p.levelId}, paper ${p.paper} — ${words[p.band] || p.band} (${p.correct}/${p.total} right).`, 'notice')); }
     box.append(button('Go to my grid', refresh, 'primary')); return;
@@ -868,7 +916,7 @@ function summaryView(session, s) {
   const box = panel(`${t.emoji} ${t.name} · ${s.papers}`, s.passed ? 'PASS!' : 'Not this time.',
     s.passed ? (s.rewarded ? `${s.correct} out of ${s.total}. ⚡ +${s.gcEarned} 🏆 +${s.rpEarned}` : `${s.correct} out of ${s.total}. Practice runs keep you sharp but pay nothing — coins come back when the other track finishes the sector.`)
       : `${s.correct} out of ${s.total}${s.timeout ? `, ${s.timeout} timed out` : ''}. A pass needs every question right.`);
-  onBack = refresh;
+  onBack = refresh; applyLook(gameModel?.wallet);
   if (s.leveledUp) box.append(el('p', `Sector ${s.newLevelId} unlocked!`, 'notice'));
   else if (s.bossNext) box.append(el('p', '👑 A check point is next: questions from the whole tier, double loot.', 'notice'));
   for (const e of s.gameEvents || []) if (e.item) box.append(el('p', `${e.type === 'hatched' ? '🥚 HATCH!' : '🏆 UNLOCK!'} ${e.item.emoji} ${e.item.name}`, 'notice'));
