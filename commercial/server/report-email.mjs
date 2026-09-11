@@ -36,7 +36,7 @@ function childBlocks(c, links) {
   if (b.pace !== null && url.pace) blocks.push({ kind: 'button', label: `Set ${name}’s pace to ${b.pace}%`, href: url.pace });
   if (c.scan.status === 'locked') blocks.push({ kind: 'line', text: '🧠 System Scan unlocks at Engine Sector B, paper 21.' });
   else {
-    blocks.push({ kind: 'line', text: c.scan.status === 'passed' ? '🧠 System Scan: passed this week.' : '🧠 System Scan: not done this week. It resets every Monday.' });
+    blocks.push({ kind: 'line', text: c.scan.status === 'passed' ? '🧠 System Scan: passed this week.' : c.scan.tried ? '🧠 System Scan: tried this week, not passed yet (a pass needs all 25 right). It resets every Monday.' : '🧠 System Scan: not done this week. It resets every Monday.' });
     if (b.focus === true && url.focus) blocks.push({ kind: 'line', text: `Next week’s scan can focus on the styles above: about 75% of its questions on what ${name} gets wrong or slow, 25% recap.` }, { kind: 'button', label: `Focus ${name}’s System Scan on these`, href: url.focus });
     if (b.focus === false && url.focus) blocks.push({ kind: 'line', text: `${name}’s System Scan is focused on weak spots: about 75% of its questions.` }, { kind: 'button', label: `Switch ${name}’s scan focus off`, href: url.focus });
   }

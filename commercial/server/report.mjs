@@ -107,7 +107,7 @@ export function buildChildReport({ history, pacePercent, scanFocus, lastScanWeek
   const passed = (mode) => played.filter((r) => r.passed === true && (!mode || r.mode === mode)).length;
   const totals = { questions: items.length, correct, accuracy: items.length ? correct / items.length : null, minutes: Math.round(played.reduce((a, r) => a + (Number.isFinite(r.secs) ? r.secs : 0), 0) / 60),
     sessions: played.length, left: rows.length - played.length, passes: passed(), papersPassed: PAPERS_PER_SESSION * passed('paper'), checkpoints: passed('boss') };
-  const scan = { status: lastScanWeek === week || passed('scan') ? 'passed' : scanUnlocked(levels?.engine || { level: 0, paper: 1 }) ? 'available' : 'locked', focus: scanFocus === true };
+  const scan = { status: lastScanWeek === week || passed('scan') ? 'passed' : scanUnlocked(levels?.engine || { level: 0, paper: 1 }) ? 'available' : 'locked', focus: scanFocus === true, tried: played.some((r) => r.mode === 'scan') };
   const pace = goldilocks(items, pacePercent), named = (st) => ({ ...st, label: styleLabel(st) });
   return { nickname, week, answered: items.length > 0, totals, trouble: lists.trouble.map(named), slow: lists.slow.map(named), strong: lists.strong.map(named),
     engineWeak: [...lists.trouble, ...lists.slow].some((st) => st.track === 'engine'), scan, pace: { ...pace, sentence: paceSentence(nickname, pace) },

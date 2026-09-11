@@ -143,6 +143,8 @@ test('a child\'s week: rows dated in the week only, quits apart, the totals, pap
   const scanRow = row('2026-09-04', right(25, 40), { mode: 'scan', papers: 'SYSTEM SCAN' });
   assert.equal(buildChildReport({ history: [scanRow], levels: { engine: { level: 3, paper: 41 } }, week }).scan.status, 'passed', 'a passed scan row in the week');
   assert.equal(buildChildReport({ history: [], lastScanWeek: week, levels: { engine: { level: 3, paper: 41 } }, week }).scan.status, 'passed', 'or the wallet\'s week');
+  const failedScan = row('2026-09-04', [...right(24, 40), ...wrongIn(1)], { mode: 'scan', papers: 'SYSTEM SCAN' }), tried = buildChildReport({ history: [failedScan], levels: { engine: { level: 3, paper: 41 } }, week });
+  assert.deepEqual([tried.scan.status, tried.scan.tried], ['available', true], 'tried and not passed: still there to pass'); assert.equal(r.scan.tried, false);
   assert.equal(buildChildReport({ history: [], levels: { engine: { level: 1, paper: 20 } }, week }).scan.status, 'locked', 'Sector B before paper 21');
   assert.equal(buildChildReport({ history: [], levels: { engine: { level: 0, paper: 90 } }, week }).scan.status, 'locked', 'Sector A');
   const quiet = buildChildReport({ history: [history[2]], levels: { engine: { level: 0, paper: 1 } }, week, nickname: 'Geralt' });

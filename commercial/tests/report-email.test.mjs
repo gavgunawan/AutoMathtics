@@ -57,6 +57,8 @@ test('buttons only when due: the pace when a change is suggested, the scan focus
   const l = renderReport(locked, links(locked));
   assert.ok(l.text.includes('🧠 System Scan unlocks at Engine Sector B, paper 21.')); assert.ok(!/System Scan on these|scan focus off/.test(l.html));
   assert.ok(l.text.includes('Not enough play this week to suggest a pace (15 answers; 20 needed).')); assert.ok(!l.html.includes('pace to'));
+  const tried = one({ engine: { level: 3, paper: 41, bossCleared: 2 }, history: [row('2026-09-04', [...times(24, () => ans('engine', 3, 3, 40, true)), ans('engine', 3, 3, 50, false)], { mode: 'scan', papers: 'SYSTEM SCAN' })] });
+  assert.ok(renderReport(tried, links(tried)).text.includes('🧠 System Scan: tried this week, not passed yet (a pass needs all 25 right). It resets every Monday.'));
   const zone = one({ engine: { level: 3, paper: 41, bossCleared: 2 }, history: [row('2026-09-01', times(20, () => ans('engine', 3, 3, 76, true)))] }), z = renderReport(zone, links(zone));
   assert.ok(z.text.includes('already in the goldilocks zone')); assert.ok(!z.html.includes('pace to')); assert.equal(z.subject, 'Allison this week: 1 mission, 100% right');
 });
