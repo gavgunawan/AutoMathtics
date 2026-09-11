@@ -257,7 +257,9 @@ recovery forms have the same second wall and a cap per instance. Keep advertisin
 the service's environment and as a `release-sha` label on the revision, refuses to deploy from a dirty or
 commitless checkout (and stops when git cannot answer), uploads the commit itself — exported with
 `git archive` from the repository's top level before the suites run (from inside `commercial/` git would scope
-the archive to the current directory and export nothing; the suite runs that export in a throwaway repository),
+the archive to the current directory and export nothing; the suite runs that export, the needed-files check, the
+re-check after the suites and the verdict gate in a throwaway repository), byte-exact whatever the operator's
+line-ending configuration (`-c core.autocrlf=false`),
 never the working tree as it stands minutes later — re-checks the
 checkout after the suites, and after the deploy `scripts/verify-release.mjs` (tested by the suite) requires
 that `/api/health` reports that very commit (`release`) and that the revision just created is the ready one,

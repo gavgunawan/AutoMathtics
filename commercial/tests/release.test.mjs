@@ -43,7 +43,7 @@ test('the commit a revision runs is a fact the service states: /api/health carri
   const res = await fetch(`http://127.0.0.1:${server.address().port}/api/health`), health = await res.json();
   assert.deepEqual(health, { status: 'ok', version: VERSION, release: sha });
   const helper = await read('../scripts/deploy-staging.sh');
-  for (const s of ['RELEASE_SHA="$(git rev-parse HEAD', '^[0-9a-f]{40}$', 'DIRTY="$(git status --porcelain --untracked-files=no)"', 'TOP="$(git rev-parse --show-toplevel)"', 'git -C "$TOP" archive --format=tar "${RELEASE_SHA}${PREFIX:+:$PREFIX}"', '--source "$SRC"', '--labels "release-sha=$RELEASE_SHA"', 'RELEASE_SHA: p.RELEASE_SHA', 'The checkout changed while the tests ran', 'VERDICT="$(node scripts/verify-release.mjs "$ORIGIN" "$RELEASE_SHA" "$SERVICE_JSON")"', '*"is responding at"*']) assert.ok(helper.includes(s), s);
+  for (const s of ['RELEASE_SHA="$(git rev-parse HEAD', '^[0-9a-f]{40}$', 'DIRTY="$(git status --porcelain --untracked-files=no)"', 'TOP="$(git rev-parse --show-toplevel)"', 'git -C "$TOP" -c core.autocrlf=false archive --format=tar "${RELEASE_SHA}${PREFIX:+:$PREFIX}"', '--source "$SRC"', '--labels "release-sha=$RELEASE_SHA"', 'RELEASE_SHA: p.RELEASE_SHA', 'The checkout changed while the tests ran', 'VERDICT="$(node scripts/verify-release.mjs "$ORIGIN" "$RELEASE_SHA" "$SERVICE_JSON")"', '*"is responding at"*']) assert.ok(helper.includes(s), s);
   assert.ok(!helper.includes('--source .'), 'never the working tree as it stands after the suites');
   assert.ok((await read('../scripts/verify-release.mjs')).includes('realpathSync(process.argv[1])'), 'the CLI guard sees through a linked path, so the last gate is never silently skipped');
   // the export, run as the helper runs it — from inside commercial/ of a checkout whose top level is the repo — must yield the subtree
@@ -55,16 +55,37 @@ test('the commit a revision runs is a fact the service states: /api/health carri
     const sub = join(dir, 'commercial'); await mkdir(join(sub, 'server'), { recursive: true });
     for (const [name, body] of [['Dockerfile', 'FROM scratch\n'], ['.dockerignore', '*\n'], ['.gcloudignore', '.git\n'], ['package.json', '{}\n'], ['package-lock.json', '{}\n'], ['server/main.mjs', '// main\n']]) await writeFile(join(sub, name), body);
     await writeFile(join(dir, 'README.md'), 'root\n');
-    const g = (args) => execFileSync('git', ['-c', 'user.email=t@example.test', '-c', 'user.name=t', ...args], { cwd: dir, stdio: 'pipe' }).toString().trim();
+    const g = (args) => execFileSync('git', ['-c', 'user.email=t@example.test', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', '-c', 'init.defaultBranch=main', ...args], { cwd: dir, stdio: 'pipe' }).toString().trim();
     g(['init', '-q']); g(['add', '-A']); g(['commit', '-q', '-m', 'one']);
-    const lines = helper.split('\n'), exportLines = lines.filter((l) => l.startsWith('PREFIX="$(git rev-parse --show-prefix)"') || l.startsWith('git -C "$TOP" archive'));
-    assert.equal(exportLines.length, 2, 'the two export lines are found verbatim');
-    const script = `set -euo pipefail\nRELEASE_SHA="$(git rev-parse HEAD)"\nSRC="$(mktemp -d)"\n${exportLines.join('\n')}\nls -A "$SRC" "$SRC/server"\nrm -rf "$SRC"`;
-    const out = execFileSync('bash', ['-c', script], { cwd: sub, stdio: 'pipe' }).toString();
-    for (const name of ['Dockerfile', '.dockerignore', '.gcloudignore', 'package.json', 'package-lock.json', 'main.mjs']) assert.ok(out.includes(name), `${name} is exported`);
-    assert.ok(!out.includes('README.md'), 'the subtree only');
+    const lines = helper.split('\n'), exportLines = lines.filter((l) => l.startsWith('PREFIX="$(git rev-parse --show-prefix)"') || l.startsWith('git -C "$TOP"') || l.startsWith('for needed in'));
+    assert.equal(exportLines.length, 3, 'the export lines and the needed-files check are found verbatim');
+    const recheck = lines.filter((l) => l.startsWith('DIRTY="$(git status --porcelain --untracked-files=no)"') || l.startsWith('[[ "$(git rev-parse HEAD)" == "$RELEASE_SHA" && -z "$DIRTY" ]]'));
+    assert.equal(recheck.length, 3, 'the cleanliness check before the suites and the two-line re-check after them');
+    const run = (script, cwd) => { try { return { out: execFileSync('bash', ['-c', script], { cwd, stdio: 'pipe' }).toString(), err: '', code: 0 }; } catch (e) { return { out: e.stdout?.toString() || '', err: e.stderr?.toString() || '', code: e.status }; } };
+    const exported = run(`set -euo pipefail\nRELEASE_SHA="$(git rev-parse HEAD)"\nSRC="$(mktemp -d)"\n${exportLines.join('\n')}\nls -A "$SRC" "$SRC/server"\nrm -rf "$SRC"`, sub);
+    assert.equal(exported.code, 0, exported.err);
+    for (const name of ['Dockerfile', '.dockerignore', '.gcloudignore', 'package.json', 'package-lock.json', 'main.mjs']) assert.ok(exported.out.includes(name), `${name} is exported`);
+    assert.ok(!exported.out.includes('README.md'), 'the subtree only');
     const naive = execFileSync('bash', ['-c', 'git archive --format=tar "$(git rev-parse HEAD):commercial" | tar -t | wc -l'], { cwd: sub, stdio: 'pipe' }).toString().trim();
     assert.equal(naive, '0', 'the naive form from inside commercial/ exports nothing: the reason the helper archives from the top level');
+    // a commit whose subtree lacks a needed file is refused although the file sits untracked on disk
+    g(['rm', '-q', '--cached', 'commercial/.gcloudignore']); g(['commit', '-q', '-m', 'without']);
+    const lacking = run(`set -euo pipefail\nRELEASE_SHA="$(git rev-parse HEAD)"\nSRC="$(mktemp -d)"\n${exportLines.join('\n')}\necho REACHED`, sub);
+    assert.equal(lacking.code, 1); assert.match(lacking.err, /The exported commit lacks \.gcloudignore\./); assert.ok(!lacking.out.includes('REACHED'));
+    g(['add', '-A']); g(['commit', '-q', '-m', 'with']);
+    // the re-check after the suites: an edit, or a commit, made meanwhile stops the helper
+    const recheckScript = (before) => `set -euo pipefail\nRELEASE_SHA="$(git rev-parse HEAD)"\n${recheck[0]}\n[[ -z "$DIRTY" ]]\n${before}\n${recheck[1]}\n${recheck[2]}\necho REACHED`;
+    assert.equal(run(recheckScript(':'), sub).code, 0, 'a checkout unchanged passes');
+    const edited = run(recheckScript('echo x >> Dockerfile'), sub); assert.equal(edited.code, 1); assert.match(edited.err, /The checkout changed while the tests ran/); g(['checkout', '--', 'commercial/Dockerfile']);
+    const moved = run(recheckScript('git -c user.email=t@example.test -c user.name=t -c commit.gpgsign=false commit -q --allow-empty -m moved'), sub); assert.equal(moved.code, 1); assert.match(moved.err, /The checkout changed while the tests ran/);
+    // the verdict gate: a verify-release that prints no verdict fails the deploy; one that prints it passes
+    const gate = lines.filter((l) => l.startsWith('VERDICT="$(node scripts/verify-release.mjs') || l.startsWith('echo "$VERDICT"') || l.startsWith('[[ "$VERDICT" == *"is responding at"*'));
+    assert.equal(gate.length, 3, 'the three gate lines are found verbatim');
+    const gateDir = await mkdtemp(join(tmpdir(), 'am-gate-')); t.after(() => rm(gateDir, { recursive: true, force: true })); await mkdir(join(gateDir, 'scripts'), { recursive: true });
+    await writeFile(join(gateDir, 'scripts', 'verify-release.mjs'), 'process.exit(0);\n');
+    const silent = run(`set -euo pipefail\nORIGIN=o; RELEASE_SHA=s; SERVICE_JSON=j\n${gate.join('\n')}\necho REACHED`, gateDir); assert.equal(silent.code, 1); assert.match(silent.err, /printed no verdict/); assert.ok(!silent.out.includes('REACHED'));
+    await writeFile(join(gateDir, 'scripts', 'verify-release.mjs'), "console.log('v3.0.0 at commit s is responding at o. Now complete the staging acceptance checklist.');\n");
+    const spoken = run(`set -euo pipefail\nORIGIN=o; RELEASE_SHA=s; SERVICE_JSON=j\n${gate.join('\n')}\necho REACHED`, gateDir); assert.equal(spoken.code, 0); assert.ok(spoken.out.includes('REACHED'));
   }
   assert.ok(!/\[\[ -z "\$\(git status/.test(helper), 'a failing git status must not read as a clean tree');
   // the decision itself, on the live answer of a server: the commit, the revision, its label and its traffic

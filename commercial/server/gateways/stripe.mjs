@@ -86,7 +86,7 @@ export class StripeGateway {
   async customer(customerRef, familyId, customerId = null) {
     const { customer } = await this.resolveCustomer({ customerRef, customerId }); // the recorded id first: a search that lags must not mint a second customer (fifth round)
     if (customer) return customer;
-    return this.api('POST', '/v1/customers', { metadata: { customerRef, familyId } }, `customer:${customerRef}`);
+    return this.api('POST', '/v1/customers', { metadata: { customerRef, familyId } }, `customer:${customerRef}:${customerId || 'first'}`); // keyed by the customer it replaces: a re-mint after a deletion is never Stripe's replay of the deleted one
   }
   async createCheckout({ checkoutId, idempotencyKey, customerRef, customerId = null, plan, familyId }) {
     const price = this.priceFor(plan.id); if (!price) fail(400, 'INVALID_PLAN');
@@ -106,7 +106,9 @@ export class StripeGateway {
       if (!(error instanceof Fault && [400, 404].includes(error.provider?.status))) throw error;
       // a session no longer open — expired before (a rerun, a concurrent run), or completed — refuses the expiry: that is its settled
       // state, answered as such and never recorded as a failure (fifth round); a session Stripe cannot show is the refusal it gave
-      let status = null; try { status = (await this.api('GET', `/v1/checkout/sessions/${providerCheckoutRef}`)).status || null; } catch { /* answered below as the refusal */ }
+      let session = null; try { session = await this.api('GET', `/v1/checkout/sessions/${providerCheckoutRef}`); } catch { /* answered below as the refusal */ }
+      const status = session?.status || null;
+      if (status === 'complete') return { expired: false, reason: 'SESSION_COMPLETED', status, subscriptionRef: typeof session.subscription === 'string' ? session.subscription : session.subscription?.id || null }; // paid: a subscription made, which the caller ends
       if (status && status !== 'open') return { expired: true, already: true, status };
       return { expired: false, reason: error.provider.code };
     }
@@ -238,6 +240,7 @@ export class StripeGateway {
     if (at > nowMs + STRIPE_TOLERANCE_MS) fail(400, 'EVENT_IN_FUTURE'); // a far-future timestamp would make every later event stale
     const customer = typeof o.customer === 'string' ? o.customer : o.customer?.id || null;
     const passthrough = (type) => ({ ...base, type, customer: customer || 'none', data: { ...NONE } }); // recorded and ignored by the inbox
+    if (ev.type === 'checkout.session.async_payment_failed') return { ...base, type: 'checkout.payment_failed', customer: customer || 'none', data: { ...NONE, familyId: o.metadata?.familyId || null, checkoutId: o.client_reference_id || o.metadata?.checkoutId || null, subscriptionRef: typeof o.subscription === 'string' ? o.subscription : o.subscription?.id || null } }; // the debit failed: the checkout is released for a new click
     if (ev.type === 'checkout.session.completed' || ev.type === 'checkout.session.async_payment_succeeded') {
       if (!customer || !o.subscription) fail(400, 'INVALID_REQUEST');
       // a session is paid only when Stripe says so: one completed with a delayed-notification method (a bank debit) says `unpaid` and

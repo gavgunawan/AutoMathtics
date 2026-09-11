@@ -42,7 +42,7 @@ const ACCESS = new Set(['trial', 'active', 'grace']);
 const flagged = (docs, key, values) => docs.filter((d) => values.includes(d[key]));
 // What an operator can establish about an inbox row the server could not apply (Stage 4.2), after acting at the provider.
 export const EVENT_OUTCOMES = Object.freeze(['refunded_at_provider', 'cancelled_at_provider', 'applied_by_operator', 'no_action_needed']);
-const OPEN_EVENT = new Set(['reconciliation_required', 'rejected']);
+const OPEN_EVENT = new Set(['reconciliation_required', 'rejected', 'requires_action']); // requires_action: waiting on a server-side action that may never come (a checkout abandoned) — resolvable, and taken off the customer's pending list
 
 // The audit collection is every family's, TTL 400 days; one family writes a few rows a day, so the cap is years of rows.
 const AUDIT_PAGE = 1000, AUDIT_CAP = 50_000;
@@ -253,7 +253,7 @@ export class Support {
     const id = randomUUID(), startedAt = this.now();
     await this.store.transaction(async (tx) => { tx.set(`supportOperations/${id}`, { id, action: 'reprocess', operator, familyId, startedAt, status: 'running', results: null, finishedAt: null }); this.audit(tx, 'support.reprocess_started', operator, familyId, { operationId: id }); });
     const results = [];
-    for (const [provider, ref] of [...Object.entries(family.billing || {}), ...Object.entries(family.providerCustomer || {})]) for (const r of await this.payments.reprocess(provider, ref)) results.push({ provider, ...r });
+    for (const provider of new Set([...Object.keys(family.billing || {}), ...Object.keys(family.providerCustomer || {})])) for (const r of await this.payments.reprocessFamily(provider, familyId)) results.push({ provider, ...r });
     await this.store.transaction(async (tx) => {
       const row = await tx.get(`supportOperations/${id}`);
       tx.set(`supportOperations/${id}`, { ...row, status: 'done', results: results.map((r) => ({ provider: r.provider, id: r.id, status: r.status, reason: r.reason || null })), finishedAt: this.now() });
@@ -309,9 +309,17 @@ export class Support {
       if ((await this.store.query('sessions', 'familyId', id, 1)).length) add('TOMBSTONE_RESIDUE', id, 'a session remains');
       const pc = f.deletion?.providerCancellation || null, hadProvider = !!f.subscription && f.subscription.plan !== 'trial' && !!f.subscription.provider && !!f.billing?.[f.subscription.provider];
       if (pc?.status === 'failed' || (hadProvider && !pc)) add('DELETED_FAMILY_PROVIDER_LIVE', id, pc ? 'the provider subscription was not ended at deletion: reconcile-provider, then cancel at the provider' : 'the deletion never asked the provider to end the subscription: reconcile-provider, then cancel at the provider');
-      for (const [, c] of await this.store.query('checkouts', 'familyId', id, 100)) { // a session the deletion could not expire, a clearing payment it could not end
-        if (c.expiredByDeletion && c.expiredByDeletion.expired !== true) add('DELETED_FAMILY_PROVIDER_LIVE', id, `the hosted session of checkout ${c.checkoutId} could not be expired at deletion (${c.expiredByDeletion.reason || 'no reason'}): expire it at the provider`);
-        if (c.paymentPending && !(c.endedByDeletion?.cancelled === true)) add('DELETED_FAMILY_PROVIDER_LIVE', id, `checkout ${c.checkoutId} completed with its payment clearing and its subscription ${c.paymentPending.subscriptionRef || '?'} was not ended at deletion: cancel it at the provider`);
+      for (const c of (await this.pagedBy(this.store, 'checkouts', 'familyId', id)).rows) { // a session the deletion could not expire, a subscription made beyond the record it could not end
+        if (!['superseded', 'superseded_by_deletion'].includes(c.status)) continue;
+        const gw = this.payments?.gateways && Object.hasOwn(this.payments.gateways, c.provider) ? this.payments.gateways[c.provider] : null, ref = c.providerCheckoutRef || c.lateSessionRef || null;
+        if (c.expiredByDeletion && c.expiredByDeletion.expired !== true && c.expiredByDeletion.reason !== 'SESSION_COMPLETED') {
+          // asked again each night: a provider back, or a session the operator expired by hand, settles the record
+          let settled = false;
+          if (gw && ref && typeof gw.cancelCheckout === 'function') { try { const o = await gw.cancelCheckout(ref); if (o.expired === true) { settled = true; await this.store.transaction(async (tx) => { const cur = await tx.get(`checkouts/${c.provider}:${c.checkoutId}`); if (cur) tx.set(`checkouts/${c.provider}:${c.checkoutId}`, { ...cur, expiredByDeletion: { ...o, at: this.now() } }); }); } } catch { /* named below */ } }
+          if (!settled) add('DELETED_FAMILY_PROVIDER_LIVE', id, `the hosted session of checkout ${c.checkoutId} could not be expired at deletion (${c.expiredByDeletion.reason || 'no reason'}): expire it at the provider`);
+        }
+        const made = c.paymentPending?.subscriptionRef || (c.expiredByDeletion?.reason === 'SESSION_COMPLETED' ? c.expiredByDeletion.subscriptionRef : null) || null;
+        if (made && !(c.endedByDeletion?.cancelled === true)) add('DELETED_FAMILY_PROVIDER_LIVE', id, `checkout ${c.checkoutId} made subscription ${made} (paid on a superseded session, or its payment clearing) and it was not ended at deletion: cancel it at the provider`);
       }
       return;
     }
@@ -443,7 +451,9 @@ export class Support {
       const r = await tx.get(path); if (!r) fail(404, 'EVENT_NOT_FOUND');
       if (!OPEN_EVENT.has(r.outcome?.status)) fail(409, 'EVENT_NOT_OPEN');
       if (r.outcome.resolution) fail(409, 'EVENT_ALREADY_RESOLVED');
+      const mappingPath = r.outcome.status === 'requires_action' && r.customer ? `billingCustomers/${provider}:${r.customer}` : null, mapping = mappingPath ? await tx.get(mappingPath) : null;
       const id = randomUUID(), now = this.now();
+      if (mapping && (mapping.pending || []).includes(eventId)) tx.set(mappingPath, { ...mapping, pending: mapping.pending.filter((x) => x !== eventId) }); // a resolved event is never processed again
       const record = { id, kind: 'event', provider, eventId, familyId: r.familyId || null, eventType: r.type, previousOutcome: r.outcome.status, reason: r.outcome.reason || null, outcome, note, operator, at: now };
       tx.set(`billingReconciliations/${id}`, record);
       tx.set(path, { ...r, outcome: { ...r.outcome, resolution: { id, outcome, operator, at: now } } });
@@ -537,25 +547,31 @@ export class Support {
     // checkout; a rerun finds the ones not yet done): a page still open in the parent's browser must not buy a subscription for a
     // family that is being deleted (fifth round). Then the subscription ends as a recorded financial event, now that nothing can
     // revive it (a rerun finds it ended).
-    let pendingEnding = null; // a subscription made by a session that completed with its payment still clearing: ended here, since the record never held it
-    for (const [id, c] of await this.store.query('checkouts', 'familyId', familyId, 100)) {
+    const endings = []; // subscriptions made beyond the family's record — by a session that completed while its payment cleared, or paid on a superseded session — ended here
+    const endFor = async (gw, id, c, subscriptionRef) => {
+      let r; try { r = await gw.cancelSubscription({ idempotencyKey: `deletion:${family.deletion.executionId}:${c.checkoutId}`, customerRef: c.customerRef, customerId: family.providerCustomer?.[c.provider] || null, subscriptionRef }); }
+      catch (error) { if (!(error instanceof Fault)) throw error; r = { cancelled: false, reason: error.code }; }
+      const ended = { cancelled: r.cancelled === true, already: r.already === true, reason: r.reason || null, providerOperationRef: r.providerOperationRef || subscriptionRef, subscriptionRef, at: this.now() };
+      await this.store.transaction(async (tx) => { const cur = await tx.get(`checkouts/${id}`); if (cur && !(cur.endedByDeletion?.cancelled === true)) tx.set(`checkouts/${id}`, { ...cur, endedByDeletion: ended }); }); // a recorded ending is never downgraded by a concurrent run's fault
+      endings.push({ provider: c.provider, status: ended.cancelled ? 'cancelled' : 'failed', already: ended.already, providerOperationRef: ended.providerOperationRef, reason: ended.reason, checkoutId: c.checkoutId, at: ended.at });
+    };
+    for (const c of (await this.pagedBy(this.store, 'checkouts', 'familyId', familyId)).rows) { // every checkout of the family, in pages: never the first hundred
+      const id = `${c.provider}:${c.checkoutId}`, closed = ['superseded', 'superseded_by_deletion'].includes(c.status), ref = c.providerCheckoutRef || c.lateSessionRef || null;
+      if (!closed) continue;
       const gw = this.payments?.gateways && Object.hasOwn(this.payments.gateways, c.provider) ? this.payments.gateways[c.provider] : null;
-      if (!gw) continue;
-      // every session of the family's that may still be payable — the one the freeze superseded and the ones earlier clicks superseded,
-      // whose best-effort expiry may have faulted — is expired; a record that says expired is never downgraded by a rerun's refusal
-      if (['superseded', 'superseded_by_deletion'].includes(c.status) && c.providerCheckoutRef && !c.expiredByDeletion && typeof gw.cancelCheckout === 'function') {
-        let outcome; try { outcome = await gw.cancelCheckout(c.providerCheckoutRef); } catch (error) { if (!(error instanceof Fault)) throw error; outcome = { expired: false, reason: error.code }; }
+      if (!gw) { if (ref || c.paymentPending) await this.store.transaction(async (tx) => { const cur = await tx.get(`checkouts/${id}`); if (cur && !cur.expiredByDeletion) tx.set(`checkouts/${id}`, { ...cur, expiredByDeletion: { expired: false, reason: 'PROVIDER_NOT_CONFIGURED', at: this.now() } }); }); continue; } // named by the sweep, never skipped silently
+      // every session of the family's that may still be payable — the one the freeze superseded, the ones earlier clicks superseded whose
+      // best-effort expiry may have faulted, a session that arrived late — is expired; a record that says expired is never downgraded by
+      // a rerun's refusal, and a record that says faulted is asked again by a rerun
+      let completedRef = c.expiredByDeletion?.reason === 'SESSION_COMPLETED' ? c.expiredByDeletion.subscriptionRef || null : null;
+      if (ref && !(c.expiredByDeletion?.expired === true) && !completedRef && typeof gw.cancelCheckout === 'function') {
+        let outcome; try { outcome = await gw.cancelCheckout(ref); } catch (error) { if (!(error instanceof Fault)) throw error; outcome = { expired: false, reason: error.code }; }
+        if (outcome.reason === 'SESSION_COMPLETED' && outcome.subscriptionRef) completedRef = outcome.subscriptionRef; // paid on a superseded session: a subscription made, ended below
         await this.store.transaction(async (tx) => { const cur = await tx.get(`checkouts/${id}`); if (cur && !(cur.expiredByDeletion?.expired === true)) tx.set(`checkouts/${id}`, { ...cur, expiredByDeletion: { ...outcome, at: this.now() } }); });
       }
-      if (c.status === 'superseded_by_deletion' && c.paymentPending?.subscriptionRef && !c.endedByDeletion?.cancelled && typeof gw.cancelSubscription === 'function') {
-        let r; try { r = await gw.cancelSubscription({ idempotencyKey: `deletion:${family.deletion.executionId}:${c.checkoutId}`, customerRef: c.customerRef, customerId: family.providerCustomer?.[c.provider] || null, subscriptionRef: c.paymentPending.subscriptionRef }); }
-        catch (error) { if (!(error instanceof Fault)) throw error; r = { cancelled: false, reason: error.code }; }
-        const ended = { cancelled: r.cancelled === true, already: r.already === true, reason: r.reason || null, providerOperationRef: r.providerOperationRef || null, at: this.now() };
-        await this.store.transaction(async (tx) => { const cur = await tx.get(`checkouts/${id}`); if (cur) tx.set(`checkouts/${id}`, { ...cur, endedByDeletion: ended }); });
-        pendingEnding = { provider: c.provider, status: ended.cancelled ? 'cancelled' : 'failed', already: ended.already, providerOperationRef: ended.providerOperationRef, reason: ended.reason, checkoutId: c.checkoutId, at: ended.at };
-      }
+      const made = c.paymentPending?.subscriptionRef || completedRef || null;
+      if (made && made !== family.subscription?.providerSubscriptionRef && !(c.endedByDeletion?.cancelled === true) && typeof gw.cancelSubscription === 'function') await endFor(gw, id, c, made);
     }
-    if (!family.subscription && pendingEnding) await this.store.transaction(async (tx) => { const f = await tx.get(`families/${familyId}`); if (f && !f.deleted) tx.set(`families/${familyId}`, { ...f, deletion: { ...f.deletion, providerCancellation: pendingEnding } }); });
     // The provider is told whatever the local state — a past_due family is still being dunned there, a refunded one may still be
     // live (Stage 4 review, third round); the machine records `terminate` only where access still existed.
     if (family.subscription) {
@@ -564,6 +580,9 @@ export class Support {
       if (ACCESS.has(deriveState(family.subscription, this.now()))) await this.billing.apply(familyId, { id: randomUUID(), type: 'terminate' }, operator);
       await this.store.transaction(async (tx) => { const f = await tx.get(`families/${familyId}`); if (f && !f.deleted) tx.set(`families/${familyId}`, { ...f, deletion: { ...f.deletion, providerCancellation } }); });
     }
+    // what the deletion ended beyond the record stands as its provider cancellation when the record itself had none to end (no
+    // subscription, a trial, an operator's grant): a failed ending is the one the operator reads
+    if (endings.length) await this.store.transaction(async (tx) => { const f = await tx.get(`families/${familyId}`); if (!f || f.deleted) return; const pc = f.deletion?.providerCancellation || null; const chosen = endings.find((e) => e.status === 'failed') || endings.at(-1); tx.set(`families/${familyId}`, { ...f, deletion: { ...f.deletion, providerCancellation: !pc || pc.status === 'not_applicable' ? chosen : pc, otherEndings: endings } }); });
     // phase 1 — login sessions of the family and of its parents (nobody could use them: authorize and login refuse an executing family)
     const members = await this.store.entries(`families/${familyId}/members`), uids = members.map(([uid]) => uid);
     await this.sweepWhere('sessions', 'familyId', familyId, batch, familyId, 'loginSessions');

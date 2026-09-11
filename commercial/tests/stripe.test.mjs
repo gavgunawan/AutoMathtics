@@ -42,7 +42,7 @@ test('checkout: one Stripe customer per family carrying our reference, a hosted 
   assert.ok(!JSON.stringify(r).includes('sk_test'), 'the key never leaves the adapter');
   const [search, create, session] = calls;
   assert.equal(search.method, 'GET'); assert.equal(new URLSearchParams(search.path.split('?')[1]).get('query'), "metadata['customerRef']:'cus_ours'");
-  assert.equal(create.headers['Idempotency-Key'], 'customer:cus_ours'); assert.equal(create.headers.Authorization, `Bearer ${KEY}`); assert.equal(create.body['metadata[customerRef]'], 'cus_ours');
+  assert.equal(create.headers['Idempotency-Key'], 'customer:cus_ours:first'); assert.equal(create.headers.Authorization, `Bearer ${KEY}`); assert.equal(create.body['metadata[customerRef]'], 'cus_ours');
   assert.equal(session.headers['Idempotency-Key'], checkoutId, 'the checkout id is the provider-side idempotency key (S3.3-A)');
   assert.equal(session.body.mode, 'subscription'); assert.equal(session.body['line_items[0][price]'], 'price_1Family000'); assert.equal(session.body.customer, 'cus_stripe1'); assert.equal(session.body.client_reference_id, checkoutId); assert.equal(session.body['subscription_data[metadata][familyId]'], 'fam_1');
   assert.ok(session.body.success_url.startsWith('https://pilot.example.test/'));

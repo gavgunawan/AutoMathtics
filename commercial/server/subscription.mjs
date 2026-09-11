@@ -91,7 +91,7 @@ export function transition(sub, event, now) {
       // A scheduled change is applied by the renewal on its plan (or replaced by a fresh intent); a renewal on the plan the family
       // is already on - a retried older invoice, a provider that has not moved the price yet - leaves it waiting for the next one.
       const scheduled = event.authorized || !sub?.scheduled || sub.scheduled.plan === p.id ? null : { ...sub.scheduled, at: event.periodEnd };
-      return { ...(sub || {}), plan: p.id, seats: p.seats, state: 'active', trialEndsAt: null, periodEnd: event.periodEnd, cancelAtPeriodEnd, failedAt: null, failures: 0, scheduled,
+      return { ...(sub || {}), plan: p.id, seats: p.seats, state: 'active', trialEndsAt: null, endedAt: null, periodEnd: event.periodEnd, cancelAtPeriodEnd, failedAt: null, failures: 0, scheduled, // endedAt: a paid subscription never carries the previous one's ending
         lastPaymentAt: now, startedAt: sub?.startedAt || now, updatedAt: now, version, provider: event.provider || sub?.provider || 'manual', providerRef: event.providerRef ?? sub?.providerRef ?? null,
         providerSubscriptionRef: event.subscriptionRef ?? sub?.providerSubscriptionRef ?? null }; // the provider's subscription this payment was for: events about another one are not this family's
     }

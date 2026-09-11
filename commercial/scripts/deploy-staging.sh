@@ -59,7 +59,7 @@ SRC="$(mktemp -d)"; ENV_FILE="$(mktemp)"; SERVICE_JSON="$(mktemp)"
 trap 'rm -rf "$SRC"; rm -f "$ENV_FILE" "$SERVICE_JSON"' EXIT
 # (from the top level: run inside commercial/, git-archive scopes the archive to the current directory INSIDE the tree-ish and exports nothing)
 PREFIX="$(git rev-parse --show-prefix)"; PREFIX="${PREFIX%/}"; TOP="$(git rev-parse --show-toplevel)"
-git -C "$TOP" archive --format=tar "${RELEASE_SHA}${PREFIX:+:$PREFIX}" | tar -x -C "$SRC"
+git -C "$TOP" -c core.autocrlf=false archive --format=tar "${RELEASE_SHA}${PREFIX:+:$PREFIX}" | tar -x -C "$SRC"
 for needed in Dockerfile .dockerignore .gcloudignore package.json package-lock.json server/main.mjs; do [[ -e "$SRC/$needed" ]] || { echo "The exported commit lacks $needed." >&2; exit 1; }; done
 npm ci --ignore-scripts --no-fund --no-audit
 npm test
