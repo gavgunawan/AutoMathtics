@@ -27,7 +27,7 @@ done
 # CREATING while existing documents are being processed, ACTIVE once done; nothing listed means no policy, which is a
 # WARNING here and a different last line below, not a silent success.
 TTL_WARNINGS=0
-for GROUP in sessions rateLimits pinAttempts operations audit recoveries sweeps smsLadder; do
+for GROUP in sessions rateLimits pinAttempts operations audit recoveries sweeps smsLadder reports outbox feedback; do
   STATE="$(gcloud firestore fields ttls list --collection-group="$GROUP" --project "$PROJECT_ID" --format 'value(ttlConfig.state)')"
   if [[ -z "$STATE" ]]; then
     gcloud firestore fields ttls update expireAt --collection-group="$GROUP" --enable-ttl --project "$PROJECT_ID" --quiet --async >/dev/null && echo "TTL policy requested for $GROUP"

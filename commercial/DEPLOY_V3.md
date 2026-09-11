@@ -178,7 +178,7 @@ The server stamps short-lived records with an `expireAt` timestamp; Firestore de
 if a TTL policy names that field for the collection group. Run once, after the database exists:
 
 ```bash
-for GROUP in sessions rateLimits pinAttempts operations audit recoveries sweeps; do
+for GROUP in sessions rateLimits pinAttempts operations audit recoveries sweeps reports outbox feedback; do
   gcloud firestore fields ttls update expireAt --collection-group="$GROUP" \
     --enable-ttl --project "$PROJECT_ID"
 done
@@ -188,11 +188,17 @@ done
 `expireAt` on purpose: they are financial idempotency and recovery evidence and are kept under the
 retention policy in `PAYMENTS.md`, never by TTL (S3.4-G).
 
+`emailPrefs` (email-v1) has no `expireAt` either: it is the parent account's consent record and lives as long as the sign-in
+account. `reports` (the weekly email's claim and outcome, 400 days) and `outbox` (the fake mail provider's copies, 14 days) do
+expire; on a project set up before email-v1, block G requests those two policies (section 5b). `feedback` (the notes from
+*Send feedback*, 400 days) expires the same way; on a project set up before it, rerun block B, which requests only the policies
+not yet listed (section 5c).
+
 Learning sessions live under `families/*/learning/*/sessions`, whose collection group is
 `sessions` as well, so the first line covers them. Deletion runs within about 24 hours of the
 timestamp; nothing in the code relies on it for correctness, only for bounded growth.
 
-Blocks B and F request each policy with `--async` only when none is listed, then verify every group with
+Blocks B, F and G request each policy with `--async` only when none is listed, then verify every group with
 `gcloud firestore fields ttls list --collection-group=GROUP --project "$PROJECT_ID" --format 'value(ttlConfig.state)'`
 and print `TTL GROUP: STATE`: `CREATING` while Firestore applies it to existing documents, `ACTIVE` once
 done. A group that shows nothing has no policy at all — the case that used to hide behind a discarded
@@ -260,6 +266,12 @@ commitless checkout, and after the deploy checks that `/api/health` reports that
 commit hash anyone can compare with the release branch — that is the evidence a device test is against
 a given release, not a line in a terminal. The nightly sweep job does not carry it (it runs from the same
 image; `gcloud run jobs describe` shows the image digest).
+
+**Open tabs learn of a new release.** `/api/bootstrap` carries the same `release` (the version when there is no commit). The app
+remembers the first one it saw and asks again on every refresh, whenever the tab comes back into view, and every five minutes
+while it is in view; a different release shows a bar, *A new version of AutoMathtics is ready.*, whose *Update now* reloads the
+page. It never reloads by itself, and on the kids' tablet it waits until a paper ends. Tabs opened before the first release that
+has this checker need one manual reload (`ACCEPTANCE.md` U1).
 
 ```bash
 export TRUSTED_PROXY_HOPS=2
@@ -357,6 +369,97 @@ Cloud Run's infrastructure permits unauthenticated HTTP so the sign-in page can
 open; private API operations still require the application's authenticated session.
 No edge abuse-protection system is configured by this helper. Keep the pilot
 unadvertised and configure/test that protection before broad registration.
+
+## 5b. Email: the weekly progress report (email-v1)
+
+Every Monday at 07:00 Singapore time a Cloud Run job (`node scripts/report.mjs send`, from the service's own image) sends each
+family one email about the last complete ISO week in Singapore, the same week for every family: per child what was right and
+fast, right but slow, and wrong again and again, the totals, a goldilocks pace and a System Scan focus offer. It goes to the
+owner's current address at the identity provider, and only if that address is verified and the account not disabled; if the
+identity provider cannot be asked, the family fails and the next run tries again. There is no email for a week without play,
+with the weekly report switched off, or without an active entitlement. `reports/{familyId}:{week}` holds one claim and its
+outcome per family and week (status only, TTL 400 days), so overlapping or repeated runs never send twice.
+
+**The time-zone edge.** Each family's answers count by the family's own local dates, but the week is Singapore's. A family
+west of Singapore is still in its Sunday at Monday 07:00 Singapore time: answers it gives later that Sunday are dated in the
+reported week, arrive after its email, and no report counts them. One week per run is deliberate: computed family by family,
+a run near a daylight-saving change or a midnight could report two different weeks, and never the same one twice.
+
+The buttons in an email open the app, which says what the button does and changes nothing until the parent taps Confirm.
+Mail apps get RFC 8058 one-click unsubscribe at `https://PROJECT_ID.web.app/api/email/unsubscribe`. The buttons carry their
+tokens in the URL fragment (`/#email=…`), which never reaches a server or its request logs; the List-Unsubscribe URL has to
+carry its stop-the-report token in the query, because the mailbox provider posts to it, so Cloud Run's request log does record
+those tokens, which can switch the weekly report off and nothing else (`PRIVACY.md`). The web service needs
+nothing new: the buttons are signed with `SESSION_SECRET` (under a key derived for them alone), which it already has, and
+rotating that secret voids every button already sent.
+
+**Before a Resend account exists** (only the owner can open one), run block G as it is. `EMAIL_PROVIDER=fake` sends nothing:
+each rendered email lands in Firestore → `outbox` for 14 days (TTL), where it can be read, and a family's deletion removes its
+copies at once.
+
+**With Resend** (free: 3,000 emails a month, 100 a day, no branding):
+
+1. The owner signs up at https://resend.com with their own email address and creates an API key with *sending access* only.
+2. In Cloud Shell the owner types the key into Secret Manager, never into a chat or a file:
+   `printf '%s' 're_...' | gcloud secrets create am-v3-email-key --data-file=- --project "$PROJECT_ID"`
+3. Rerun block G with the provider named. It grants the runtime account the key, updates the job and the schedule, and ends
+   with a dry run that sends nothing:
+   `EMAIL_PROVIDER=resend source <(curl -fsSL https://raw.githubusercontent.com/gavgunawan/AutoMathtics/release/v3.0/commercial/scripts/cloudshell/07-report-job.sh)`
+
+**The pilot sender limitation.** Until a domain is verified at Resend the sender is `AutoMathtics <onboarding@resend.dev>`, and
+Resend delivers only to the address that owns the Resend account. That is enough for the pilot, where the owner is the only
+parent. **Before any other family**: verify a domain at Resend (its SPF and DKIM records in the domain's DNS), rerun block G with
+`EMAIL_FROM='AutoMathtics <reports@THE-DOMAIN>'`, and put the email wording through the legal review with the rest of the
+privacy terms (`PRIVACY.md` → Before real families).
+
+Block G (`scripts/cloudshell/07-report-job.sh`) is a copy of block E. It sets TTL policies on `reports` (400 days) and `outbox`
+(14 days), requested and verified like block B. It creates the job `automathtics-v3-report`, running
+`node scripts/report.mjs send` with `APP_MODE`, `FIREBASE_PROJECT_ID`, `CONFIRM_PROJECT`, `OPERATOR_ID=scheduler@PROJECT_ID`,
+`APP_ORIGIN`, `EMAIL_PROVIDER` and `EMAIL_FROM`, the secret `SESSION_SECRET=am-v3-session:1` and, with Resend only,
+`EMAIL_API_KEY=am-v3-email-key:1`. It schedules `automathtics-v3-report-weekly` at `0 7 * * 1` Asia/Singapore, then does a dry
+run. A run in which any family fails exits 2, so Cloud Run shows it failed; one family's failure never stops the others.
+Executing the job again retries what failed. Each send carries the Idempotency-Key `report:FAMILY:WEEK`, which Resend keeps for
+24 hours: a retry inside them with the same bytes gets the first answer back and no second email, and the same report does
+render the same bytes, because every button's expiry follows from the week and nothing else in the email moves with the clock.
+If the email changed meanwhile (the parent changed a pace between the attempts, say), Resend refuses the key as reused with
+another body (409 `invalid_idempotent_request`), as it does a key whose first request is still in flight (409
+`concurrent_idempotent_requests`): either means an email under that key reached Resend already, so the family is recorded as
+`sent_unconfirmed` and never sent again. A retry more than 24 hours after a first attempt whose answer was lost can deliver a
+second email.
+
+```bash
+source <(curl -fsSL https://raw.githubusercontent.com/gavgunawan/AutoMathtics/release/v3.0/commercial/scripts/cloudshell/07-report-job.sh)
+```
+
+To see every family's decision without sending anything, execute the job with overrides:
+`gcloud run jobs execute automathtics-v3-report --region asia-southeast1 --args scripts/report.mjs,send,--dry-run --wait`, then
+read its log (one line per family: `sent`, `sent_unconfirmed`, `skipped` with the reason, or `failed` with its code; never an
+address or a token). `--family FAMILY_UUID` and `--week 2026-W36` narrow a run; `preview FAMILY_UUID` prints one family's email
+with inert links. The arguments are strict: an unknown word, a repeated option or an option without its value exits 64 with the
+usage, so a slip can never widen a run to every family.
+
+## 5c. Feedback
+
+*Send feedback* sits under the sign-in screen and under every parent screen, never in kid mode (from *Hand over to kids* until a
+parent signs in again). A note is 1 to 2000 characters and names the screen it came from; on the sign-in screen the sender may
+add an address to be answered at. The server decides who sent it: a parent's session names the parent and the family, the
+sign-in screen names nobody, and a child's or the launch pad's session is refused. Each note is kept in `feedback/{id}` for 400
+days (TTL, block B), with the release it was sent from. Budgets: five an hour per address, ten a day per session, a hundred an
+hour per instance. A family's deletion removes the notes its parents sent, and the sign-in account's deletion those it sent
+without a family; the family export carries the family's notes (`PRIVACY.md`).
+
+To read them, in Cloud Shell with the variables `scripts/support.mjs` uses (`APP_MODE=staging`, `FIREBASE_PROJECT_ID`,
+`CONFIRM_PROJECT`, `OPERATOR_ID`): `node scripts/report.mjs feedback --days 7` prints one JSON line per note, newest first:
+when, the screen, the release, the parent and family when signed in, the address to answer when one was given, and the words.
+`--days` takes 1 to 400.
+
+**A copy in the owner's inbox.** With Resend set up (5b: the key in `am-v3-email-key`, and block G rerun with
+`EMAIL_PROVIDER=resend`, which grants the runtime account the key), deploy with the owner's address:
+`export FEEDBACK_TO=owner@example.com EMAIL_PROVIDER=resend`, then block C. Each note then also arrives by email, and Reply goes
+to the parent's account address or to the address given on the sign-in screen. The copy is best effort with a three-second
+limit: a slow or failing provider never loses the note or fails the parent's request. Every deploy states the service's whole
+environment, so keep `FEEDBACK_TO` exported for every later run of block C; a deploy without it stops the copies (the notes are
+still kept). With `EMAIL_PROVIDER=fake`, or without `FEEDBACK_TO`, the service emails nothing.
 
 ## 6. Activate your test family
 

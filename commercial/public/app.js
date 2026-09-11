@@ -38,6 +38,8 @@ const messages = {
   ITEM_NOT_OWNED: 'That item is not in your collection.', REWARD_NOT_FOUND: 'That reward is no longer in the store.',
   SCAN_ALREADY_DONE: 'System Scan is already complete this week.', SCAN_LOCKED: 'System Scan unlocks in Sector B after the first tier.',
   INVALID_ANSWER: 'The grid could not read that answer. Check it, then tap Go again.',
+  LINK_INVALID: 'This link does not work. Nothing was changed.', LINK_EXPIRED: 'This link has expired; the next weekly email brings fresh ones. Nothing was changed.', LINK_GONE: 'The family or child this link was for is no longer there. Nothing was changed.',
+  FEEDBACK_TEXT: 'Write your feedback first (up to 2000 characters).', FEEDBACK_CONTACT: 'That email address does not look right. Fix it, or leave it empty.',
 };
 // The sign-in provider's own refusals: in the parent's words where the cause is known, otherwise the provider's code and text,
 // so that a failure can be reported and matched against the provider's own log (the one generic sentence used to hide everything).
@@ -111,14 +113,17 @@ function setMode() {
   const mode = model?.role === 'child' ? 'kid' : model?.role === 'selector' ? 'select' : 'parent';
   document.documentElement?.setAttribute('data-mode', mode); if (mode !== 'kid') clearLook();
 }
-// variant: one of v2's narrower cards (narrow 420px, w460, w520) or a screen's own class
-function panel(kicker, title, subtitle, variant = '') {
+// variant: one of v2's narrower cards (narrow 420px, w460, w520) or a screen's own class; play: a question session is on screen, so a newer release's bar waits for its end (Update now)
+function panel(kicker, title, subtitle, variant = '', play = false) {
   authModule?.resetCaptcha?.(); // the robot check belongs to the screen that built it; one left behind strands its frame
   stopSendClock(); stopTimer(); screenId++; onBack = null; // the same for the Send countdown and a question's clock, and Back is each screen's to set again
   root.replaceChildren(); setMode(); root.setAttribute('aria-live', 'polite'); // a session turns it off while it plays
   const box = el('section', null, variant ? `panel ${variant}` : 'panel');
   box.append(el('p', kicker, 'kicker'), el('h1', title), el('p', subtitle, 'intro muted'));
-  root.append(box); return box;
+  root.append(box);
+  if (!kidMode) root.append(feedbackFoot(kicker)); // under the sign-in screen and every parent screen; never in kid mode
+  inPlay = play; showUpdate(); // a newer release's bar goes on every screen but a running question session
+  return box;
 }
 // The DOM a test runs this page in has no prepend or insertBefore: a node goes first by rebuilding the list.
 const putFirst = (box, node) => box.replaceChildren(node, ...box.children);
@@ -134,6 +139,48 @@ function note(text, tone) {
   status.textContent = text || '';
   status.className = !text ? 'message' : `message msg-${tone || (/^✓/.test(text) ? 'ok' : /^[✗⚠]/.test(text) ? 'bad' : 'note')}`;
 }
+// ---- Send feedback (the owner's request of 12 Sep 2026): under the sign-in screen and every parent screen, never in kid mode —
+// kidMode is set from Hand over to kids until a parent signs in again (renderModel). The browser sends the words, the screen and,
+// signed out, an address to be answered at if the sender wants one; the server decides who sent it (server/feedback.mjs).
+let kidMode = false;
+const EMAIL_ADDRESS = /^[^\s@<>"]{1,64}@[^\s@<>"]{1,190}\.[^\s@<>"]{2,}$/;
+function feedbackFoot(kicker) {
+  const foot = el('div', null, 'feedback'), page = String(kicker || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'screen';
+  const closed = () => foot.replaceChildren(button('Send feedback', open, 'text-button'));
+  function open() {
+    const words = el('textarea'); Object.assign(words, { maxLength: 2000, rows: 4, required: true });
+    const label = el('label', null, 'field'); label.append(el('span', 'Your feedback (up to 2000 characters)'), words);
+    const reply = model ? null : field('Your email, if you would like an answer (optional)', 'email', { required: false, maxLength: 254, autocomplete: 'email' });
+    foot.replaceChildren(label, ...(reply ? [reply.wrap] : []), button('Send', async () => {
+      const text = words.value.trim(), contact = reply ? reply.input.value.trim() : '';
+      if (!text || text.length > 2000) { note(messages.FEEDBACK_TEXT); return; }
+      if (contact && (contact.length > 254 || !EMAIL_ADDRESS.test(contact))) { note(messages.FEEDBACK_CONTACT); return; }
+      if (!model) csrf = (await bootstrap()).csrf; // signed out, the pre-authentication token lives ten minutes: a fresh one
+      await api('/feedback', { text, page, ...(contact ? { contact } : {}) });
+      closed(); note('Thank you: your feedback was sent.');
+    }, 'primary'), button('Cancel', closed, 'ghost'));
+  }
+  closed(); return foot;
+}
+// ---- Update now (the owner's request of 12 Sep 2026): every bootstrap names the release the server runs (RELEASE_SHA, else the
+// version). The first one this page saw is its own; any other means a newer app is live, and a bar offers Update now. It never
+// reloads by itself, and in kid mode it waits for the end of a question session (panel's `play`). Asked on every bootstrap (so on
+// every refresh), when the tab comes back into view, and every five minutes while it is in view (releaseTick, at the end). A page
+// opened before this checker existed cannot know: it needs one manual reload.
+const RELEASE_CHECK_MS = 5 * 60_000, updateBar = el('div', null, 'update-bar');
+let firstRelease = null, newRelease = false, inPlay = false;
+function sawRelease(release) {
+  if (typeof release !== 'string' || !release) return;
+  if (firstRelease === null) firstRelease = release;
+  if (release !== firstRelease && !newRelease) { newRelease = true; showUpdate(); }
+}
+function showUpdate() {
+  if (!newRelease || inPlay || [...root.children].includes(updateBar)) return;
+  if (!updateBar.children.length) { const go = el('button', 'Update now', 'primary'); go.type = 'button'; go.onclick = () => { if (typeof location === 'object' && location) location.reload(); }; updateBar.append(el('span', 'A new version of AutoMathtics is ready.'), go); }
+  root.append(updateBar);
+}
+async function bootstrap() { const b = await api('/bootstrap'); sawRelease(b.release); return b; }
+const checkRelease = () => api('/bootstrap').then((b) => sawRelease(b.release), () => {}); // in the background: never touches csrf, never shows an error
 // ---- the Send countdown (the SMS resend ladder, DEPLOY_V3.md section 5) ----
 // H:MM:SS with the hours unbounded, so a day's wait reads 24:00:00 rather than a clock that wrapped to 0:00:00.
 function hms(seconds) {
@@ -201,7 +248,7 @@ async function api(path, payload, requestId) {
 }
 async function refresh() {
   transientView = false;
-  csrf = (await api('/bootstrap')).csrf;
+  csrf = (await bootstrap()).csrf;
   try { model = await api('/me'); csrf = model.csrf; setMode(); await renderModel(); }
   catch (error) {
     if (error.code === 'SIGN_IN_REQUIRED' || error.code === 'SESSION_REVOKED') { model = null; signInScreen(); return; }
@@ -223,7 +270,7 @@ async function authStep(result, afterReady = null) {
   if (result.stage === 'ready') {
     try {
       // Reauthentication can outlast the old cookie/preauthentication CSRF lifetime.
-      csrf = (await api('/bootstrap')).csrf;
+      csrf = (await bootstrap()).csrf;
       if (afterReady?.valid && !afterReady.valid()) return;
       await api('/auth/session', { idToken: result.idToken, ...(typeof rememberChoice === 'boolean' ? { remember: rememberChoice } : {}) });
     }
@@ -311,11 +358,18 @@ function signInScreen(signup = false, afterReady = null, reauth = false) {
   const form = el('form', null, 'auth-form');
   const email = field('Parent email', 'email', { autocomplete: 'email', maxLength: 254 });
   const password = field('Password', 'password', { autocomplete: signup ? 'new-password' : 'current-password', minLength: signup ? 12 : 1, maxLength: 128 });
+  // A new password is typed twice: one slip in a masked box would lock the parent out of the account made a minute before.
+  const again = signup ? field('Type the password again', 'password', { autocomplete: 'new-password', minLength: 12, maxLength: 128 }) : null;
   const submit = el('button', signup ? 'Create parent account' : 'Sign in as parent', 'primary'); submit.type = 'submit';
-  form.append(email.wrap, password.wrap, submit);
+  const consent = signup ? consentBoxes() : null; // email-v1: the two sign-up boxes
+  form.append(email.wrap, password.wrap, ...(again ? [again.wrap] : []), ...(consent ? consent.labels : []), submit);
   form.onsubmit = (event) => { event.preventDefault(); run(async () => {
-    const a = await auth(); const value = password.input.value; password.input.value = '';
-    await authStep(await (signup ? a.signUp(email.input.value, value) : a.signIn(email.input.value, value)), afterReady);
+    if (again && again.input.value !== password.input.value) { note('The two passwords don’t match. Type the same password in both boxes; nothing has been sent.'); return; }
+    if (consent && !consent.agreed()) { note('Tick the first box to create the account: account and progress emails are part of the service. News and offers stay optional.'); return; }
+    const a = await auth(); const value = password.input.value; password.input.value = ''; if (again) again.input.value = '';
+    const result = await (signup ? a.signUp(email.input.value, value) : a.signIn(email.input.value, value));
+    if (consent) await recordConsent(a, consent.agreed(), consent.news());
+    await authStep(result, afterReady);
   }); };
   box.append(form);
   if (reauth) box.append(button('Cancel verification', cancelVerification, 'ghost'));
@@ -323,6 +377,20 @@ function signInScreen(signup = false, afterReady = null, reauth = false) {
   if (!signup && !reauth) box.append(button('Forgot password?', async () => { if (!email.input.checkValidity()) { email.input.reportValidity(); return; }
     await (await auth()).resetPassword(email.input.value); note('If this email can receive a reset link, one has been requested. Mobile verification is still required.'); }, 'text-button'));
   box.append(el('p', 'EMAIL VERIFIED  //  MOBILE VERIFIED  //  FAMILY-ONLY ACCESS', 'trust'));
+}
+// email-v1: the sign-up boxes. The first (account, progress and service emails) is required; the second (news and offers) is
+// optional and starts unticked, because consent made a condition of sign-up is not consent. The server records both.
+function consentBoxes() {
+  const box = (words) => { const l = el('label', null, 'check'), i = el('input'); i.type = 'checkbox'; l.append(i, el('span', words)); return { l, i }; };
+  const need = box('Send me emails about my account and my children’s progress: a weekly progress report, security notices and service updates. I can turn the weekly report off at any time.');
+  const news = box('Also send me news and offers from AutoMathtics. Optional; unsubscribe at any time.');
+  return { labels: [need.l, news.l], agreed: () => need.i.checked === true, news: () => news.i.checked === true };
+}
+// Both boxes are recorded by the server, from the new account's own ID token, the moment the account exists. A failure never
+// blocks the sign-up: the defaults then apply (the weekly report on, news off), and Mission Control can change both later.
+async function recordConsent(a, progress, news) {
+  try { const idToken = await a.idToken?.(); if (!idToken) return; csrf = (await bootstrap()).csrf; await api('/auth/consent', { idToken, progress, news }); }
+  catch { /* the defaults apply */ }
 }
 async function cancelVerification() {
   reauthEpoch++; keepSdkSession = false;
@@ -356,6 +424,7 @@ async function signOut() {
   await api('/auth/logout', {}); if (authModule) await authModule.clear(); channel?.postMessage('changed'); await refresh();
 }
 function renderModel() {
+  kidMode = model.role !== 'parent'; // the launch pad or a child: no Send feedback on this device until a parent signs in again
   if (model.role === 'child') return childScreen();
   if (!model.family) return familySetup();
   return model.role === 'parent' ? parentScreen() : selectorScreen();
@@ -519,6 +588,7 @@ async function parentScreen() {
   if (family.children.length) row.append(button('Game & progress', parentGameScreen, 'ghost'));
   row.append(button('Sign out', signOut, 'ghost')); box.append(row);
   if (model?.rememberedUntil) box.append(el('p', `This device stays signed in until ${new Date(model.rememberedUntil).toLocaleDateString()}. Sign out to forget it.`, 'notice')); // Remember this device
+  box.append(emailBlock(model.emailPrefs)); // email-v1: the weekly report and news switches
   box.append(button('Change my mobile number', changeMobileScreen, 'text-button')); // Stage 4 review: the old phone still works, the number is changing
   for (const child of family.children) { box.append(button(`Reset ${child.nickname}\u2019s PIN`, () => resetPinScreen(child), 'text-button')); box.append(button(`Change ${child.nickname}\u2019s starting point`, () => startScreen(child), 'text-button')); }
   // Stage 3.5: the family's own data to keep, and the way to leave — 14 days to change your mind
@@ -536,6 +606,35 @@ async function parentScreen() {
   }
   box.append(keep);
   box.append(el('p', `Family reference: ${family.id}`, 'reference'));
+}
+// email-v1: Mission Control's Email updates block, the switches as the server holds them (/api/me). Saving needs a recent sign-in
+// (a child at a remembered, open Mission Control must not switch the report off); after one the parent sets the switches again,
+// because a change is never sent by itself.
+function emailBlock(prefs) {
+  const wrap = el('div', null, 'track'); wrap.append(el('strong', 'Email updates'));
+  const sw = (words, detail, on) => { const l = el('label', null, 'check'), i = el('input'), s = el('span', words); i.type = 'checkbox'; i.checked = on; s.append(el('small', detail)); l.append(i, s); wrap.append(l); return i; };
+  const progress = sw('Weekly progress report', 'Every Monday: what each child got right and fast, right but slow, and wrong again and again, with a suggested pace.', prefs?.progress !== false);
+  const news = sw('News and offers', 'Occasional news and offers from AutoMathtics.', prefs?.news === true);
+  wrap.append(el('span', 'Account and security emails always come.', 'card-meta'), button('Save email settings', async () => {
+    try { await api('/account/email', { progress: progress.checked === true, news: news.checked === true }); await refresh(); note('Email settings saved.'); }
+    catch (error) { if (error.code !== 'REAUTHENTICATE') throw error; reauthenticate(async () => { await refresh(); note('Parent verified. Set the switches again, then save.'); }); }
+  }, 'ghost'));
+  return wrap;
+}
+// email-v1: a button in the weekly email opens the app with its signed token (#email=). Link scanners and mail previews open it
+// too, so nothing changes on arrival: the server says what the button does, and only Confirm sends it. Works signed in or not.
+async function emailScreen(token) {
+  const d = await api('/email/describe', { t: token });
+  transientView = true;
+  if (!d.valid) {
+    const box = panel('EMAIL BUTTON', 'This link no longer works.', d.reason === 'expired' ? 'Buttons in the weekly email work for 14 days (a year to stop the report); the next email brings fresh ones. Nothing was changed.' : 'The family or child it was for may be gone, or the link was changed on the way. Nothing was changed.');
+    onBack = refresh; box.append(button('Close', refresh, 'ghost')); return;
+  }
+  const what = d.action === 'pace' ? `Set ${d.nickname}’s question time to ${d.value}% (now ${d.current}%).`
+    : d.action === 'focus' ? (d.value ? `Focus ${d.nickname}’s weekly System Scan on the weak spots: about 75% of its questions on what ${d.nickname} gets wrong or slow, 25% recap.` : `Switch ${d.nickname}’s System Scan focus off: back to the normal mix.`)
+    : `Stop the weekly progress report for ${d.email || 'this account'}. Account and security emails still come.`;
+  const box = panel('EMAIL BUTTON', 'Confirm this change', what); onBack = refresh;
+  box.append(button('Confirm', async () => { const r = await api('/email/apply', { t: token }); await refresh(); note(r.message); }, 'primary'), button('Cancel', async () => { await refresh(); note('Nothing was changed.'); }, 'ghost'));
 }
 // Stage 4 review: the parent still has the old phone and wants a new number on the account (RECOVERY.md). A fresh sign-in
 // first — password and a code to the old number — then a code to the new number; the new factor is enrolled before the old
@@ -1043,7 +1142,7 @@ async function childScreen(after = {}) {
   else if (st.scan?.doneThisWeek) box.append(el('p', '🧠 System Scan done this week · resets Monday', 'subtle'));
   box.append(button('Parent sign-in', () => signInScreen(), 'text-button'));
   const log = homeLog(child, st.history);
-  root.replaceChildren(homeHeader(child, st, w), box, ...(log ? [log] : []));
+  root.replaceChildren(homeHeader(child, st, w), box, ...(log ? [log] : [])); showUpdate(); // the page was rebuilt after panel(): a newer release's bar goes back on
 }
 // ---- the shop, which is also the wardrobe (v2 3211-3347): the balances, a Surprise Box's reveal, the fifteen sections in v2's
 // order, the Reward Store and the purchase log. The page only asks: the server sells, rolls the box, equips and holds the
@@ -1448,7 +1547,7 @@ function questionView(d) {
 function playView(session, q, after = {}) {
   transientView = true;
   const T = TRACK[q.track || session.track], w = gameModel?.wallet || {}, tier = streakTier(playStreak), choice = q.answerType === 'choice';
-  const box = panel('', '', '', 'play'); box.replaceChildren();
+  const box = panel('', '', '', 'play', true); box.replaceChildren();
   onBack = refresh; // to the child's home: the session stays open there under "Continue", nothing is quit or lost
   applyLook(w); root.setAttribute('aria-live', 'off'); // each question repaints the screen: the flash slot alone speaks
   if (playStart.id !== session.id) playStart = { id: session.id, at: Date.now() };
@@ -1612,6 +1711,9 @@ async function parentGameScreen() {
   for (const row of g.children) {
     const card = el('div', null, 'track'); card.append(el('strong', `${icons[row.child.icon] || '🤖'} ${row.child.nickname}`), el('span', `⚙️ ${row.engine.levelId} ${Math.min(100,row.engine.paper-1)}/100 · 🧭 ${row.nav.levelId} ${Math.min(100,row.nav.paper-1)}/100 · ⚡${row.wallet.gc} · 🏆${row.wallet.rp}`, 'card-meta'));
     const pace = field('Question-time pace % (10–200)', 'number', { value: row.pacePercent, min: 10, max: 200 }); card.append(pace.wrap, button('Set pace', async () => { await parentGameMutation('/game/parent/settings', { childId: row.child.id, pacePercent: Number(pace.input.value) }); }, 'ghost'), button('+⚡50 credit', async () => { await parentGameMutation('/game/parent/adjust', { childId: row.child.id, currency: 'gc', amount: 50, reason: 'Parent bonus credit', operationId: crypto.randomUUID() }); }, 'text-button'));
+    // email-v1: the System Scan's focus on this child's weak styles (about 75 % weak spots, 25 % recap), a parent setting like the pace
+    card.append(el('span', row.scanFocus ? '🧠 System Scan focus is on: about 75% on the styles this child gets wrong or slow, 25% recap.' : '🧠 System Scan: the normal mix of this sector and earlier ones.', 'card-meta'),
+      button(row.scanFocus ? 'Switch scan focus off' : 'Focus System Scan on weak spots', async () => { await parentGameMutation('/game/parent/settings', { childId: row.child.id, scanFocus: !row.scanFocus }); }, 'text-button'));
     const pending = row.wallet.redemptions.filter((r) => r.status === 'pending'); for (const r of pending) { const p = el('div', null, 'approval'); p.append(el('span', `${r.emoji} ${r.name} · 🏆${r.cost}`), button('Approve', async () => { await parentGameMutation('/game/parent/redemption', { childId: row.child.id, redemptionId: r.id, decision: 'approve' }); }, 'ghost'), button('Reject + refund', async () => { await parentGameMutation('/game/parent/redemption', { childId: row.child.id, redemptionId: r.id, decision: 'reject' }); }, 'text-button')); card.append(p); }
     box.append(card);
   }
@@ -1629,9 +1731,12 @@ channel?.addEventListener('message', () => {
   run(async () => { if (authModule) await authModule.clear(); await refresh(); });
 });
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && model && !working && !transientView) run(refresh);
+  if (document.visibilityState !== 'visible') return;
+  if (model && !working && !transientView) run(refresh); // refresh bootstraps, which compares the release
+  else checkRelease(); // a draft, a game or the sign-in screen stays as it is: only the release is asked for
 });
 await run(refresh);
+setInterval(function releaseTick() { return document.visibilityState === 'visible' ? checkRelease() : undefined; }, RELEASE_CHECK_MS); // Update now: every five minutes in view
 // Back from a hosted checkout (Stage 4.1). The redirect proves nothing: the provider's signed webhook
 // is what changes the plan, so tell the parent what to expect and look again shortly.
 const returned = typeof location === 'object' && location?.search ? new URLSearchParams(location.search) : null;
@@ -1647,6 +1752,15 @@ if (returned?.get('checkout')) {
   if (typeof history === 'object' && history?.replaceState) history.replaceState(null, '', location.pathname);
   if (returned.get('result') === 'success') { note('Payment received. Your plan updates as soon as the payment provider confirms it; this page checks again in a moment.'); setTimeout(() => { if (!working) run(refresh); }, 4000); }
   else note('Checkout cancelled. Nothing was charged.');
+}
+// email-v1: a button in the weekly email carries its token in the fragment (#email=…), which the browser never sends to a server,
+// so no request log holds it. The address is tidied at once, so a reload or a bookmark made now does not reopen it; the panel
+// asks before anything changes (emailScreen).
+const fragment = typeof location === 'object' && location?.hash ? new URLSearchParams(String(location.hash).replace(/^#/, '')) : null;
+if (fragment?.get('email')) {
+  const token = fragment.get('email');
+  if (typeof history === 'object' && history?.replaceState) history.replaceState(null, '', location.pathname);
+  await run(() => emailScreen(token));
 }
 // Back stays inside v3, as far as a browser lets a page decide. The owner (11 Sep 2026) pressed Back on the kids' page and landed on the old v2 site: not a
 // link — v3 has none — but the browser's own history, because that tab showed v2 before v3 was opened in it. So

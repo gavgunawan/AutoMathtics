@@ -13,6 +13,7 @@ end of the run. Nothing here requires code; every failure is a ticket for the ne
 |---|---|---|
 | P0 | Open the site on each device | the Mission Control shell: the grid and aurora behind a dark panel, the AUTOMATHTICS mark in Orbitron, mono `// STEP` labels, violet-to-magenta buttons — the same look as the game; every word readable without zooming; no request to Google Fonts (the faces are served by the app) |
 | P1 | Create a parent account; open the verification email on the phone | the app refuses the family screens until verified; after the link, *I have verified my email* continues |
+| P1a | On *Create parent account* type a password, then a different one under *Type the password again*, and press the button; then type the same password in both | refused with a note that the two passwords don't match, and nothing is sent: no verification email, no account at the provider; with the same password twice the account is created and P1 goes on |
 | P2 | Enrol the mobile: country code, consent box, SMS code | one SMS; a wrong code is refused; after the code the Send button is disabled and counts down from `0:00:30`, second by second, and comes back at zero; after enrolment the app asks to sign in again |
 | P2b | Ask for a code each time the Send button comes back, four times; then open the same screen in a private window and ask again at once | the first three codes arrive 30 seconds apart; after the third the button counts down from `0:02:00`, and after the fourth from `0:15:00`; in the private window (a device with no record yet) the request is refused by the ladder, and the button counts down from the server's seconds if they are relayed, or else from that device's own estimate, which starts at its first rung and can be shorter than the server's wait: a press at zero is then refused again and the countdown steps up until the two agree, so a parent is delayed, never locked out (the SMS ladder: at once, 30 s, 30 s, 2 min, 15 min, 1 h, 6 h, 12 h, a day before the ninth — `DEPLOY_V3.md` section 5) |
 | P3 | Sign in with password + SMS | the family setup screen; cookie is HttpOnly (no `document.cookie` in the console) |
@@ -23,6 +24,7 @@ end of the run. Nothing here requires code; every failure is a ticket for the ne
 | P7 | Sign out; press back | no family data visible; API calls answer 401 |
 | P8 | A sensitive action (PIN reset, plan change, deletion) after 5 minutes idle | a fresh password + SMS check is demanded; cancelling discards the action |
 | P9 | Open the parent workspace in two tabs; sign out in one | the other tab returns to sign-in on its next action |
+| P10 | Tap *Send feedback* under the sign-in screen, write a line and an address to answer, *Send*; sign in and send one from Mission Control; *Hand over to kids* and look for the button on the launch pad, the PIN screen, the child's home, a game, the shop, the map and a summary; from the child's home tap *Parent sign-in* | each note is thanked once; `node scripts/report.mjs feedback --days 1` lists both with their screen and release, the first with the address, the second with the parent and the family; with `FEEDBACK_TO` and Resend each also reaches the owner's inbox and Reply goes to the parent or to the address given; no *Send feedback* anywhere in kid mode, nor on the sign-in screen reached from it |
 
 ## Handover and child
 
@@ -61,6 +63,23 @@ end of the run. Nothing here requires code; every failure is a ticket for the ne
 | D2 | Request deletion; cancel; request again | the 14-day notice; cancel restores; the operator can force-execute on staging and the tombstone remains |
 | D3 | After deletion, delete the sign-in account | refused before the family is gone; then the provider account disappears; the trial cannot be taken again on the same phone |
 
+## Email (email-v1)
+
+With `EMAIL_PROVIDER=fake` nothing is sent: read each email in Firestore → `outbox` (kept 14 days), or run
+`node scripts/report.mjs preview FAMILY_UUID` (the HTML, links inert). With Resend and no verified domain, only the Resend
+account owner's own address receives mail (`DEPLOY_V3.md` → Email).
+
+| # | Do | Expect |
+|---|---|---|
+| E1 | Sign up a new parent: press *Create parent account* with the first box unticked, then ticked, leaving the news box as it is | refused with a note until the first box is ticked; the news box starts unticked; afterwards Mission Control's *Email updates* shows the weekly report on and news off |
+| E2 | In Mission Control untick *Weekly progress report* and save; after 5 minutes idle tick it again and save | saved at once after a recent sign-in; after 5 minutes a fresh password + SMS check comes first, then the app asks to set the switches again — nothing is saved by itself |
+| E3 | Let the children play at least 20 questions in a week; open the inbox after Monday 07:00 Singapore (or run the job: Cloud Run → Jobs → `automathtics-v3-report` → Execute) | one email per family: the subject names the children, the missions and the % right; per child the three lists (✅ right and fast, 🐢 right but slow, ⚠️ wrong again and again), the pace line, the System Scan line; the game's colours; readable on the phone; no raw ids |
+| E4 | Tap *Set Allison's pace to 75%* in the email | the app opens on a panel saying exactly what changes (and the pace now); Cancel changes nothing; Confirm changes it (Game & progress shows it); the same button again is harmless |
+| E5 | Tap *Focus Geralt's System Scan on these*, confirm; then start Geralt's next System Scan | Game & progress shows the scan focus on; the scan has 25 questions, most of them the styles the email named; unlock, the 25/25 rule and the double pay unchanged; *Switch Geralt's scan focus off* reverses it |
+| E6 | Use the mail app's own *Unsubscribe* beside the sender (Gmail, Apple Mail); on another account tap *Stop weekly reports* in the footer | the one-click unsubscribe turns the report off without opening anything; the footer link opens the app's panel and turns it off on Confirm; Mission Control shows it off; no report next Monday |
+| E7 | A week with the weekly report switched off; a week in which no child answered a question | no email; the job's log says `progress_off` or `no_play` |
+| E8 | Before Monday, change the parent's sign-in email to one not yet verified (or disable the account in the console) | no email, the log says `no_verified_address`; nothing goes to an unverified address |
+
 ## Failure states
 
 | # | Do | Expect |
@@ -69,6 +88,13 @@ end of the run. Nothing here requires code; every failure is a ticket for the ne
 | F2 | Expired session mid-form | the sign-in screen, then the form again; nothing submitted twice |
 | F3 | Wrong origin (open the API host directly) | the API refuses browser calls without the app's origin |
 | F4 | Old bookmark to the v2 game | v2 still works and is unaffected (PR #1 is draft) |
+
+## A new version
+
+| # | Do | Expect |
+|---|---|---|
+| U1 | Keep a tab open on the phone (Mission Control) and on the kids' tablet (a child's home), then deploy any change (block C). Switch back to each tab, or leave it in view for up to five minutes | the bar *A new version of AutoMathtics is ready.* with *Update now*; nothing reloads by itself; tapping it loads the new version (`/api/health` shows the new `release`) and the bar is gone. Tabs opened before the first release that contains this checker cannot know of it: they need one manual reload |
+| U2 | On the kids' tablet start a paper, deploy a change while it runs, and answer on | no bar while the questions run; it appears on the summary or the child's home once the paper ends or is left, and nothing of the paper is lost |
 
 Sign-off: date, devices, rows failed, tickets opened. The pilot (`PILOT.md`) starts only with every
 row green on every device.

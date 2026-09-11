@@ -28,14 +28,16 @@ export function control(root, label) {
 }
 // clock: a function returning the time the page reads from Date.now(), for tests that count down (omit for real time)
 // storage: a stand-in for the page's localStorage (omit: the page has none, as in a browser that blocks site data)
-// location: the page's address, e.g. { search: '?resetsms', pathname: '/' } (omit: no location, as before)
+// location: the page's address, e.g. { search: '?resetsms', pathname: '/' } (omit: no location, as before), or an async
+// function (f, a) → that address, run before the page loads, for an address that needs the fixture's ids (an email button)
 // recordBodies: routes whose request bodies the test may read back from requests; only routes that carry no credential, such as '/api/learn/answer'
 // svg: a DOM that makes SVG nodes (document.createElementNS), as a browser does (omit: it cannot, and the page must manage without)
 export async function uiFixture(t, { family = true, signedIn = true, clock = null, storage = null, location = null, recordBodies = [], svg = false } = {}) {
   const f = fixture();
   const a = signedIn ? (family ? await f.family('parentA', 2) : await f.login('parentA')) : null;
+  if (typeof location === 'function') location = await location(f, a);
   const cfg = { origin: 'http://127.0.0.1', secret, emulator: true, web: { authDomain: 'demo-am-foundation.firebaseapp.com' } };
-  const server = createApp(f.service, cfg, { learning: f.learning, game: f.game, billing: f.billing }); server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const server = createApp(f.service, cfg, { learning: f.learning, game: f.game, billing: f.billing, email: f.email, feedback: f.feedback }); server.listen(0, '127.0.0.1'); await once(server, 'listening');
   cfg.origin = `http://127.0.0.1:${server.address().port}`;
   t.after(() => { server.closeAllConnections(); server.close(); });
   let cookie = a ? `__session=${a.cookie}` : '';
@@ -81,6 +83,7 @@ export async function uiFixture(t, { family = true, signedIn = true, clock = nul
   const submitLogin = async () => {
     const form = nodes(root, 'FORM')[0]; assert.ok(form, 'login form missing');
     const inputs = nodes(form, 'INPUT'); inputs[0].value = 'synthetic@example.test'; inputs[1].value = 'SyntheticPasswordOnly';
+    for (const again of inputs.slice(2)) if (again.type === 'password') again.value = inputs[1].value; // sign-up asks for it twice
     form.onsubmit({ preventDefault() {} }); await idle();
   };
   const draft = async (nickname = 'Private draft') => {
@@ -92,7 +95,10 @@ export async function uiFixture(t, { family = true, signedIn = true, clock = nul
   return { f, a, root, message, html, decor, api, requests, broadcasts, nodes: tag => nodes(root, tag), click: label => control(root, label).onclick(),
     idle, setAuth, submitLogin, draft, cookie: () => cookie, setCookie: value => { cookie = `__session=${value}`; },
     visibility: () => documentEvents.visibilitychange?.(), sessionChange: () => channelHandler?.(),
-    history, intervals: () => intervals.size, tick: () => { for (const fn of [...intervals.values()]) fn(); },
+    // the release check (app.js releaseTick) lives as long as the page: ticked with the other clocks, never counted among them;
+    // tick's promise settles once every clock has done its work (the check's question to the server included)
+    history, intervals: () => [...intervals.values()].filter((fn) => fn.name !== 'releaseTick').length, tick: () => Promise.all([...intervals.values()].map((fn) => fn())),
+    setRelease: (release) => { cfg.releaseSha = release; }, // a deploy, as the running server would report it
     // the browser's Back: one entry down, popstate with that entry's state, or out of the page from the first entry
     back: async () => { if (history.index === 0) { history.left++; return; } history.index--; windowEvents.popstate?.({ state: history.state }); await idle(); },
     popstate: async (state) => { windowEvents.popstate?.({ state }); await idle(); } };

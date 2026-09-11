@@ -45,6 +45,13 @@ from the old project directly. The commercial server explicitly refuses the lega
   Reward Store approvals, Family Rocket, parent credits, per-child pace, map/fluency view and Navigator read-aloud.
 - A guarded dry-run-first v2 JSON migration tool maps reviewed historical progress/wallet/config into v3 without
   ever connecting to the old Firebase project.
+- Weekly progress email (email-v1): two sign-up boxes — a required one for account, progress and service emails, an
+  optional unticked one for news and offers — recorded by the server, and Mission Control's *Email updates* switches.
+  Every Monday at 07:00 Singapore a Cloud Run job (`scripts/report.mjs`, block G) sends one email per family for its last
+  complete week: per child what was right and fast, right but slow, and wrong again and again by question style, the
+  totals, a goldilocks pace and a System Scan focus offer (about 75 % weak styles, 25 % recap). Its buttons open the app,
+  which confirms before anything changes, and mail apps get RFC 8058 one-click unsubscribe. Until the owner opens a Resend
+  account the `fake` provider keeps each email in Firestore's outbox for 14 days (`DEPLOY_V3.md` → Email).
 
 ## Not implemented yet (Stage 3+)
 
@@ -128,6 +135,9 @@ loopback emulator ports. It tests a real emulator-issued SMS MFA token, Firestor
 - `families/{uuid}/learning/{childId}/sessions/{uuid}`: server questions/answers, ordered results, clocks and session state.
 - `families/{uuid}/learning/{childId}/ledger/{uuid}`: retained game/economy audit rows.
 - `families/{uuid}/game/config`: parent-configured Reward Store and Family Rocket state.
+- `emailPrefs/{uid}`: the parent account's email choices and their history, the consent record (no address).
+- `reports/{familyId}:{week}`: whether a week's report was sent or skipped, and why; no content; TTL 400 days.
+- `outbox/{id}`: the fake email provider's rendered emails, for the staging preview; TTL 14 days.
 
 A parent session lasts at most 30 minutes. Selector/child mode lasts at most 12 hours,
 but revocation, membership, PIN version and entitlement are rechecked at use. A parent

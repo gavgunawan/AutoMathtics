@@ -46,7 +46,18 @@ async function body(req) {
   const raw = await rawBody(req, 16_384);
   try { return JSON.parse(raw.toString('utf8')); } catch { fail(400, 'INVALID_JSON'); }
 }
-export function createApp(service, cfg, { publicDir = new URL('../public/', import.meta.url), reportError = () => {}, learning = null, game = null, billing = null, payments = null, support = null, recovery = null, peerFactor = 20 } = {}) {
+// RFC 8058 one-click unsubscribe: the mailbox provider POSTs the one field List-Unsubscribe=One-Click, as multipart/form-data
+// (which the RFC prefers) or form-encoded. True when the body says exactly that.
+async function oneClick(req) {
+  const type = (req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+  if (type !== 'application/x-www-form-urlencoded' && type !== 'multipart/form-data') fail(415, 'FORM_REQUIRED');
+  if (req.headers['content-encoding'] && req.headers['content-encoding'] !== 'identity') fail(415, 'ENCODING_UNSUPPORTED');
+  let total = 0; const parts = [];
+  for await (const chunk of req) { total += chunk.length; if (total > 4096) fail(413, 'REQUEST_TOO_LARGE'); parts.push(chunk); }
+  const text = Buffer.concat(parts).toString('utf8');
+  return type === 'multipart/form-data' ? /name="List-Unsubscribe"\r?\n(?:[^\r\n]+\r?\n)*\r?\nOne-Click\r?\n/i.test(text) : new URLSearchParams(text).get('List-Unsubscribe') === 'One-Click';
+}
+export function createApp(service, cfg, { publicDir = new URL('../public/', import.meta.url), reportError = () => {}, learning = null, game = null, billing = null, payments = null, support = null, recovery = null, email = null, feedback = null, peerFactor = 20 } = {}) {
   // A session cookie lives exactly as long as the session row it names (F12), read back from the row the service has just
   // written: 30 minutes for a parent, 12 hours on the launch pad, or what is left of 30 days on a remembered device. The
   // rotation has already committed, so a failed read never fails the request (review of PR #44): the cookie then gets the
@@ -73,6 +84,13 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
   // an address budget is spent on the client's key and on the peer's (peerAddress); one key when they coincide
   const budgets = (name, req) => { const client = clientAddress(req, cfg.proxyHops), peer = peerAddress(req); return client === peer ? [[`${name}:${client}`, 1]] : [[`${name}:${client}`, 1], [`${name}:peer:${peer}`, peerFactor]]; };
   const spend = async (name, req, maximum, windowMs) => { for (const [bucket, factor] of budgets(name, req)) await service.rate(bucket, maximum * factor, windowMs); };
+  // A failed token check (the sign-up consent, an email button) spends the failure budgets: per instance in memory, per address and
+  // per peer in the store; a spent budget turns the failure into 429. A validly signed token never reads them, so junk from anywhere
+  // cannot lock a parent out of recording a consent or using a real button.
+  const failedCheck = async (name, req) => { throttle(`${name}-fail:all`, 200, 60 * 60_000); await spend(`${name}-fail`, req, 20, 60 * 60_000); };
+  // One sign-up token or one email link is good for `maximum` uses an hour: looked at before the work, counted after it (throttle
+  // with no ceiling) only when the token passed its check, so junk never adds a key and the map stays the size of real use.
+  const reused = (key, maximum) => { const h = hits.get(key); if (h && h.until > service.now() && h.count >= maximum) fail(429, 'TOO_MANY_ATTEMPTS'); };
   const server = createServer(async (req, res) => {
     const json = (status, value) => {
       res.statusCode = status; res.setHeader('Content-Type', 'application/json; charset=utf-8'); res.end(JSON.stringify(value));
@@ -125,6 +143,22 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
           throw error;
         }
       }
+      // email-v1 unsubscribe. A GET is a person clicking the List-Unsubscribe link, or a scanner: nothing changes, the app opens
+      // on the same token, in the fragment (which no server and no request log sees), and asks. A POST is the mailbox provider's
+      // RFC 8058 one-click, cross-site with no cookie, Origin or CSRF token, so it sits here before those checks, like the webhooks:
+      // the signed token is its whole authentication, it can only switch the weekly report off, and a failed token is budgeted per
+      // address. RFC 8058 needs the token in this URL's query, so request logs do record these stop-the-report tokens (PRIVACY.md).
+      if (email && path === '/api/email/unsubscribe') {
+        const t = new URL(req.url, cfg.origin).searchParams.get('t') || '';
+        if (req.method === 'GET') { res.statusCode = 303; res.setHeader('Location', /^v1\.[A-Za-z0-9_-]{1,2048}\.[A-Za-z0-9_-]{43}$/.test(t) ? `/#email=${t}` : '/'); return res.end(); }
+        if (req.method !== 'POST') fail(405, 'METHOD_NOT_ALLOWED');
+        if (!(await oneClick(req))) fail(400, 'ONE_CLICK_REQUIRED');
+        try { const done = await email.unsubscribe(t); res.statusCode = 200; res.setHeader('Content-Type', 'text/plain; charset=utf-8'); return res.end(done.message); }
+        catch (error) {
+          if (error instanceof Fault && error.status < 500) { try { await spend('unsubscribe-fail', req, 60, 10 * 60_000); } catch (limit) { if (limit instanceof Fault && limit.status === 429) throw limit; } }
+          throw error;
+        }
+      }
       if (req.headers['sec-fetch-site'] && !['same-origin', 'none'].includes(req.headers['sec-fetch-site'])) fail(403, 'ORIGIN_DENIED');
       let token = cookieToken(req);
       const stored = /^[A-Za-z0-9_-]{43}$/.test(token || '') ? await service.store.get(`sessions/${sha256(token)}`) : null;
@@ -136,7 +170,7 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
           csrf = preauthCsrf(cfg.secret, token, service.now());
           if (!csrf) { token = preauth(cfg.secret, service.now()); csrf = preauthCsrf(cfg.secret, token, service.now()); setCookie(res, token, 600); }
         }
-        return json(200, { csrf });
+        return json(200, { csrf, release: cfg.releaseSha || VERSION }); // the running release (as /api/health): the app offers Update now when it changes
       }
       if (req.method !== 'GET' && req.method !== 'POST') fail(405, 'METHOD_NOT_ALLOWED');
       let data;
@@ -183,6 +217,38 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
         throttle('recovery:all', 200, 60 * 60_000); // per instance: probing many addresses at once is capped whatever the keys say
         return json(200, path.endsWith('/start') ? await recovery.start(data) : await recovery.complete(data));
       }
+      // email-v1: the sign-up boxes are recorded before any session exists, like recovery: the same Origin and pre-authentication
+      // CSRF checks; the new account's own ID token is the proof (server/email.mjs). Only a token that fails its check spends the
+      // budgets (failedCheck), so a parent's consent is never lost to a 429 that someone else's junk earned; one token is good for
+      // ten tries an hour.
+      if (email && req.method === 'POST' && path === '/api/auth/consent') {
+        const key = typeof data?.idToken === 'string' ? `consent-token:${sha256(data.idToken)}` : null; if (key) reused(key, 10);
+        try { const result = await email.consent(data); if (key) throttle(key, Infinity, 60 * 60_000); return json(200, result); }
+        catch (error) { if (error instanceof Fault && error.status === 401) await failedCheck('consent', req); throw error; }
+      }
+      // email-v1: the app's panel for an email button (#email=<token>): what the button does, then, on a tap, doing it. Before any
+      // session like recovery, so it works signed in or not: Origin and CSRF as for any POST. The signed token is the authority and
+      // the server re-checks the family, its owner and the child every time. A spoiled or expired link spends the failure budgets
+      // (failedCheck); a valid one never does, and one link can be opened thirty times an hour.
+      if (email && req.method === 'POST' && (path === '/api/email/describe' || path === '/api/email/apply')) {
+        const key = typeof data?.t === 'string' ? `email-link:${sha256(data.t)}` : null; if (key) reused(key, 30);
+        let result;
+        try { result = path === '/api/email/describe' ? await email.describe(data) : await email.apply(data); }
+        catch (error) { if (error instanceof Fault && (error.code === 'LINK_INVALID' || error.code === 'LINK_EXPIRED')) await failedCheck('email-button', req); throw error; }
+        if (result.valid === false && result.reason !== 'gone') await failedCheck('email-button', req); // describe answers a spoiled link rather than throwing
+        else if (key) throttle(key, Infinity, 60 * 60_000);
+        return json(200, result);
+      }
+      // Feedback (server/feedback.mjs): from the sign-in screen with the pre-authentication CSRF token, or inside a parent's session.
+      // The session, never the body, says who sent it; a child's or the launch pad's session is refused, as no free text ever comes
+      // from a child (PRIVACY.md). The body is checked first, so a malformed request spends nothing; then the budgets: a hundred an
+      // hour per instance, five an hour per address (and the peer's share), ten a day per session or pre-authentication cookie.
+      if (feedback && req.method === 'POST' && path === '/api/feedback') {
+        const input = feedback.parse(data), live = stored && stored.expiresAt > service.now() ? stored : null;
+        if (live && live.role !== 'parent') fail(403, 'PARENT_REQUIRED');
+        throttle('feedback:all', 100, 60 * 60_000); await spend('feedback', req, 5, 60 * 60_000); await service.rate(`feedback:session:${sha256(token)}`, 10, 24 * 60 * 60_000);
+        return json(200, await feedback.record(input, live ? { uid: live.uid, familyId: live.familyId || null, email: typeof live.email === 'string' ? live.email : null } : null));
+      }
       if (stored) throttle(`session:${sha256(token)}`, 120, 60_000);
       const ctx = await service.authenticate(token);
       if (req.method === 'GET' && path === '/api/me') return json(200, await service.me(ctx));
@@ -213,6 +279,7 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
       if (support && path === '/api/family/deletion') return json(200, await support.requestDeletion(ctx, data));
       if (support && path === '/api/family/deletion/cancel') return json(200, await support.cancelDeletion(ctx, data));
       if (support && path === '/api/account/deletion') return json(200, await support.deleteAccount(ctx, data)); // Stage 4: the sign-in account, once no family remains
+      if (email && path === '/api/account/email') return json(200, await email.setPrefs(ctx, data)); // email-v1: Mission Control's switches (recent sign-in)
       if (game && path === '/api/game/shop/buy') return json(200, await game.buy(ctx, data));
       if (game && path === '/api/game/shop/equip') return json(200, await game.equip(ctx, data));
       if (game && path === '/api/game/rewards/redeem') return json(200, await game.redeem(ctx, data));
