@@ -13,12 +13,13 @@ end of the run. Nothing here requires code; every failure is a ticket for the ne
 |---|---|---|
 | P0 | Open the site on each device | the Mission Control shell: the grid and aurora behind a dark panel, the AUTOMATHTICS mark in Orbitron, mono `// STEP` labels, violet-to-magenta buttons — the same look as the game; every word readable without zooming; no request to Google Fonts (the faces are served by the app) |
 | P1 | Create a parent account; open the verification email on the phone | the app refuses the family screens until verified; after the link, *I have verified my email* continues |
-| P2 | Enrol the mobile: country code, consent box, SMS code | one SMS; a wrong code is refused; a second request within a minute is refused; after enrolment the app asks to sign in again |
-| P2b | Ask for a second code 2 minutes after the first, then a third straight away | the second arrives; the third is refused with "Try again in 15 minutes" (the SMS ladder, `DEPLOY_V3.md` section 5) |
+| P2 | Enrol the mobile: country code, consent box, SMS code | one SMS; a wrong code is refused; after the code the Send button is disabled and counts down from `0:00:30`, second by second, and comes back at zero; after enrolment the app asks to sign in again |
+| P2b | Ask for a code each time the Send button comes back, four times; then open the same screen in a private window and ask again at once | the first three codes arrive 30 seconds apart; after the third the button counts down from `0:02:00`, and after the fourth from `0:15:00`; in the private window (a device with no record yet) the request is refused by the ladder, and the button counts down from the server's seconds if they are relayed, or else from that device's own estimate, which starts at its first rung and can be shorter than the server's wait: a press at zero is then refused again and the countdown steps up until the two agree, so a parent is delayed, never locked out (the SMS ladder: at once, 30 s, 30 s, 2 min, 15 min, 1 h, 6 h, 12 h, a day before the ninth — `DEPLOY_V3.md` section 5) |
 | P3 | Sign in with password + SMS | the family setup screen; cookie is HttpOnly (no `document.cookie` in the console) |
 | P4 | Create the family with the attestation unticked, then ticked | refused, then created; the family reference is shown |
 | P5 | Add a child: nickname, PIN, age, year level, each of the three starting options | all three accepted; year/test options need a year; the placement card shows for *test* |
 | P6 | Reload, close the tab, reopen | still signed in within 30 minutes; after 30 minutes idle, the sign-in screen |
+| P6b | Sign in with *Remember this device for 30 days* ticked; close the browser; the next day open the app from a bookmark or home-screen shortcut. Then *Hand over to kids*, close and reopen. Then change the password from another device | Mission Control opens without signing in and says until when the device stays signed in; after the handover the launch pad opens without signing in, and Mission Control needs the full password + SMS sign-in again; after the password change the device shows the sign-in screen at its next action or reload (the server rechecks the account at most a minute late). Left unticked, P6 applies |
 | P7 | Sign out; press back | no family data visible; API calls answer 401 |
 | P8 | A sensitive action (PIN reset, plan change, deletion) after 5 minutes idle | a fresh password + SMS check is demanded; cancelling discards the action |
 | P9 | Open the parent workspace in two tabs; sign out in one | the other tab returns to sign-in on its next action |
@@ -36,6 +37,7 @@ end of the run. Nothing here requires code; every failure is a ticket for the ne
 | C7 | Kill the browser mid-paper; return | the session is either resumed or recorded as left at Qn — never lost silently |
 | C8 | Shop: buy an item, equip it; Surprise Box; Mystery Egg | server-chosen results; balances never go negative; the ledger view in the parent workspace matches |
 | C9 | *Switch child* and *Parent sign-in* from the child screen | the selector needs the family device session; the parent needs password + SMS |
+| C10 | In a tab that showed another site first, open v3, tap once, then press Back repeatedly from a child's shop, map and game, and from a parent sub-screen | each Back goes one step inside v3: to the child's home (a game stays under *Continue*) or to the parent workspace. Browsers may let a Back pressed before the first tap, or mashed, leave the page; the old v2 site is offline since 11 Sep 2026, so that lands on GitHub's 404 page. Opening v3 in a fresh tab, or from the home screen, leaves nothing behind it |
 
 ## Money (test mode only)
 

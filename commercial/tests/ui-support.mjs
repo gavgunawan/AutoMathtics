@@ -24,7 +24,10 @@ export function nodes(el, tag) { return [...(el.tagName === tag ? [el] : []), ..
 export function control(root, label) {
   const b = nodes(root, 'BUTTON').find(b => b.textContent === label); assert.ok(b, `button missing: ${label}`); return b;
 }
-export async function uiFixture(t, { family = true, signedIn = true } = {}) {
+// clock: a function returning the time the page reads from Date.now(), for tests that count down (omit for real time)
+// storage: a stand-in for the page's localStorage (omit: the page has none, as in a browser that blocks site data)
+// location: the page's address, e.g. { search: '?resetsms', pathname: '/' } (omit: no location, as before)
+export async function uiFixture(t, { family = true, signedIn = true, clock = null, storage = null, location = null } = {}) {
   const f = fixture();
   const a = signedIn ? (family ? await f.family('parentA', 2) : await f.login('parentA')) : null;
   const cfg = { origin: 'http://127.0.0.1', secret, emulator: true, web: { authDomain: 'demo-am-foundation.firebaseapp.com' } };
@@ -50,10 +53,21 @@ export async function uiFixture(t, { family = true, signedIn = true } = {}) {
   const source = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
   const speechSynthesis = { cancel() {}, speak() {} };
   class SpeechSynthesisUtterance { constructor(text) { this.text = text; } }
-  const window = { BroadcastChannel: Channel, speechSynthesis, SpeechSynthesisUtterance };
-  const context = vm.createContext({ document, window, BroadcastChannel: Channel, crypto: webcrypto, fetch: fetchForPage, console,
-    setInterval: () => 0, clearInterval: () => {}, setTimeout: (fn) => { fn(); return 0; } }); // the question clock is display only
-  const api = await vm.runInContext(`(async()=>{ ${source}\nreturn { addChildScreen, familySetup, resetPinScreen, signInScreen, refresh,
+  // The session history of one tab, as far as the page can touch it: entries with their state, the one shown, and how
+  // often Back was pressed on the first entry (which in a browser leaves for whatever the tab showed before).
+  const history = { entries: [{ state: null }], index: 0, left: 0,
+    get state() { return this.entries[this.index].state; },
+    pushState(state) { this.entries.splice(this.index + 1); this.entries.push({ state }); this.index++; },
+    replaceState(state) { this.entries[this.index] = { state }; } };
+  const windowEvents = {};
+  const window = { BroadcastChannel: Channel, speechSynthesis, SpeechSynthesisUtterance, history, addEventListener: (name, fn) => { windowEvents[name] = fn; } };
+  // Intervals are held, never run on their own: a test ticks them (and moves its clock) explicitly.
+  const intervals = new Map(); let intervalId = 0;
+  const context = vm.createContext({ document, window, history, BroadcastChannel: Channel, crypto: webcrypto, fetch: fetchForPage, console, TextEncoder, URLSearchParams, ...(storage ? { localStorage: storage } : {}), ...(location ? { location } : {}),
+    setInterval: (fn) => { intervals.set(++intervalId, fn); return intervalId; }, clearInterval: (id) => { intervals.delete(id); },
+    setTimeout: (fn) => { fn(); return 0; },
+    ...(clock ? { Date: class extends Date { static now() { return clock(); } } } : {}) });
+  const api = await vm.runInContext(`(async()=>{ ${source}\nreturn { addChildScreen, familySetup, resetPinScreen, signInScreen, refresh, hms,
     getModel:()=>model, isWorking:()=>working, setAuth:x=>{authModule=x;} }; })()`, context);
   const idle = async () => { for (let i = 0; i < 1000 && api.isWorking(); i++) await new Promise(r => setTimeout(r, 2)); assert.equal(api.isWorking(), false); };
   const setAuth = (uid = 'parentA', extra = {}) => api.setAuth({ signIn: async () => ({ stage: 'ready', idToken: f.token(uid) }), clear: async () => {}, ...extra });
@@ -70,5 +84,9 @@ export async function uiFixture(t, { family = true, signedIn = true } = {}) {
   };
   return { f, a, root, message, api, requests, broadcasts, nodes: tag => nodes(root, tag), click: label => control(root, label).onclick(),
     idle, setAuth, submitLogin, draft, cookie: () => cookie, setCookie: value => { cookie = `__session=${value}`; },
-    visibility: () => documentEvents.visibilitychange?.(), sessionChange: () => channelHandler?.() };
+    visibility: () => documentEvents.visibilitychange?.(), sessionChange: () => channelHandler?.(),
+    history, intervals: () => intervals.size, tick: () => { for (const fn of [...intervals.values()]) fn(); },
+    // the browser's Back: one entry down, popstate with that entry's state, or out of the page from the first entry
+    back: async () => { if (history.index === 0) { history.left++; return; } history.index--; windowEvents.popstate?.({ state: history.state }); await idle(); },
+    popstate: async (state) => { windowEvents.popstate?.({ state }); await idle(); } };
 }

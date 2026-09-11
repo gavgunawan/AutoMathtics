@@ -1,7 +1,8 @@
 // The SMS resend ladder at the identity provider. Identity Platform asks this function before every verification
 // SMS it would send for the v3 project — a parent enrolling a mobile, the second factor at sign-in — and sends
 // nothing when it refuses. The rules are in ladder.mjs; the refusal is thrown as `SMS_WAIT:<seconds>` inside the
-// provider's error, and public/auth.js turns a relayed refusal into "try again in …". A relayed one arrives as
+// provider's error, and the browser counts a relayed refusal's seconds down on the Send button (public/auth.js,
+// public/sms-schedule.js, which also carries a display-only copy of the ladder for when no seconds arrive). A relayed one arrives as
 // auth/internal-error carrying "HTTP Cloud Function returned an error … Message: …". No refusal has yet been seen
 // at a browser: the bare auth/internal-error-encountered. of 10 Sep 2026 belongs to the send this function
 // ALLOWED at 03:36:53Z (HTTP 200, rung 1), and decodes to the provider's own generic "Internal error

@@ -152,6 +152,7 @@ export class Recovery {
   async acknowledge(ctx) {
     return this.store.transaction(async (tx) => {
       const { s } = await this.foundation.authorize(tx, ctx, ['parent'], false);
+      this.foundation.requireRecent(s); // a device may stay signed in for 30 days: hiding this security notice needs a fresh sign-in (review of PR #44)
       const rec = await tx.get(`recoveries/${s.uid}`);
       if (rec && rec.status !== 'pending' && rec.status !== 'completing' && !rec.acknowledgedAt) tx.set(`recoveries/${s.uid}`, { ...rec, acknowledgedAt: this.now() });
       return { ok: true };

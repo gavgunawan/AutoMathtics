@@ -51,8 +51,8 @@ not its display name. Do not use `automathtics`; the server explicitly rejects i
   receive no SMS at all: a test number gets a fixed code and the provider sends nothing, which
   looks exactly like a lost SMS.
   The app adds its own resend ladder on top (section 5, block F): one code at once,
-  then 2 minutes, 15 minutes, 1 hour, 6 hours and 12 hours before the next ones,
-  and a day before the seventh.
+  then 30 seconds, 30 seconds, 2 minutes, 15 minutes, 1 hour, 6 hours and 12 hours
+  before the next ones, and a day before the ninth.
 - In Authentication settings, authorize `YOUR_PROJECT_ID.web.app` and
   `YOUR_PROJECT_ID.firebaseapp.com`; configure email templates, an enforced
   password policy (12+ characters) and email-enumeration protection.
@@ -274,11 +274,12 @@ Singapore time. Both are inside the free tiers at pilot scale; a failed job is t
 Then the SMS resend ladder (`scripts/cloudshell/06-sms-ladder.sh`, block F): an Identity Platform
 *blocking function* (`functions/index.js`, Cloud Functions 2nd gen, inside the free tier at pilot scale)
 that the provider consults before every verification SMS — a parent enrolling a mobile, the second
-factor at sign-in — and that refuses while the number is on a rung it has not waited out: 2 minutes
-after the first code, then 15 minutes, 1 hour, 6 hours, 12 hours, and a day before the seventh; a day
-without a code to that number starts the ladder over (`functions/ladder.mjs`). The last rung and the
-quiet period are the same day, so a run holds at most six codes and the seventh, a day later, is the
-first rung of a new run. The record
+factor at sign-in — and that refuses while the number is on a rung it has not waited out: 30 seconds
+after the first code and 30 seconds after the second (the owner's burst of three, 11 Sep 2026), then
+2 minutes, 15 minutes, 1 hour, 6 hours, 12 hours, and a day before the ninth; a day without a code to
+that number starts the ladder over (`functions/ladder.mjs`). The last rung and the quiet period are the
+same day, so a run holds at most eight codes and the ninth, a day later, is the first rung of a new run.
+The record
 (`smsLadder/{hmac}`) holds timestamps under an HMAC of the number (secret `AM_V3_SMS_PEPPER`), never
 the number, and expires by TTL after two days. The block creates the secret; the function's own service
 account `automathtics-v3-sms-ladder@PROJECT_ID.iam.gserviceaccount.com`, holding `roles/datastore.user` on
@@ -290,21 +291,31 @@ Authentication → Settings → Blocking functions → *Before SMS is sent* — 
 then takes back the pepper grant an earlier run gave the runtime account. The provider's own SMS quota and
 the region policy (section 2) still apply underneath.
 
-The browser shows "Try again in …" only when the provider relays the refusal, which arrives as
-`auth/internal-error` carrying `HTTP Cloud Function returned an error … Message: SMS_WAIT:<seconds>`. Do not
-count on it: no refusal has yet been seen at a browser. The bare `auth/internal-error-encountered.` of
-10 Sep 2026 belongs to a send the ladder *allowed*, and decodes back to the provider's own generic "Internal
-error encountered.", i.e. the provider failing rather than our refusal being forwarded. `public/auth.js` reads
-the wait from the error's code as well as its message, because a provider string with no ` : ` in it is folded
-whole into the code; `public/app.js` answers a refusal that carries nothing at all with a sentence covering
-both a spaced-out code and a provider fault.
+In the browser the Send button of the verify-mobile, sign-in challenge and change-mobile screens is disabled
+until a code may go, and counts down in hours, minutes and seconds (`0:12:48`), ticking every second. It counts
+from the provider's seconds when the refusal is relayed, which arrives as `auth/internal-error` carrying
+`HTTP Cloud Function returned an error … Message: SMS_WAIT:<seconds>`. Do not count on that: no refusal has yet
+been seen at a browser. The bare `auth/internal-error-encountered.` of 10 Sep 2026 belongs to a send the ladder
+*allowed*, and decodes back to the provider's own generic "Internal error encountered.", i.e. the provider
+failing rather than our refusal being forwarded. `public/sms-schedule.js` reads the wait from the error's code as
+well as its message, because a provider string with no ` : ` in it is folded whole into the code. Otherwise the
+button counts from the device's own copy of the ladder: `public/sms-schedule.js` carries the same table
+(`tests/sms-ladder.test.mjs` fails if it ever differs from `functions/ladder.mjs`), and `public/auth.js` keeps
+the times of the codes this device asked for in `localStorage` (those the provider accepted, and failures that
+may have been the ladder's refusal), one record per destination under an HMAC keyed on the device (the typed
+number, or the enrolled factor on a sign-in challenge), never the number in clear. That copy is display only and is also the device's throttle between sends; the function stays the
+authority. With neither the provider's seconds nor a record on the device, `public/app.js` answers a refusal
+that carries nothing with a sentence covering both a spaced-out code and a provider fault.
 
 **A rung is spent when the provider asks, not when an SMS arrives.** A blocking function is consulted before
 the send and no hook reports delivery, so codes the provider then fails to send still climb the ladder: a
-parent hitting a delivery fault is pushed to 15 minutes, then an hour, by failures alone. When that happens,
-clear the number's record before asking them to try again. The ids in `smsLadder` are opaque HMACs that
-nobody can map back to a number, so during the pilot delete the collection's documents in the Firestore
-console (they hold only timestamps and expire by TTL after two days anyway).
+parent hitting a delivery fault is pushed past the two 30-second rungs to 2 minutes, then 15 minutes, by
+failures alone. When that happens, clear the number's record before asking them to try again. The ids in
+`smsLadder` are opaque HMACs that nobody can map back to a number, so during the pilot delete the collection's
+documents in the Firestore console (they hold only timestamps and expire by TTL after two days anyway).
+Clearing the record does not reach the parent's device: its countdown counts the codes it asked for, so a device
+that sent codes which never arrived still counts down to its own next rung. The parent can wait for zero, or use a
+private window, which starts with no record. Or have the parent open the app once with `?resetsms` added to its address (for example `https://automathtics-v3-staging.web.app/?resetsms`): that removes every countdown record on that device, and the address is tidied again at once.
 
 The provider gives a blocking function 7 seconds and treats silence as an error, so the function keeps its own
 clock: no record is written once 4 s have passed (a commit landing after the provider gave up would count a

@@ -1,18 +1,23 @@
-// The SMS resend ladder — the owner's policy (9 Sep 2026) for verification SMS to one mobile number, enforced
-// at the identity provider by the blocking function in index.js before any SMS goes out:
+// The SMS resend ladder — the owner's policy for verification SMS to one mobile number (9 Sep 2026; the first
+// three codes brought to 30 seconds apart on 11 Sep 2026, after a change of number sat out a fifteen-minute rung
+// four times), enforced at the identity provider by the blocking function in index.js before any SMS goes out:
 //   1st  at once
-//   2nd  2 minutes after the 1st
-//   3rd  15 minutes after the 2nd
-//   4th  1 hour after the 3rd
-//   5th  6 hours after the 4th
-//   6th  12 hours after the 5th
-//   7th  a day after the 6th
+//   2nd  30 seconds after the 1st
+//   3rd  30 seconds after the 2nd
+//   4th  2 minutes after the 3rd
+//   5th  15 minutes after the 4th
+//   6th  1 hour after the 5th
+//   7th  6 hours after the 6th
+//   8th  12 hours after the 7th
+//   9th  a day after the 8th
 // The sends to a number form a *run*; a day without a code to that number ends the run, and the next code is
-// the first rung again. Inside a run every send counts, however old — the third code waits its fifteen minutes
-// even when the first was sent yesterday. The sixth rung and the quiet period are the same day, and `currentRun`
-// ends a run on a gap of exactly that length, so the seventh code arrives a day after the sixth as the policy
-// says but as the FIRST rung of a fresh run: six codes is the most a run ever holds, and the code after the
+// the first rung again. Inside a run every send counts, however old — the fifth code waits its fifteen minutes
+// even when the first was sent yesterday. The last rung and the quiet period are the same day, and `currentRun`
+// ends a run on a gap of exactly that length, so the ninth code arrives a day after the eighth as the policy
+// says but as the FIRST rung of a fresh run: eight codes is the most a run ever holds, and the code after the
 // wait starts the ladder over rather than extending it. That is the more forgiving reading of the two rules.
+// public/sms-schedule.js carries a copy of this table so the browser can count down to the next rung; it is
+// display only, and tests/sms-ladder.test.mjs fails if the two ever differ.
 //
 // A rung is spent when Identity Platform ASKS permission, which is the only moment a blocking function sees.
 // No hook reports delivery, so codes that the provider then fails to send still climb the ladder, and a parent
@@ -21,11 +26,14 @@
 // same rules run in the unit tests (tests/sms-ladder.test.mjs).
 import { createHmac } from 'node:crypto';
 
-const MINUTE = 60_000, HOUR = 60 * MINUTE, DAY = 24 * HOUR;
+const SECOND = 1000, MINUTE = 60 * SECOND, HOUR = 60 * MINUTE, DAY = 24 * HOUR;
 /** The wait after the n-th send of a run (index n − 1) before the next may go; the last entry repeats. */
-export const SMS_LADDER_MS = Object.freeze([2 * MINUTE, 15 * MINUTE, HOUR, 6 * HOUR, 12 * HOUR, DAY]);
+export const SMS_LADDER_MS = Object.freeze([30 * SECOND, 30 * SECOND, 2 * MINUTE, 15 * MINUTE, HOUR, 6 * HOUR, 12 * HOUR, DAY]);
 export const SMS_QUIET_MS = DAY;           // this long without a code ends the run
-export const SMS_RECORD_TTL_MS = 2 * DAY;  // the record expires by TTL a day after its run could last have counted
+// The record expires by TTL a day after its run could last have counted. Every send rewrites expireAt from its own
+// time, and a record matters only until a day of quiet after its latest send, so two days covers a run however many
+// rungs it climbs (the longest wait inside one is the day that also ends it) — the longer ladder changes nothing here.
+export const SMS_RECORD_TTL_MS = 2 * DAY;
 const E164 = /^\+[1-9]\d{6,14}$/;
 
 /** The record key for a number: an HMAC of its E.164 form under the pepper; null for anything that is not a number. */
