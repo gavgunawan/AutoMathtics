@@ -3,6 +3,7 @@ import { Fault, fail, sha256, mac, randomToken, object, text, uuid, pin, childIn
 import { initialProgress, normalizeProgress } from './progress.mjs';
 import { effectiveEntitlement } from './subscription.mjs';
 import { recoveryView } from './recovery.mjs';
+import { appearanceOf } from './game.mjs';
 
 const MINUTE = 60_000, DAY = 24 * 60 * MINUTE;
 // Remember this device (owner's request, 11 Sep 2026): how long a session lasts on a device the parent ticked it on.
@@ -141,11 +142,14 @@ export class Foundation {
   async me(ctx) {
     return this.store.transaction(async (tx) => {
       const { s, family, child } = await this.authorize(tx, ctx, ['parent', 'selector', 'child'], false);
-      if (s.role === 'child') return { role: 'child', csrf: s.csrf, child: publicChild(child) };
+      // a child's colour is its place in the family (v2's player palette, styles.css acc-N); presentation only
+      const accent = (id) => Math.max(0, family?.childIds?.indexOf(id) ?? 0) % 6;
+      if (s.role === 'child') return { role: 'child', csrf: s.csrf, child: { ...publicChild(child), accent: accent(child.id) } };
       const children = [];
       for (const id of family?.childIds || []) {
         const c = await tx.get(`families/${s.familyId}/children/${id}`);
-        if (c) children.push(publicChild(c));
+        // the launch pad and the parent draw each card with what the child wears (port plan S1): the look, never the wallet
+        if (c) children.push({ ...publicChild(c), accent: accent(id), appearance: appearanceOf((await tx.get(`families/${s.familyId}/learning/${id}`))?.wallet) });
       }
       const recovery = s.role === 'parent' ? recoveryView(await tx.get(`recoveries/${s.uid}`), this.now()) : null; // Stage 4.4: a finished request is shown until acknowledged
       return { role: s.role, csrf: s.csrf, ...(s.role === 'parent' ? { parent: { uid: s.uid }, recovery, rememberedUntil: s.remember === true ? s.expiresAt : null } : {}), family: family ? {

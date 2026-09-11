@@ -131,6 +131,30 @@ test('child PIN produces a child-scoped session, not parent access', async () =>
   assert.equal(me.role, 'child'); assert.equal(me.child.id, c.child.id); assert.equal(me.family, undefined);
   await assert.rejects(f.child(a.ctx), rejected('PARENT_REQUIRED'));
 });
+// v2's player cards show what each child wears. S1 (port plan section 4): the look and a colour, never a balance or the inventory.
+test('S1: the launch pad and the parent see what each child wears and its colour, never the wallet; a child sees its own colour and still no family', async () => {
+  const f = fixture(), a = await f.family('parentA', 2), fox = await f.child(a.ctx, 'Fox'), wolf = await f.child(a.ctx, 'Wolf');
+  // Allison's migrated look (the Storm Dragon in the tiny crown, COMBO MASTER) plus a ring, a name effect and a vehicle
+  await f.store.put(`families/${a.familyId}/learning/${fox.child.id}`, { wallet: { gc: 98765, rp: 45678, activeBg: 'bg_symbols',
+    inventory: ['pet_legend', 'fit_crown', 'title_combo', 'ring_prestige', 'nfx_gold', 'veh_rocket', 'bg_symbols'],
+    activePet: 'pet_legend', activeOutfit: 'fit_crown', activeTitle: 'title_combo', ring: 'ring_prestige', activeNameFx: 'nfx_gold', activeVehicle: 'veh_rocket' } });
+  // a slot holding anything but an item of its own kind is worn as nothing
+  await f.store.put(`families/${a.familyId}/learning/${wolf.child.id}`, { wallet: { activePet: 'fit_crown', activeTitle: 'constructor', ring: 'ring_nowhere', activeOutfit: 'pet_cat' } });
+  const worn = { ring: 'ring_prestige', nameFx: 'nfx_gold', title: { name: 'COMBO MASTER' }, pet: { emoji: '🐲', legend: 'legendary' }, outfit: { emoji: '👑' }, vehicle: { emoji: '🚀' } };
+  const nothing = { ring: null, nameFx: null, title: null, pet: null, outfit: null, vehicle: null };
+  const check = (me) => {
+    const [x, y] = me.family.children;
+    assert.equal(x.id, fox.child.id); assert.equal(x.accent, 0); assert.deepEqual(x.appearance, worn);
+    assert.equal(y.id, wolf.child.id); assert.equal(y.accent, 1); assert.deepEqual(y.appearance, nothing);
+    const sent = JSON.stringify(me.family.children);
+    for (const kept of ['"gc"', '"rp"', 'inventory', '98765', '45678', 'bg_symbols', 'purchases', 'redemptions']) assert.ok(!sent.includes(kept), `${kept} stays on the server`);
+  };
+  check(await f.service.me(a.ctx)); // the parent's workspace
+  await move(f, a, f.service.lock(a.ctx)); check(await f.service.me(a.ctx)); // the launch pad
+  await move(f, a, f.service.selectChild(a.ctx, wolf.child.id, '763829'));
+  const me = await f.service.me(a.ctx);
+  assert.equal(me.child.accent, 1); assert.equal(me.child.appearance, undefined); assert.equal(me.family, undefined);
+});
 test('five wrong PINs cause server-side lockout, including across sessions', async () => {
   const f = fixture(), a = await f.family(), other = await f.login('parentA'), c = await f.child(a.ctx);
   await move(f, a, f.service.lock(a.ctx)); await move(f, other, f.service.lock(other.ctx));

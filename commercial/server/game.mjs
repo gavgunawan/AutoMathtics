@@ -1,6 +1,6 @@
 import { randomInt, randomUUID } from 'node:crypto';
 import { fail, object, text, uuid } from './security.mjs';
-import { GC_PASS, RP_PASS, EQUIP_SLOTS, LEVELS, bonusesFor, dayISO, normalizeProgress, liveDayRun, scanState, trk, trackDone, bossDue } from './progress.mjs';
+import { GC_PASS, RP_PASS, EQUIP_SLOTS, LEVELS, bonusesFor, dayISO, normalizeProgress, normalizeWallet, liveDayRun, scanState, trk, trackDone, bossDue } from './progress.mjs';
 import { entry, post } from './ledger.mjs';
 
 const MINUTE = 60_000, DAY = 24 * 60 * MINUTE;
@@ -78,6 +78,16 @@ const previousDay = (date, n = 1) => new Date(Date.parse(date) - n * DAY).toISOS
 const itemPublic = (x) => ({ id: x.id, kind: x.kind, emoji: x.emoji, name: x.name, cost: x.cost, ...(x.big ? { big: true } : {}), ...(x.hatch ? { hatch: true } : {}), ...(x.unlock ? { unlock: x.unlock } : {}) });
 const item = (id) => { const x = typeof id === 'string' ? BY_ID.get(id) : null; if (!x) fail(400, 'INVALID_ITEM'); return x; };
 const nowRow = (it, cost, now, timeZone, how = null) => ({ id: it.id, emoji: it.emoji, name: how ? `${it.name} (${how})` : it.name, cost, date: dayISO(now, timeZone), at: now });
+// What each child's card shows the launch pad and the parent (v2's player cards; port plan S1): the worn look as catalogue ids
+// and display text, never a balance or the inventory. A slot holding anything but an item of its own kind is worn as nothing.
+// The legendary tags are display text the frozen catalogue does not carry.
+const LEGEND = Object.freeze({ pet_legend: 'legendary', pet_semilegend: 'semi' });
+export function appearanceOf(wallet) {
+  const w = normalizeWallet(wallet), worn = (kind) => { const it = BY_ID.get(w[EQUIP_SLOTS[kind]]); return it?.kind === kind ? it : null; };
+  const pet = worn('pet'), title = worn('title'), outfit = worn('outfit'), vehicle = worn('vehicle');
+  return { ring: worn('ring')?.id ?? null, nameFx: worn('namefx')?.id ?? null, title: title ? { name: title.name } : null,
+    pet: pet ? { emoji: pet.emoji, legend: LEGEND[pet.id] ?? null } : null, outfit: outfit ? { emoji: outfit.emoji } : null, vehicle: vehicle ? { emoji: vehicle.emoji } : null };
+}
 
 function passRun(history, since) {
   let n = 0;
