@@ -227,7 +227,9 @@ export function weekISO(ms, timeZone) {
   const y0 = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
   return `${t.getUTCFullYear()}-W${String(Math.ceil(((t - y0) / 86_400_000 + 1) / 7)).padStart(2, '0')}`;
 }
+// one unlock rule for the scan itself, the weekly report and its email (server/report.mjs): Engine Sector B, papers 1-20 clear
+export const scanUnlocked = (engine) => engine.level >= 1 && engine.paper > 20;
 export function scanState(prog, now, timeZone) {
-  const e = trk(prog, 'engine'); const unlocked = e.level >= 1 && e.paper > 20; const week = weekISO(now, timeZone);
+  const e = trk(prog, 'engine'); const unlocked = scanUnlocked(e); const week = weekISO(now, timeZone);
   return { unlocked, available: unlocked && prog.wallet.lastScanWeek !== week, week, doneThisWeek: prog.wallet.lastScanWeek === week };
 }
