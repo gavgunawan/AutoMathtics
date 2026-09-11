@@ -34,6 +34,8 @@ const messages = {
   INSUFFICIENT_GRID_COINS: 'Not enough Grid Coins yet.', INSUFFICIENT_REWARD_POINTS: 'Not enough Reward Points yet.',
   ITEM_ALREADY_OWNED: 'You already own that item.', SHIELD_LIMIT: 'You can hold at most two streak shields.',
   EGG_ALREADY_WARMING: 'Your Mystery Egg is already warming.', REWARD_DAILY_LIMIT: 'That reward has reached its daily limit.',
+  CRATE_EMPTY: '🎁 Nothing left to find — you own every surprise!', EGG_COLLECTION_COMPLETE: '🥚 Your nest is full — every egg pet is already yours!', // v2's words (1754, 1762)
+  ITEM_NOT_OWNED: 'That item is not in your collection.', REWARD_NOT_FOUND: 'That reward is no longer in the store.',
   SCAN_ALREADY_DONE: 'System Scan is already complete this week.', SCAN_LOCKED: 'System Scan unlocks in Sector B after the first tier.',
   INVALID_ANSWER: 'The grid could not read that answer. Check it, then tap Go again.',
 };
@@ -750,7 +752,12 @@ const BLURB = {
   crate: 'one random new look you don’t have yet — could be rare!',
   egg: 'keep it warm for 5 passes and it hatches into a pet nobody can buy',
 };
-const CONSUMABLE = new Set(['shield', 'crate', 'egg']);
+// v2 dims a card whose price is out of reach unless the item carries its `consumable` flag (3248), which v2's catalogue gave the
+// Surprise Box and the Mystery Egg only (857-858): its shield (856) has none, so a shield out of reach dims like a pet. Kept so.
+const CONSUMABLE = new Set(['crate', 'egg']);
+// what a Surprise Box can hold, and the kinds that come out rarely (game.mjs CRATE_KINDS, CRATE_RARE): the count on OPEN and the
+// ✨ on the reveal. The roll itself is the server's.
+const CRATE_KINDS = new Set(['outfit', 'shout', 'timer', 'title', 'namefx', 'map']), CRATE_RARE = new Set(['namefx', 'map']);
 // equipped item id → class name, so only a catalogue id ever becomes a class (bg ids are also the page's data-bg values)
 const RING_CLASS = { ring_pulse: 'ringpulse', ring_halo: 'ringhalo', ring_prestige: 'ringprestige' };
 const NAMEFX_CLASS = { nfx_rainbow: 'namefx-rainbow', nfx_glitch: 'namefx-glitch', nfx_gold: 'namefx-gold' };
@@ -1036,24 +1043,115 @@ async function childScreen(after = {}) {
   const log = homeLog(child, st.history);
   root.replaceChildren(homeHeader(child, st, w), box, ...(log ? [log] : []));
 }
-async function shopScreen() {
-  transientView = true; const g = await api('/game/state'); gameModel = g; const box = panel('GRID SHOP', 'Spend what you earned.', 'Cosmetics and utilities use ⚡ Grid Coins. Family rewards use 🏆 Reward Points. Prices and outcomes come from the server.');
-  onBack = childScreen; applyLook(g.wallet);
-  box.append(el('p', `Wallet · ⚡ ${g.wallet.gc} · 🏆 ${g.wallet.rp} · 🛡️ ${g.wallet.shields}`, 'notice'));
-  const inv = new Set(g.wallet.inventory || []);
-  for (const it of g.catalog.filter((x) => !x.hatch && !x.unlock)) {
-    const row = el('div', null, 'shop-row'); row.append(el('span', `${it.emoji} ${it.name}`, 'shop-name'), el('span', `⚡${it.cost}`, 'shop-cost'));
-    if (it.kind === 'shield' || it.kind === 'crate' || it.kind === 'egg') row.append(button('BUY', async () => { const r = await api('/game/shop/buy', { itemId: it.id, operationId: crypto.randomUUID() }); sound('kaching'); if (r.awarded) note(`🎁 You got ${r.awarded.emoji} ${r.awarded.name}!`); await shopScreen(); }, 'ghost'));
-    else if (!inv.has(it.id)) row.append(button('BUY', async () => { await api('/game/shop/buy', { itemId: it.id, operationId: crypto.randomUUID() }); sound('kaching'); await shopScreen(); }, 'ghost'));
-    else if (EQUIP_SLOT[it.kind]) { const active = g.wallet[EQUIP_SLOT[it.kind]] === it.id; row.append(button(active ? 'EQUIPPED' : 'EQUIP', async () => { if (!active) await api('/game/shop/equip', { kind: it.kind, itemId: it.id }); await shopScreen(); }, active ? 'badge' : 'ghost')); }
-    box.append(row);
+// ---- the shop, which is also the wardrobe (v2 3211-3347): the balances, a Surprise Box's reveal, the fifteen sections in v2's
+// order, the Reward Store and the purchase log. The page only asks: the server sells, rolls the box, equips and holds the
+// points, and what it answers is what the shop shows next. Its lines go to #message, v2's shop line (3223) ----
+// the device's date, for "done today" (the server keeps the family's date and enforces the daily cap itself)
+const localDay = () => { const d = new Date(Date.now()); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+async function shopBuy(it, gc) {
+  let r;
+  try { r = await api('/game/shop/buy', { itemId: it.id, operationId: crypto.randomUUID() }); }
+  catch (error) { if (error.code === 'INSUFFICIENT_GRID_COINS' && gc < it.cost) { note(`Need ⚡${it.cost - gc} more for ${it.name}`); return; } throw error; } // v2's words (1743)
+  if (gameModel) gameModel.wallet = r.wallet; sound('kaching'); // a sound pack just bought rings in its own voice (v2 1769)
+  const got = r.awarded; // v2's lines (1745-1764), told from what the server did
+  note(it.kind === 'shield' ? `✓ 🛡️ Streak shield — holding ${r.wallet.shields}` : got ? `🎁 Surprise Box → ${got.emoji} ${got.name}!${CRATE_RARE.has(got.kind) ? ' ✨ RARE!' : ''}`
+    : it.kind === 'egg' ? `🥚 Mystery Egg — keep it warm: it hatches after ${EGG_PASSES} passes` : `✓ ${it.emoji} ${it.name} — bought & equipped!`);
+  await shopScreen({ awarded: got });
+}
+// EQUIP puts it on and ✓ EQUIPPED takes it off again (v2 1783-1796): the server takes itemId null as "nothing in this slot"
+async function shopEquip(it, on) {
+  const r = await api('/game/shop/equip', { kind: it.kind, itemId: on ? null : it.id }); if (gameModel) gameModel.wallet = r.wallet;
+  note(on ? `${it.emoji} ${it.name} unequipped` : `✓ ${it.emoji} ${it.name} equipped`); await shopScreen();
+}
+// One card (3240-3276). Its colour says where it stands: equipped mint, owned violet, a big one gold, affordable, or out of
+// reach and dimmed (all but the Box and the Egg); an earned pet is gold once earned and greyed until then, with the way to earn
+// it and the progress. Then the one action that applies — BUY, OPEN, EQUIP or ✓ EQUIPPED — or a line saying why there is none.
+// Every owned pet, earned or hatched ones too, can be worn and taken off.
+function shopCard(it, g, passes) {
+  const w = g.wallet, own = it.owned === true, afford = w.gc >= it.cost, slot = EQUIP_SLOT[it.kind], legend = lookup(LEGEND, it.id);
+  const on = Boolean(slot) && w[slot] === it.id, tag = it.big ? 'SUPER RARE' : legend === 'legendary' ? 'LEGENDARY' : legend === 'semi' ? 'SEMI-LEGENDARY' : null;
+  const tone = it.unlock ? (own ? 'earned' : 'locked') : on ? 'equipped' : own ? 'owned' : it.big ? 'rare' : afford ? 'afford' : 'broke';
+  const dim = !own && !it.unlock && !afford && !CONSUMABLE.has(it.kind);
+  const card = el('div', null, ['shopitem', tone, it.big && 'super', dim && 'dim', tag && 'tagged'].filter(Boolean).join(' '));
+  if (tag) card.append(el('span', tag, legend === 'semi' ? 'tag semi' : 'tag'));
+  const face = el('span', it.emoji, `item-emoji${it.big ? ' big' : ''}${it.unlock && !own ? ' item-locked' : legend ? ' legend-glow' : ''}`); face.setAttribute('aria-hidden', 'true');
+  card.append(face, el('span', `${it.name}${it.kind === 'shield' && w.shields > 0 ? ` (×${w.shields})` : ''}`, 'item-name'));
+  const blurb = lookup(BLURB, it.id); if (blurb) card.append(el('span', blurb, 'item-blurb'));
+  const equipBtn = () => button(on ? '✓ EQUIPPED' : 'EQUIP', () => shopEquip(it, on), `tiny item-act ${on ? 'c-mint' : it.unlock ? 'c-gold' : 'c-violet'}`);
+  const buyBtn = (words = 'BUY') => button(`⚡${it.cost} ${words}`, () => shopBuy(it, w.gc), `tiny item-act ${it.big || it.kind === 'crate' ? 'c-gold' : 'c-cyan'}${afford ? '' : ' short'}`);
+  const says = (text, extra = '') => el('span', text, `item-state${extra}`);
+  let act;
+  if (it.unlock) {
+    if (own) act = equipBtn();
+    else { const u = it.unlockProgress || { have: 0, need: it.unlock.n }; act = says(`🔒 ${it.unlock.text}`); act.append(el('b', `${u.have}/${u.need}`)); }
+  } else if (it.hatch) act = equipBtn(); // a hatched pet (the shop shows one only once it is owned)
+  else if (it.kind === 'egg') {
+    const egg = w.egg && !w.egg.hatched ? w.egg : null;
+    act = egg ? says(`🥚 keeping warm · ${Math.max(0, Math.min(EGG_PASSES, passes - (egg.passesAt || 0)))}/${EGG_PASSES} passes`, ' warm')
+      : g.catalog.filter((x) => x.hatch).every((x) => x.owned) ? says('NEST FULL — every egg pet hatched') : buyBtn();
+  } else if (it.kind === 'crate') {
+    const left = g.catalog.filter((x) => CRATE_KINDS.has(x.kind) && !x.owned && !x.unlock && !x.hatch).length;
+    act = left ? buyBtn(`OPEN · ${left} left`) : says('ALL FOUND — you own every surprise');
+  } else if (it.kind === 'shield') act = w.shields >= 2 ? says('MAX HELD') : buyBtn();
+  else act = own ? equipBtn() : buyBtn();
+  card.append(act); return card;
+}
+// the Reward Store (3282-3307): the parent's prizes this child may ask for (the server leaves a hidden one out until it is
+// affordable), REDEEM when the points are there, "done today" at the daily cap, and every request still waiting for the parent
+function rewardStore(g) {
+  const w = g.wallet, wrap = el('section', null, 'shop-rewards'), title = el('p', '🎁 Reward Store', 'log-title c-gold'), list = el('div', null, 'reward-list'), today = localDay();
+  title.append(el('span', ' · spend 🏆', 'lc'));
+  for (const r of g.rewards) {
+    const used = (w.redemptions || []).filter((x) => x.rewardId === r.id && x.date === today && x.status !== 'rejected').length;
+    const afford = w.rp >= r.cost, capped = r.cap > 0 && used >= r.cap, row = el('div', null, afford && !capped ? 'reward-row ready' : 'reward-row'), end = el('span', null, 'reward-end');
+    end.append(capped ? el('span', 'done today', 'reward-state') : afford ? button(`🏆${r.cost} REDEEM`, () => redeemReward(r), 'tiny c-gold') : el('span', `🏆${r.cost} · ${r.cost - w.rp} more`, 'reward-state mono'));
+    const face = el('span', r.emoji, 'reward-emoji'); face.setAttribute('aria-hidden', 'true');
+    row.append(face, el('span', r.name, afford ? 'reward-name' : 'reward-name short'), end); list.append(row);
   }
-  const earned = g.catalog.filter((x) => x.unlock || x.hatch); if (earned.length) { box.append(el('h2', 'Earned & hatch pets')); for (const it of earned) { const u = it.unlockProgress; box.append(el('p', `${it.emoji} ${it.name} · ${inv.has(it.id) ? 'OWNED' : it.hatch ? 'Mystery Egg hatch' : `${u?.have || 0}/${u?.need || it.unlock?.n}`}`, 'small muted')); } }
-  box.append(el('h2', '🎁 Reward Store'));
-  if (!g.rewards.length) box.append(el('p', 'Your parent has not published any rewards yet.', 'muted'));
-  for (const r of g.rewards) { const row = el('div', null, 'shop-row'); row.append(el('span', `${r.emoji} ${r.name}`, 'shop-name'), el('span', `🏆${r.cost}${r.cap ? ` · max ${r.cap}/day` : ''}`, 'shop-cost'), button('REDEEM', async () => { await api('/game/rewards/redeem', { rewardId: r.id, operationId: crypto.randomUUID() }); note('Sent to parent for approval. Points are held while pending.'); await shopScreen(); }, 'ghost')); box.append(row); }
-  const pending = (g.wallet.redemptions || []).filter((r) => r.status === 'pending'); if (pending.length) box.append(el('p', `Pending: ${pending.map((r) => `${r.emoji} ${r.name}`).join(' · ')}`, 'notice'));
-  box.append(button('Back to my grid', childScreen, 'primary'));
+  for (const x of (w.redemptions || []).filter((x) => x.status === 'pending')) list.append(el('div', `⏳ Pending approval: ${x.emoji} ${x.name}`, 'reward-row pending'));
+  if (!g.rewards.length) list.append(el('p', 'Your parent has not published any rewards yet.', 'subtle'));
+  wrap.append(title, list); return wrap;
+}
+async function redeemReward(r) {
+  await api('/game/rewards/redeem', { rewardId: r.id, operationId: crypto.randomUUID() });
+  note(`✓ ${r.emoji} ${r.name} — sent to your parent to approve. The points are held while you wait.`); await shopScreen();
+}
+// the purchase log (3308-3341): what went out, newest first — every buy, then every reward asked for (a refused one was
+// refunded, so it is left out). v2's balance check above it is not ported: /game/state sends the newest rows, not the ledger.
+function buyRow(emoji, name, status, cost, date, points = false) {
+  const row = el('div', null, 'buy-row'); row.append(el('span', emoji || '•', 'buy-emoji'), el('b', String(name).replace(' -> ', ' → ')));
+  if (status) row.append(el('span', status[0], `buy-status ${status[1]}`));
+  row.append(el('span', cost, points ? 'buy-cost rp' : 'buy-cost'), el('span', date && date !== '—' ? date : 'earlier', 'buy-date')); return row;
+}
+function purchaseLog(w) {
+  const wrap = el('section', null, 'shop-log'), rows = el('div', null, 'buy-log');
+  for (const p of w.purchases || []) rows.append(buyRow(p.emoji, p.name, null, `−⚡${p.cost}`, p.date));
+  for (const x of (w.redemptions || []).filter((x) => x.status !== 'rejected')) rows.append(buyRow(x.emoji, x.name, x.status === 'approved' ? ['✓ approved', 'approved'] : ['⏳ pending', 'pending'], `−🏆${x.cost}`, x.date, true));
+  if (!rows.children.length) rows.append(el('p', 'nothing bought yet', 'subtle'));
+  wrap.append(el('p', '🧾 Purchase log', 'log-title c-cyan'), rows); return wrap;
+}
+async function shopScreen(after = {}) {
+  transientView = true; const g = await api('/game/state'); gameModel = g;
+  const w = g.wallet, passes = w.egg && !w.egg.hatched ? (await api('/learn/state')).stats?.passes || 0 : 0; // a warming egg counts passes, which the learning state holds
+  const box = panel(`🛒 GRID SHOP · ${model.child.nickname.toUpperCase()}`, '', '', 'shop');
+  onBack = childScreen; applyLook(w); root.setAttribute('aria-live', 'off'); // each buy repaints the shop: #message alone speaks
+  const pills = el('div', null, 'balance-row'); pills.append(el('span', `⚡ ${w.gc}`, 'balance c-cyan'), el('span', `🏆 ${w.rp}`, 'balance c-gold')); box.append(pills);
+  const got = after.awarded;
+  if (got) { // the Surprise Box shakes open on what the server rolled (3224-3230)
+    const reveal = el('div', null, 'crate-reveal'), shut = el('span', '🎁', 'crate-box'), item = el('span', got.emoji, 'crate-item');
+    reveal.setAttribute('role', 'status'); shut.setAttribute('aria-hidden', 'true'); item.setAttribute('aria-hidden', 'true');
+    reveal.append(shut, item, el('span', `${got.name}!${CRATE_RARE.has(got.kind) ? ' ✨ rare' : ''}`, 'crate-name')); box.append(reveal);
+  }
+  for (const [kinds, label, c, words] of SHOP_SECTIONS) {
+    const items = g.catalog.filter((it) => kinds.includes(it.kind) && (!it.hatch || it.owned)); // an egg's pets stay a secret until one hatches (3232)
+    if (!items.length) continue;
+    const section = el('section', null, `shop-section ${c}`), head = el('p', label, 'section-label shop-head'), grid = el('div', null, items.some((it) => it.big) ? 'shop-grid has-big' : 'shop-grid');
+    if (words) head.append(el('span', words, 'shop-note'));
+    for (const it of items) grid.append(shopCard(it, g, passes));
+    section.append(head, grid); box.append(section);
+  }
+  const row = el('div', null, 'row-buttons'); row.append(button('Back', childScreen, 'ghost'));
+  box.append(rewardStore(g), purchaseLog(w), row);
 }
 async function mapScreen() {
   transientView = true; const [st, g] = await Promise.all([api('/learn/state'), api('/game/state')]); gameModel = g; const box = panel('MISSION MAP', 'Progress & fluency', 'Your map is calculated from server-recorded sessions. Accuracy and time cannot be edited by the browser.'); if (g.wallet.activeMap) box.className += ` ${g.wallet.activeMap}`;

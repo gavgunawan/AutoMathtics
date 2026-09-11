@@ -459,6 +459,50 @@ input.answer-box:not(:placeholder-shown){border-style:solid;box-shadow:0 0 16px 
 .mini-wallet{margin:4px 0 0;font-size:15px}
 .panel.summary .pet-44{display:block;margin:4px auto 0}
 .panel.summary .row-buttons{margin-top:14px}
+/* ---- the shop (v2 3211-3347, 3852-3853): the balances, fifteen sections of cards, the Reward Store and the purchase log ---- */
+.balance-row{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin:10px 0 12px}
+.balance{padding:6px 14px;border:1.5px solid var(--c);border-radius:10px;font:600 16px var(--mono);color:var(--txt)}
+.shop-section{margin:0 0 14px;text-align:left}
+.shop-head{margin:0 0 6px;line-height:1.5}
+.shop-note{margin-left:8px;font:600 11px var(--ui);letter-spacing:0;color:var(--dim)}
+.shop-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}
+.shop-grid.has-big{grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
+/* a card's colour is where it stands (3247): equipped mint, owned violet, a big one gold, affordable, out of reach; an earned pet
+   gold once earned, violet and greyed until then. A price out of reach dims the card, but for the Box and the Egg (3248) */
+.shopitem{position:relative;display:flex;flex-direction:column;align-items:center;gap:2px;padding:10px 10px 12px;border:1.5px solid var(--c);border-radius:12px;background:var(--void);text-align:center;transition:transform .28s cubic-bezier(.2,.8,.2,1),box-shadow .28s ease,border-color .28s ease}
+@media(hover:hover) and (pointer:fine){.shopitem:hover{transform:translateY(-3px);box-shadow:0 10px 28px rgba(0,0,0,.35)}}
+.shopitem.equipped{--c:var(--mint)}.shopitem.owned,.shopitem.locked{--c:var(--violet)}.shopitem.rare,.shopitem.earned{--c:var(--gold)}.shopitem.afford{--c:var(--v2line)}.shopitem.broke{--c:var(--row)}
+.shopitem.super{background:linear-gradient(160deg,#161A3E,var(--void))}
+.shopitem.super.rare{box-shadow:0 0 18px #FFB02044}.shopitem.super.owned{box-shadow:0 0 18px #8A5CFF44}.shopitem.super.equipped{box-shadow:0 0 18px #2DFFB344}
+.shopitem.tagged{padding-top:14px}
+.shopitem.dim{opacity:.55}.shopitem.locked{opacity:.88}
+.tag{position:absolute;top:-8px;left:50%;transform:translateX(-50%);padding:2px 8px;border-radius:999px;background:var(--gold);color:var(--on-bright);font:700 9px var(--display);letter-spacing:2px;white-space:nowrap}
+.tag.semi{background:var(--violet)}
+.item-emoji{font-size:26px;line-height:1.3}.item-emoji.big{font-size:34px}
+.legend-glow{filter:drop-shadow(0 0 8px #FFB020)}.item-locked{filter:grayscale(1) brightness(.55)}
+.item-name{min-height:32px;font-size:12.5px;font-weight:700;line-height:1.3;color:var(--txt);overflow-wrap:anywhere}
+.item-blurb{margin:0 0 8px;font-size:11px;line-height:1.35;color:var(--dim)}
+.item-act,.item-state{margin-top:auto}
+.item-act{width:100%}.item-act.short{opacity:.55}
+.item-state{font-size:11.5px;font-weight:700;line-height:1.45;color:var(--dim)}
+.item-state.warm{color:var(--gold)}
+.item-state b{display:block;font:600 13px var(--mono);color:var(--txt)}
+/* the Reward Store (3282-3307) and the purchase log (3308-3341) */
+.shop-rewards,.shop-log{margin-top:18px;text-align:left}
+.lc{text-transform:none;letter-spacing:.04em}
+.reward-list{display:flex;flex-direction:column;gap:6px}
+.reward-row{display:flex;align-items:center;gap:10px;padding:8px 12px;border:1.5px solid var(--v2line);border-radius:10px;background:var(--void)}
+.reward-row.ready{border-color:var(--gold)}
+.reward-row.pending{border:1px dashed var(--mint);background:none;font-size:13px;font-weight:700;color:var(--mint)}
+.reward-emoji{font-size:18px;line-height:1}
+.reward-name{font-size:13.5px;font-weight:700;color:var(--txt);overflow-wrap:anywhere}.reward-name.short{color:var(--dim)}
+.reward-end{flex:0 0 auto;margin-left:auto}
+.reward-state{font-size:12px;font-weight:700;color:var(--dim)}
+.buy-row{display:flex;align-items:center;gap:8px;padding:5px 12px;border-bottom:1px solid var(--row);font-size:12.5px}
+.buy-row b{color:var(--txt);overflow-wrap:anywhere}
+.buy-status{font-size:10.5px;font-weight:700;color:var(--gold)}.buy-status.approved{color:var(--mint)}
+.buy-cost{margin-left:auto;font-family:var(--mono);color:var(--cyan);white-space:nowrap}.buy-cost.rp{color:var(--gold)}
+.buy-date{min-width:82px;text-align:right;font-family:var(--mono);color:var(--dim);white-space:nowrap}
 /* an inner box (v2's howBox and tipsBox, 3722-3729): dark, ringed in its section's colour */
 .box{margin:10px 0;padding:14px 16px;border:1.5px solid var(--c,var(--v2line));border-radius:12px;background:var(--void);text-align:left}
 /* no motion: nothing animates, and neither the decor layer (static columns of symbols would only sit on the screen) nor a
@@ -469,6 +513,6 @@ input.answer-box:not(:placeholder-shown){border-style:solid;box-shadow:0 0 16px 
 .track { display: grid; gap: 0.35rem; padding: 0.9rem 1rem; margin: 0.6rem 0; border: 1px solid rgba(255,255,255,0.12); border-radius: 12px; }
 
 /* ---- migrated v2 game layer ---- */
-.shop-row,.approval{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:10px;margin:8px 0;padding:11px 13px;border:1px solid #8aa0ef22;border-radius:12px;background:#081126aa}.shop-name{font-weight:750;overflow-wrap:anywhere}.shop-cost{font:750 12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#ffcf70;white-space:nowrap}.shop-row button,.approval button{margin:0;min-height:38px;padding:8px 11px;font-size:11px}
-.heat-row{display:flex;justify-content:space-between;gap:16px;align-items:center;margin:6px 0;padding:10px 12px;border-left:3px solid #57e8f8;background:#57e8f808;border-radius:8px}@media(max-width:760px){.shop-row,.approval{grid-template-columns:1fr auto}.shop-row button,.approval button{grid-column:1/-1;width:100%}.heat-row{align-items:flex-start;flex-direction:column;gap:3px}}
+.approval{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:10px;margin:8px 0;padding:11px 13px;border:1px solid #8aa0ef22;border-radius:12px;background:#081126aa}.approval button{margin:0;min-height:38px;padding:8px 11px;font-size:11px}
+.heat-row{display:flex;justify-content:space-between;gap:16px;align-items:center;margin:6px 0;padding:10px 12px;border-left:3px solid #57e8f8;background:#57e8f808;border-radius:8px}@media(max-width:760px){.approval{grid-template-columns:1fr auto}.approval button{grid-column:1/-1;width:100%}.heat-row{align-items:flex-start;flex-direction:column;gap:3px}}
 .map_lava{background:linear-gradient(145deg,#2b0e1d,#0d1027)!important;border-color:#ff5a2d55!important}.map_ice{background:linear-gradient(145deg,#102b42,#0d1027)!important;border-color:#35e0ff66!important}.map_matrix{background:repeating-linear-gradient(90deg,#2dffb307 0 1px,transparent 1px 22px),#07150f!important;border-color:#2dffb355!important}.map_gold{background:linear-gradient(145deg,#2c2410,#101225)!important;border-color:#ffb02066!important}

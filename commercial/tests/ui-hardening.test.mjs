@@ -132,7 +132,7 @@ test('UI Stage 2 game: child shop, migrated catalog and Navigator read-aloud are
   assert.ok(h.root.textContent.includes('🛒 Shop'));
   await h.click('🛒 Shop');
   assert.ok(h.root.textContent.includes('GRID SHOP') && h.root.textContent.includes('Volt dragon') && h.root.textContent.includes('⚡1200'));
-  await h.click('Back to my grid'); await h.click('🧭 Start Navigator ▶');
+  await h.click('Back'); await h.click('🧭 Start Navigator ▶');
   assert.ok(h.root.textContent.includes('NAVIGATOR') && h.root.textContent.includes('🔊 Read aloud'));
 });
 
