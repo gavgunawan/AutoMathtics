@@ -289,7 +289,7 @@ function signInScreen(signup = false, afterReady = null, reauth = false) {
     if (consent && !consent.agreed()) { note('Tick the first box to create the account: account and progress emails are part of the service. News and offers stay optional.'); return; }
     const a = await auth(); const value = password.input.value; password.input.value = '';
     const result = await (signup ? a.signUp(email.input.value, value) : a.signIn(email.input.value, value));
-    if (consent) await recordConsent(a, consent.news());
+    if (consent) await recordConsent(a, consent.agreed(), consent.news());
     await authStep(result, afterReady);
   }); };
   box.append(form);
@@ -307,10 +307,10 @@ function consentBoxes() {
   const news = box('Also send me news and offers from AutoMathtics. Optional; unsubscribe at any time.');
   return { labels: [need.l, news.l], agreed: () => need.i.checked === true, news: () => news.i.checked === true };
 }
-// The choice is recorded by the server, from the new account's own ID token, the moment the account exists. A failure never
+// Both boxes are recorded by the server, from the new account's own ID token, the moment the account exists. A failure never
 // blocks the sign-up: the defaults then apply (the weekly report on, news off), and Mission Control can change both later.
-async function recordConsent(a, news) {
-  try { const idToken = await a.idToken?.(); if (!idToken) return; csrf = (await api('/bootstrap')).csrf; await api('/auth/consent', { idToken, news }); }
+async function recordConsent(a, progress, news) {
+  try { const idToken = await a.idToken?.(); if (!idToken) return; csrf = (await api('/bootstrap')).csrf; await api('/auth/consent', { idToken, progress, news }); }
   catch { /* the defaults apply */ }
 }
 async function cancelVerification() {
@@ -541,7 +541,7 @@ function emailBlock(prefs) {
   }, 'ghost'));
   return wrap;
 }
-// email-v1: a button in the weekly email opens the app with its signed token (?email=). Link scanners and mail previews open it
+// email-v1: a button in the weekly email opens the app with its signed token (#email=). Link scanners and mail previews open it
 // too, so nothing changes on arrival: the server says what the button does, and only Confirm sends it. Works signed in or not.
 async function emailScreen(token) {
   const d = await api('/email/describe', { t: token });
@@ -863,10 +863,12 @@ if (returned?.get('checkout')) {
   if (returned.get('result') === 'success') { note('Payment received. Your plan updates as soon as the payment provider confirms it; this page checks again in a moment.'); setTimeout(() => { if (!working) run(refresh); }, 4000); }
   else note('Checkout cancelled. Nothing was charged.');
 }
-// email-v1: a button in the weekly email. The address is tidied at once, so a reload or a bookmark made now does not reopen it;
-// the panel asks before anything changes (emailScreen).
-if (returned?.get('email')) {
-  const token = returned.get('email');
+// email-v1: a button in the weekly email carries its token in the fragment (#email=…), which the browser never sends to a server,
+// so no request log holds it. The address is tidied at once, so a reload or a bookmark made now does not reopen it; the panel
+// asks before anything changes (emailScreen).
+const fragment = typeof location === 'object' && location?.hash ? new URLSearchParams(String(location.hash).replace(/^#/, '')) : null;
+if (fragment?.get('email')) {
+  const token = fragment.get('email');
   if (typeof history === 'object' && history?.replaceState) history.replaceState(null, '', location.pathname);
   await run(() => emailScreen(token));
 }

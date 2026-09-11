@@ -24,8 +24,8 @@ function family({ geraltFocus = false, allisonName = 'Allison' } = {}) {
 const one = (progress, nickname = 'Allison') => buildFamilyReport({ week: WEEK, children: [{ id: ID.allison, nickname, progress: normalizeProgress({ ...freshProgress(), ...progress }) }] });
 // the job signs real tokens (report.mjs links); here any link will do, as long as it is only ever in an href
 function links(d) {
-  return { app: `${ORIGIN}/`, settings: `${ORIGIN}/`, unsubscribe: `${ORIGIN}/?email=v1.unsub.sig`,
-    children: Object.fromEntries(d.children.map((c, i) => { const b = buttonsFor(c); return [c.childId, { ...(b.pace !== null ? { pace: `${ORIGIN}/?email=v1.pace${i}.sig` } : {}), ...(b.focus !== null ? { focus: `${ORIGIN}/?email=v1.focus${i}.sig` } : {}) }]; })) };
+  return { app: `${ORIGIN}/`, settings: `${ORIGIN}/`, unsubscribe: `${ORIGIN}/#email=v1.unsub.sig`,
+    children: Object.fromEntries(d.children.map((c, i) => { const b = buttonsFor(c); return [c.childId, { ...(b.pace !== null ? { pace: `${ORIGIN}/#email=v1.pace${i}.sig` } : {}), ...(b.focus !== null ? { focus: `${ORIGIN}/#email=v1.focus${i}.sig` } : {}) }]; })) };
 }
 
 test('the subject names who played, the missions and the accuracy; each child\'s section says what went right and fast, right but slow, and wrong again and again', () => {
@@ -44,7 +44,7 @@ test('the subject names who played, the missions and the accuracy; each child\'s
 test('buttons only when due: the pace when a change is suggested, the scan focus to offer where Engine styles are weak, or to switch off; none for a child who did not play', () => {
   const d = family(), r = renderReport(d, links(d));
   assert.deepEqual(d.children.map(buttonsFor), [{ pace: 75, focus: null }, { pace: 115, focus: true }, { pace: null, focus: null }]);
-  for (const [label, href] of [['Set Allison’s pace to 75%', `${ORIGIN}/?email=v1.pace0.sig`], ['Set Geralt’s pace to 115%', `${ORIGIN}/?email=v1.pace1.sig`], ['Focus Geralt’s System Scan on these', `${ORIGIN}/?email=v1.focus1.sig`]]) {
+  for (const [label, href] of [['Set Allison’s pace to 75%', `${ORIGIN}/#email=v1.pace0.sig`], ['Set Geralt’s pace to 115%', `${ORIGIN}/#email=v1.pace1.sig`], ['Focus Geralt’s System Scan on these', `${ORIGIN}/#email=v1.focus1.sig`]]) {
     assert.ok(r.html.includes(`href="${href}"`) && r.html.includes(`>${label}</a>`), label); assert.ok(r.text.includes(`${label}: ${href}`), label);
   }
   assert.ok(r.text.includes('Next week’s scan can focus on the styles above: about 75% of its questions on what Geralt gets wrong or slow, 25% recap.'));
@@ -66,7 +66,7 @@ test('buttons only when due: the pace when a change is suggested, the scan focus
 test('the footer says why, how to stop, where the settings are and who sent it; a busy week and a left-early week say so; many children shorten the subject', () => {
   const d = family(), r = renderReport(d, links(d));
   assert.ok(r.text.includes('Why this email: you created an AutoMathtics parent account and agreed to account and progress emails.'));
-  assert.ok(r.text.includes(`Stop weekly reports: ${ORIGIN}/?email=v1.unsub.sig`) && r.text.includes(`Email settings: ${ORIGIN}/`)); assert.ok(r.html.includes('>Stop weekly reports</a>') && r.html.includes('>Email settings</a>'));
+  assert.ok(r.text.includes(`Stop weekly reports: ${ORIGIN}/#email=v1.unsub.sig`) && r.text.includes(`Email settings: ${ORIGIN}/`)); assert.ok(r.html.includes('>Stop weekly reports</a>') && r.html.includes('>Email settings</a>'));
   assert.ok(r.text.includes('AutoMathtics · Mission Control for parents · pilot.example.test'));
   const busy = one({ engine: { level: 3, paper: 41, bossCleared: 2 }, history: times(60, () => row('2026-09-02', times(5, () => ans('engine', 3, 3, 40, true)))) });
   assert.ok(renderReport(busy, links(busy)).text.includes('A busy week: these counts cover the newest 60 sessions the game keeps.'));

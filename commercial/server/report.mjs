@@ -226,7 +226,9 @@ export class Reports {
     return user && user.disabled !== true && user.emailVerified === true && typeof user.email === 'string' && user.email ? user.email : null;
   }
   /**
-   * The buttons' links: a signed token each, opening the app (/?email=…), which shows what it does and waits for a tap. Every
+   * The buttons' links: a signed token each, opening the app with it in the fragment (/#email=…, which reaches no server and no
+   * request log); the app shows what the button does and waits for a tap. The List-Unsubscribe URL alone carries its token in the
+   * query, because RFC 8058's one-click POST needs a URL the mailbox provider can post to. Every
    * expiry follows from the report week (email.mjs linkExpiry) and nothing else in the email moves with the clock, so rendering a
    * family-week again gives the same bytes: what Resend's Idempotency-Key needs to answer a retry as the same email.
    */
@@ -235,18 +237,18 @@ export class Reports {
     const unsub = token({ a: 'unsub', v: 'progress' }), children = {};
     for (const c of report.children) {
       const b = buttonsFor(c), l = {};
-      if (b.pace !== null) l.pace = `${app}?email=${token({ a: 'pace', c: c.childId, v: b.pace })}`;
-      if (b.focus !== null) l.focus = `${app}?email=${token({ a: 'focus', c: c.childId, v: b.focus })}`;
+      if (b.pace !== null) l.pace = `${app}#email=${token({ a: 'pace', c: c.childId, v: b.pace })}`;
+      if (b.focus !== null) l.focus = `${app}#email=${token({ a: 'focus', c: c.childId, v: b.focus })}`;
       children[c.childId] = l;
     }
-    return { app, settings: app, unsubscribe: `${app}?email=${unsub}`, oneClick: `${this.origin}/api/email/unsubscribe?t=${unsub}`, children };
+    return { app, settings: app, unsubscribe: `${app}#email=${unsub}`, oneClick: `${this.origin}/api/email/unsubscribe?t=${unsub}`, children };
   }
   /** The operator's look at a family's email: rendered with inert links whatever the switches say; it never claims and never sends. */
   async preview(familyId, week = null) {
     uuid(familyId); if (week !== null && weekStart(week) === null) fail(400, 'WEEK_INVALID');
     const family = await this.store.get(`families/${familyId}`); if (!family || family.deleted === true) fail(404, 'FAMILY_NOT_FOUND');
     const report = buildFamilyReport({ familyLabel: family.label || null, children: await this.children(familyId, family), week: week || lastWeek(this.now(), REPORT_TIME_ZONE) });
-    const inert = `${this.origin}/?email=preview`, children = Object.fromEntries(report.children.map((c) => [c.childId, { pace: inert, focus: inert }]));
+    const inert = `${this.origin}/#email=preview`, children = Object.fromEntries(report.children.map((c) => [c.childId, { pace: inert, focus: inert }]));
     return { week: report.week, answered: report.answered, ...renderReport(report, { app: `${this.origin}/`, settings: `${this.origin}/`, unsubscribe: inert, children }) };
   }
 }

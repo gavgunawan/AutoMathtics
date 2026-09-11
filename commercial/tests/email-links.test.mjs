@@ -20,8 +20,8 @@ async function setup(f, uid = 'parentA') { const a = await f.family(uid, 2); con
 const prog = (f, a) => f.store.get(`families/${a.familyId}/learning/${a.childId}`);
 const applied = async (f) => (await f.store.list('audit')).filter((x) => x.action === 'email.action_applied');
 const setFamily = (f, id, patch) => f.store.transaction(async (tx) => { const fam = await tx.get(`families/${id}`); tx.set(`families/${id}`, { ...fam, ...patch }); });
-async function listen(t, f) {
-  const cfg = { origin: 'https://pilot.example.test', secret, emulator: true, web: { authDomain: 'demo-am-foundation.firebaseapp.com' } };
+async function listen(t, f, more = {}) {
+  const cfg = { origin: 'https://pilot.example.test', secret, emulator: true, web: { authDomain: 'demo-am-foundation.firebaseapp.com' }, ...more };
   const server = createApp(f.service, cfg, { email: f.email }); server.listen(0, '127.0.0.1'); await once(server, 'listening');
   t.after(() => { server.closeAllConnections(); server.close(); });
   const base = `http://127.0.0.1:${server.address().port}`, boot = await fetch(`${base}/api/bootstrap`), cookie = boot.headers.get('set-cookie').split(';')[0], { csrf } = await boot.json();
@@ -98,18 +98,28 @@ test('the routes: describe and apply before any session with the pre-authenticat
   r = await s.call('/api/email/apply', { t: token(f, a) }); assert.equal(r.status, 200); assert.deepEqual(await r.json(), { ok: true, message: 'Allison’s question time is now 75%.' });
   const csrf = (await f.service.me(a.ctx)).csrf; // a remembered Mission Control, or the kids' tablet: the session's own token
   r = await s.call('/api/email/describe', { t: token(f, a, { v: 90 }) }, { Cookie: `__session=${a.cookie}`, 'X-CSRF-Token': csrf }); assert.equal(r.status, 200); assert.equal((await r.json()).current, 75);
-  r = await s.call('/api/email/apply', { t: 'v1.bad.bad' }); assert.equal(r.status, 400); assert.equal((await r.json()).error, 'LINK_INVALID');
-  for (let i = 0; i < 16; i++) assert.equal((await s.call('/api/email/describe', { t: 'v1.x.y' })).status, 200); // twenty an hour from one address…
-  assert.equal((await s.call('/api/email/describe', { t: token(f, a) })).status, 429, '…then 429');
+  r = await s.call('/api/email/apply', { t: 'v1.bad.bad' }); assert.equal(r.status, 400); assert.equal((await r.json()).error, 'LINK_INVALID'); // a failed check: one
+  for (let i = 0; i < 19; i++) assert.deepEqual(await (await s.call('/api/email/describe', { t: 'v1.x.y' })).json(), { valid: false, reason: 'invalid' }); // …and nineteen more from one address
+  assert.equal((await s.call('/api/email/describe', { t: 'v1.x.y' })).status, 429, 'then 429 for a spoiled link');
+  assert.equal((await s.call('/api/email/describe', { t: token(f, a) })).status, 200, 'a real link is never refused for its address');
   const http = await readFile(new URL('../server/http.mjs', import.meta.url), 'utf8');
   for (const route of ["'/api/auth/consent'", "'/api/account/email'", "'/api/email/describe'", "'/api/email/apply'", "'/api/email/unsubscribe'"]) { assert.ok(http.includes(route), route); assert.doesNotMatch(route, /transfer|import|export|migrat|move|merge|clone|copy|link|invite/i); }
+});
+
+test('junk links from everywhere fill only the instance\'s failure budget: after two hundred failed checks from as many addresses, junk gets 429 and a real link still works; one link can be opened thirty times an hour', async (t) => {
+  const f = fixture(), a = await setup(f), s = await listen(t, f, { proxyHops: 1 });
+  for (let i = 0; i < 200; i++) assert.equal((await s.call('/api/email/describe', { t: `v1.junk${i}.sig` }, { 'X-Forwarded-For': `10.0.0.${i}` })).status, 200);
+  assert.equal((await s.call('/api/email/describe', { t: 'v1.junk.sig' }, { 'X-Forwarded-For': '10.0.1.1' })).status, 429, 'the instance has had enough junk');
+  const real = token(f, a);
+  for (let i = 0; i < 30; i++) assert.equal((await s.call('/api/email/describe', { t: real }, { 'X-Forwarded-For': `10.0.2.${i}` })).status, 200, 'a real link still works');
+  assert.equal((await s.call('/api/email/describe', { t: real }, { 'X-Forwarded-For': '10.0.3.1' })).status, 429, 'the thirty-first opening of one link in an hour');
 });
 
 test('one-click unsubscribe (RFC 8058): the provider\'s cross-site POST with no cookie, Origin or CSRF token turns the report off; only that body and an unsub token; forgeries budgeted; a GET changes nothing and opens the app on the same token', async (t) => {
   const f = fixture(), a = await setup(f), s = await listen(t, f), unsub = unsubToken(f, a);
   const post = (tok, body = 'List-Unsubscribe=One-Click', type = 'application/x-www-form-urlencoded', more = {}) => fetch(`${s.base}/api/email/unsubscribe?t=${tok}`, { method: 'POST', headers: { 'Content-Type': type, 'Sec-Fetch-Site': 'cross-site', ...more }, body });
   let r = await fetch(`${s.base}/api/email/unsubscribe?t=${unsub}`, { redirect: 'manual', headers: { 'Sec-Fetch-Site': 'cross-site' } });
-  assert.equal(r.status, 303); assert.equal(r.headers.get('location'), `/?email=${unsub}`); assert.equal(await f.store.get('emailPrefs/parentA'), null, 'a GET changes nothing');
+  assert.equal(r.status, 303); assert.equal(r.headers.get('location'), `/#email=${unsub}`, 'the app, with the token in the fragment'); assert.equal(await f.store.get('emailPrefs/parentA'), null, 'a GET changes nothing');
   r = await fetch(`${s.base}/api/email/unsubscribe?t=%3Cscript%3E`, { redirect: 'manual' }); assert.equal(r.headers.get('location'), '/', 'nothing strange is echoed');
   assert.equal((await fetch(`${s.base}/api/email/unsubscribe?t=${unsub}`, { method: 'PUT' })).status, 405);
   assert.equal((await post(unsub, 'something=else')).status, 400); assert.equal((await post(unsub, '{"List-Unsubscribe":"One-Click"}', 'application/json')).status, 415);
@@ -127,18 +137,19 @@ test('one-click unsubscribe (RFC 8058): the provider\'s cross-site POST with no 
 
 test('UI: an email button opens a panel that says exactly what it will do; Cancel changes nothing and Confirm does it; signed out too; a dead link says so', async (t) => {
   let a;
-  const withPace = async (f, parent) => { const { child } = await f.child(parent.ctx, 'Allison'); a = { ...parent, childId: child.id }; return { search: `?email=${token(f, a)}`, pathname: '/' }; };
+  const withPace = async (f, parent) => { const { child } = await f.child(parent.ctx, 'Allison'); a = { ...parent, childId: child.id }; return { search: '', hash: `#email=${token(f, a)}`, pathname: '/' }; };
   const h = await uiFixture(t, { location: withPace });
   assert.ok(h.root.textContent.includes('Confirm this change')); assert.ok(h.root.textContent.includes('Set Allison’s question time to 75% (now 100%).'), h.root.textContent.slice(0, 300));
   assert.equal(h.requests.filter((r) => r.path === '/api/email/apply').length, 0, 'opening the link applied nothing');
   await h.click('Cancel'); assert.ok(h.message.textContent.includes('Nothing was changed.')); assert.ok(h.root.textContent.includes('Email updates'), 'back in Mission Control'); assert.equal(await prog(h.f, a), null);
   const g = await uiFixture(t, { location: withPace });
   await g.click('Confirm'); assert.equal((await prog(g.f, a)).pacePercent, 75); assert.ok(g.message.textContent.includes('Allison’s question time is now 75%.'), g.message.textContent);
-  const u = await uiFixture(t, { signedIn: false, location: async (f) => ({ search: `?email=${unsubToken(f, await f.family('parentA', 2))}`, pathname: '/' }) });
+  const u = await uiFixture(t, { signedIn: false, location: async (f) => ({ search: '', hash: `#email=${unsubToken(f, await f.family('parentA', 2))}`, pathname: '/' }) });
   assert.ok(u.root.textContent.includes('Stop the weekly progress report for p…@example.test. Account and security emails still come.'), u.root.textContent.slice(0, 300));
   await u.click('Confirm'); assert.equal((await u.f.store.get('emailPrefs/parentA')).progress, false); assert.ok(u.root.textContent.includes('Sign in as parent'), 'back at sign-in, signed out as before');
-  const d = await uiFixture(t, { location: async (f, parent) => ({ search: `?email=${unsubToken(f, parent, { w: '2025-W30' })}`, pathname: '/' }) }); // a year and a week ago: expired
+  const d = await uiFixture(t, { location: async (f, parent) => ({ search: '', hash: `#email=${unsubToken(f, parent, { w: '2025-W30' })}`, pathname: '/' }) }); // a year and a week ago: expired
   assert.ok(d.root.textContent.includes('This link no longer works.') && d.root.textContent.includes('work for 14 days')); await d.click('Close'); assert.ok(d.root.textContent.includes('Email updates'));
-  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8'), boot = app.slice(app.indexOf("if (returned?.get('email'))"));
-  assert.ok(boot.indexOf("history.replaceState(null, '', location.pathname)") < boot.indexOf('emailScreen(token)'), 'the address is tidied first'); assert.ok(app.indexOf("if (returned?.get('email'))") < app.indexOf('\nguardBack();'));
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8'), boot = app.slice(app.indexOf("if (fragment?.get('email'))"));
+  assert.ok(boot.indexOf("history.replaceState(null, '', location.pathname)") < boot.indexOf('emailScreen(token)'), 'the address is tidied first'); assert.ok(app.indexOf("if (fragment?.get('email'))") < app.indexOf('\nguardBack();'));
+  assert.ok(!app.includes("returned?.get('email')"), 'the query is no way in: a token there would sit in request logs');
 });

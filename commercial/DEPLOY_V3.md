@@ -378,7 +378,10 @@ reported week, arrive after its email, and no report counts them. One week per r
 a run near a daylight-saving change or a midnight could report two different weeks, and never the same one twice.
 
 The buttons in an email open the app, which says what the button does and changes nothing until the parent taps Confirm.
-Mail apps get RFC 8058 one-click unsubscribe at `https://PROJECT_ID.web.app/api/email/unsubscribe`. The web service needs
+Mail apps get RFC 8058 one-click unsubscribe at `https://PROJECT_ID.web.app/api/email/unsubscribe`. The buttons carry their
+tokens in the URL fragment (`/#email=…`), which never reaches a server or its request logs; the List-Unsubscribe URL has to
+carry its stop-the-report token in the query, because the mailbox provider posts to it, so Cloud Run's request log does record
+those tokens, which can switch the weekly report off and nothing else (`PRIVACY.md`). The web service needs
 nothing new: the buttons are signed with `SESSION_SECRET` (under a key derived for them alone), which it already has, and
 rotating that secret voids every button already sent.
 

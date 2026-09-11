@@ -1,7 +1,8 @@
 // Email (email-v1, the owner's request of 11 Sep 2026): the parent's consent at sign-up and the email preferences behind
 // Mission Control's switches. As everywhere else, the browser only sends choices; the server decides, records and audits.
 //
-// emailPrefs/{uid} = { progress, news, version, updatedAt, changes: [the last 20 of { at, progress, news, source }] }
+// emailPrefs/{uid} = { progress, news, version, updatedAt, changes: [20 rows of { at, progress, news, source, version }: the sign-up
+//   row, which is the consent itself and is kept for good, then the newest of the rest] }
 //  • progress: the weekly progress report. With no record it is on: the report is part of the service the required sign-up box
 //    describes, and every report carries its own way out.
 //  • news: news and offers. With no record it is off: it needs a recorded yes. It is a separate, optional, unticked box because
@@ -55,10 +56,16 @@ const CHANGES_MAX = 20;
 export const prefsPath = (uid) => `emailPrefs/${uid}`;
 /** What the switches read: the record's state, or the defaults when none was ever written. */
 export const prefsOf = (doc) => ({ progress: doc?.progress !== false, news: doc?.news === true });
-/** The record after a change: the whole new state, and a row saying when, what and through which door. */
+/**
+ * The record after a change: the whole new state, and a row saying when, what, through which door and under which version of the
+ * wording. The sign-up row is never rotated out; the newest of the others fill the rest of the twenty. null when nothing changes:
+ * the switches saved as they are add no row (the app sends both switches every time).
+ */
 export function withChange(doc, patch, source, now) {
   const was = prefsOf(doc), state = { progress: typeof patch.progress === 'boolean' ? patch.progress : was.progress, news: typeof patch.news === 'boolean' ? patch.news : was.news };
-  return { ...state, version: EMAIL_VERSION, updatedAt: now, changes: [...(Array.isArray(doc?.changes) ? doc.changes : []), { at: now, ...state, source }].slice(-CHANGES_MAX) };
+  if (state.progress === was.progress && state.news === was.news) return null;
+  const rows = [...(Array.isArray(doc?.changes) ? doc.changes : []), { at: now, ...state, source, version: EMAIL_VERSION }], first = rows.find((r) => r?.source === 'signup'), rest = rows.filter((r) => r !== first);
+  return { ...state, version: EMAIL_VERSION, updatedAt: now, changes: first ? [first, ...rest.slice(-(CHANGES_MAX - 1))] : rest.slice(-CHANGES_MAX) };
 }
 const flags = (body, keys) => { for (const k of keys) if (body[k] !== undefined && typeof body[k] !== 'boolean') fail(400, 'INVALID_REQUEST'); };
 
@@ -66,16 +73,21 @@ export class Email {
   constructor({ foundation, store, identity, secret, now = Date.now }) { this.foundation = foundation; this.store = store; this.identity = identity; this.secret = secret; this.now = now; }
   /**
    * The sign-up boxes, recorded the moment the account exists: the browser posts the new account's own ID token right after the
-   * provider created it. Only the token's signature is checked (no second factor exists yet, and this records the account's own
-   * choice and nothing else), and only an absent record is written, so a second call, or anyone else holding the token, changes
-   * nothing. parents/{uid} is never touched: login() creates it, in the shape it and authorize() expect.
+   * provider created it, with both boxes as ticked; the required one must be (progress: true) or nothing is recorded. Only the
+   * token's signature is checked (no second factor exists yet, and this records the account's own choice and nothing else), and
+   * only an absent record is written, so a second call, or anyone else holding the token, changes nothing. An account being
+   * deleted is refused. parents/{uid} is never created here: login() makes it, in the shape it and authorize() expect.
    */
   async consent(body) {
-    object(body, ['idToken', 'news']); text(body.idToken, 20, 8192); flags(body, ['news']);
+    object(body, ['idToken', 'progress', 'news']); text(body.idToken, 20, 8192); flags(body, ['progress', 'news']);
+    if (body.progress !== true) fail(400, 'CONSENT_REQUIRED');
     const uid = await this.identity.verifyUid(body.idToken); if (!uid) fail(401, 'INVALID_LOGIN');
     await this.store.transaction(async (tx) => {
-      if (await tx.get(prefsPath(uid))) return; // recorded already: from here on the switches change it
-      tx.set(prefsPath(uid), withChange(null, { progress: true, news: body.news === true }, 'signup', this.now()));
+      const recorded = await tx.get(prefsPath(uid)), parent = await tx.get(`parents/${uid}`);
+      if (parent?.identityDeletion) fail(403, 'ACCOUNT_DELETED');
+      if (recorded) return; // recorded already: from here on the switches change it
+      const now = this.now(), state = { progress: true, news: body.news === true };
+      tx.set(prefsPath(uid), { ...state, version: EMAIL_VERSION, updatedAt: now, changes: [{ at: now, ...state, source: 'signup', version: EMAIL_VERSION }] });
       this.foundation.audit(tx, 'email.consent_recorded', uid);
     });
     return { ok: true };
@@ -86,9 +98,9 @@ export class Email {
     if (body.progress === undefined && body.news === undefined) fail(400, 'INVALID_REQUEST');
     return this.store.transaction(async (tx) => {
       const { s } = await this.foundation.authorize(tx, ctx, ['parent'], false); this.foundation.requireRecent(s);
-      const next = withChange(await tx.get(prefsPath(s.uid)), body, 'settings', this.now());
-      tx.set(prefsPath(s.uid), next); this.foundation.audit(tx, 'email.prefs_changed', s.uid, s.familyId);
-      return prefsOf(next);
+      const old = await tx.get(prefsPath(s.uid)), next = withChange(old, body, 'settings', this.now());
+      if (next) { tx.set(prefsPath(s.uid), next); this.foundation.audit(tx, 'email.prefs_changed', s.uid, s.familyId); } // as they were: no row, no audit
+      return prefsOf(next || old);
     });
   }
 
@@ -127,7 +139,7 @@ export class Email {
   }
   write(tx, p, ctx) {
     if (p.a !== 'unsub') tx.set(`families/${p.f}/learning/${p.c}`, { ...ctx.prog, ...(p.a === 'pace' ? { pacePercent: p.v } : { scanFocus: p.v }) });
-    else if (prefsOf(ctx.prefs).progress !== false) tx.set(prefsPath(p.u), withChange(ctx.prefs, { progress: false }, 'email', this.now())); // already off: no second change row
+    else { const next = withChange(ctx.prefs, { progress: false }, 'email', this.now()); if (next) tx.set(prefsPath(p.u), next); } // already off: no second change row
     this.foundation.audit(tx, 'email.action_applied', p.u, p.f, p.c || null, { kind: p.a, week: p.w });
     return { ok: true, message: done(p, ctx.child?.nickname) };
   }

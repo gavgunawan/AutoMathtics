@@ -68,9 +68,10 @@ test('one email for the week, to the owner\'s verified address: buttons that exp
   const unsub = m.headers['List-Unsubscribe'].match(/^<https:\/\/pilot\.example\.test\/api\/email\/unsubscribe\?t=(v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)>$/)[1];
   assert.deepEqual(decode(unsub), { a: 'unsub', v: 'progress', u: 'parentA', f: a.familyId, w: WEEK, e: linkExpiry('unsub', WEEK) });
   assert.equal(linkExpiry('unsub', WEEK), Date.UTC(2026, 7, 31) + 365 * DAY, 'the Monday after the week, plus a year: from the week, not the clock');
-  const pace = m.html.match(/\?email=(v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)"[^>]*>Set Allison’s pace to 75%/)[1];
+  const pace = m.html.match(/"https:\/\/pilot\.example\.test\/#email=(v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)"[^>]*>Set Allison’s pace to 75%/)[1];
   assert.deepEqual(decode(pace), { a: 'pace', c: a.ids[0], v: 75, u: 'parentA', f: a.familyId, w: WEEK, e: linkExpiry('pace', WEEK) });
-  assert.ok(m.text.includes(`Stop weekly reports: ${ORIGIN}/?email=${unsub}`), 'the footer opens the app with the same token');
+  assert.ok(m.text.includes(`Stop weekly reports: ${ORIGIN}/#email=${unsub}`), 'the footer opens the app with the same token, in the fragment');
+  assert.ok(!/\?email=/.test(m.html + m.text), 'no button puts its token where a request log would keep it');
   const rec = await f.store.get(`reports/${a.familyId}:${WEEK}`);
   assert.deepEqual(Object.keys(rec).sort(), ['attempts', 'claimId', 'claimedAt', 'createdAt', 'expireAt', 'familyId', 'providerId', 'reason', 'status', 'updatedAt', 'week'], 'status only, no content');
   assert.equal(rec.status, 'sent'); assert.equal(rec.providerId, m.id); assert.equal(rec.attempts, 1); assert.equal(rec.expireAt, f.now() + REPORT_TTL_MS); assert.equal(REPORT_TTL_MS, 400 * DAY);
@@ -188,7 +189,7 @@ test('a dry run decides every family and claims, sends and audits nothing; the w
 test('the operator\'s preview renders with inert links whatever the switches say, and never claims or sends', async () => {
   const f = fixture(), a = await home(f, 'parentA'); await f.email.setPrefs(a.ctx, { progress: false });
   const { mailer, reports } = job(f), p = await reports.preview(a.familyId);
-  assert.equal(p.week, WEEK); assert.equal(p.answered, true); assert.ok(p.html.includes('Set Allison’s pace to 75%')); assert.ok(p.html.includes(`${ORIGIN}/?email=preview`)); assert.ok(!/v1\.[A-Za-z0-9_-]+\./.test(p.html), 'no live token');
+  assert.equal(p.week, WEEK); assert.equal(p.answered, true); assert.ok(p.html.includes('Set Allison’s pace to 75%')); assert.ok(p.html.includes(`${ORIGIN}/#email=preview`)); assert.ok(!/v1\.[A-Za-z0-9_-]+\./.test(p.html), 'no live token');
   assert.equal(mailer.sent.length, 0); assert.equal((await f.store.list('reports')).length, 0);
   await assert.rejects(reports.preview(a.familyId, 'soon'), (e) => e.code === 'WEEK_INVALID'); await assert.rejects(reports.preview(randomUUID()), (e) => e.code === 'FAMILY_NOT_FOUND');
 });
