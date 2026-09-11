@@ -540,6 +540,7 @@ export class Support {
     const members = await this.store.entries(`families/${familyId}/members`), uids = members.map(([uid]) => uid);
     await this.sweepWhere('sessions', 'familyId', familyId, batch, familyId, 'loginSessions');
     for (const uid of uids) await this.sweepWhere('sessions', 'uid', uid, batch, familyId, 'loginSessions');
+    await this.sweepWhere('outbox', 'familyId', familyId, batch, familyId, 'outbox'); // email-v1: the fake mail provider's rendered reports go now, not in 14 days
     await this.progress(familyId, 'sessions');
     // phase 2 — each child's learning and game data, bounded batches, then the progress document
     for (const childId of family.childIds || []) {

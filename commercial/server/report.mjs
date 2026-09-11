@@ -5,8 +5,14 @@
 // The report reads history only: a session document expires after a day (learning.mjs), the progress document keeps the newest
 // 60 rows, and each finished row carries its answers (qlog). A row counts for a week when its `date`, written in the family's
 // time zone when the session ended, falls on the week's Monday to Sunday.
-import { LEVELS, PAPERS_PER_SESSION, dayISO, weekISO, trk, scanUnlocked } from './progress.mjs';
+import { randomUUID } from 'node:crypto';
+import { fail, uuid } from './security.mjs';
+import { LEVELS, PAPERS_PER_SESSION, dayISO, weekISO, trk, scanUnlocked, normalizeProgress } from './progress.mjs';
 import { answersOf, styleStats, classes, quantile, timedOut } from './styles.mjs';
+import { effectiveEntitlement } from './subscription.mjs';
+import { DEFAULT_TIME_ZONE, AUDIT_RETENTION_MS } from './service.mjs';
+import { prefsOf, prefsPath, signEmailToken, LINK_ACTIONS } from './email.mjs';
+import { renderReport, buttonsFor } from './report-email.mjs';
 
 const DAY = 86_400_000;
 export const HISTORY_KEPT = 60; // learning.mjs HISTORY_MAX: a busier week is reported from the rows still kept, and says so
@@ -112,4 +118,117 @@ export function buildFamilyReport({ familyLabel = null, children, week }) {
   const kids = children.map((c) => ({ childId: c.id, ...buildChildReport({ ...inputsOf(c.progress), week, nickname: c.nickname }) }));
   const sum = (k) => kids.reduce((a, c) => a + c.totals[k], 0), questions = sum('questions'), correct = sum('correct');
   return { week, weekLabel: weekLabel(week), familyLabel, children: kids, totals: { sessions: sum('sessions'), questions, correct, accuracy: questions ? correct / questions : null }, answered: questions > 0 };
+}
+
+// ---- the job: one email per family per week (scripts/report.mjs; Cloud Shell block G runs it every Monday at 07:00 Singapore)
+// reports/{familyId}:{week} is the claim and its outcome, and nothing else: sending → sent | skipped | failed, with the attempts,
+// the provider's id or the reason. No report content is kept here; the fake provider's outbox holds a rendered copy for 14 days.
+export const REPORT_CLAIM_MS = 15 * 60_000, REPORT_TTL_MS = 400 * DAY;
+export class Reports {
+  constructor({ store, identity, mailer, secret, origin, operator = 'report-job', now = Date.now, batch = 50, log = () => {} }) {
+    this.store = store; this.identity = identity; this.mailer = mailer; this.secret = secret; this.origin = origin; this.operator = operator; this.now = now; this.batch = batch; this.log = log;
+  }
+  /** Every family in pages (or the one named); one outcome each, one audit row for the run. `failed` makes the CLI exit 2. */
+  async run({ week = null, familyId = null, dryRun = false } = {}) {
+    if (week !== null && weekStart(week) === null) fail(400, 'WEEK_INVALID');
+    const results = [], visit = async (id, family) => {
+      const r = await this.one(id, family, { week, dryRun }); results.push({ familyId: id, ...r });
+      this.log({ event: 'weekly_report', familyId: id, week: r.week || null, status: r.status, reason: r.reason || null, dryRun }); // never an address, never a token
+    };
+    if (familyId !== null) { uuid(familyId); const family = await this.store.get(`families/${familyId}`); if (!family) fail(404, 'FAMILY_NOT_FOUND'); await visit(familyId, family); }
+    else for (let after = null; ;) { const page = await this.store.entriesAfter('families', after, this.batch); for (const [id, f] of page) await visit(id, f); if (page.length < this.batch) break; after = page.at(-1)[0]; }
+    const n = (status) => results.filter((r) => r.status === status).length;
+    const summary = { sent: n('sent'), skipped: n('skipped'), failed: n('failed'), already: n('already'), busy: n('busy'), wouldSend: n('would_send') };
+    if (!dryRun) await this.store.transaction(async (tx) => tx.set(`audit/${randomUUID()}`, { action: 'report.run', uid: this.operator, familyId: null, childId: null, week, ...summary, at: this.now(), expireAt: this.now() + AUDIT_RETENTION_MS }));
+    return { results, ...summary };
+  }
+  async one(familyId, family, { week: forced = null, dryRun = false } = {}) {
+    if (family.deleted === true || family.deletion?.status === 'executing') return { status: 'skipped', reason: 'family_deleted' }; // a tombstone is no family: no record
+    const week = forced || lastWeek(this.now(), family.timeZone || DEFAULT_TIME_ZONE), key = `reports/${familyId}:${week}`;
+    const claim = dryRun ? null : await this.claim(key, familyId, week);
+    if (claim && !claim.mine) return { week, status: claim.status, reason: claim.reason };
+    const end = async (status, extra) => { if (claim) await this.settle(key, claim.claimId, { status, ...extra }); return { week, status, ...extra }; };
+    let ready;
+    try { ready = await this.prepare(familyId, family, week); } catch (error) { return end('failed', { reason: error?.code || 'PREPARE_FAILED' }); }
+    if (ready.skip) return end('skipped', { reason: ready.skip });
+    const to = await this.address(ready.uid);
+    if (!to) return end('skipped', { reason: 'no_verified_address' });
+    if (dryRun) return { week, status: 'would_send', reason: null };
+    const links = this.links(ready.uid, familyId, ready.report), mail = renderReport(ready.report, links);
+    try {
+      const sent = await this.mailer.send({ to, ...mail, familyId, idempotencyKey: `report:${familyId}:${week}`, tags: [{ name: 'kind', value: 'weekly_report' }, { name: 'week', value: week }],
+        headers: { 'List-Unsubscribe': `<${links.oneClick}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' } }); // RFC 8058 one-click
+      return end('sent', { providerId: sent.id });
+    } catch (error) { return end('failed', { reason: error?.code || 'SEND_FAILED' }); }
+  }
+  /** The claim: one report per family and week however many runs overlap. Sent or skipped is final; a failure, or a claim left
+   * sending for 15 minutes, is taken over (the provider's Idempotency-Key makes a retry after a lost answer the same email). */
+  async claim(key, familyId, week) {
+    const claimId = randomUUID(), now = this.now();
+    return this.store.transaction(async (tx) => {
+      const old = await tx.get(key);
+      if (old && (old.status === 'sent' || old.status === 'skipped')) return { mine: false, status: 'already', reason: old.status };
+      if (old && old.status === 'sending' && old.claimedAt > now - REPORT_CLAIM_MS) return { mine: false, status: 'busy', reason: 'claimed_by_another_run' };
+      tx.set(key, { familyId, week, status: 'sending', claimId, claimedAt: now, attempts: (old?.attempts || 0) + 1, providerId: null, reason: null, createdAt: old?.createdAt || now, updatedAt: now, expireAt: now + REPORT_TTL_MS });
+      return { mine: true, claimId };
+    });
+  }
+  /** The outcome lands on the claim that made it: a run whose claim was taken over leaves the newer one alone. */
+  async settle(key, claimId, patch) {
+    await this.store.transaction(async (tx) => { const cur = await tx.get(key); if (cur && cur.claimId === claimId) tx.set(key, { ...cur, ...patch, updatedAt: this.now() }); });
+  }
+  /** Who the report is for and what it says, or why there is none (the order of the checks is the order of the reasons). */
+  async prepare(familyId, family, week) {
+    const now = this.now(), e = effectiveEntitlement(family, now);
+    if (!e || e.status !== 'active' || !(e.accessUntil > now)) return { skip: 'no_entitlement' };
+    const children = await this.children(familyId, family); if (!children.length) return { skip: 'no_children' };
+    const uid = await this.owner(familyId); if (!uid) return { skip: 'no_owner' };
+    if (!prefsOf(await this.store.get(prefsPath(uid))).progress) return { skip: 'progress_off' };
+    const report = buildFamilyReport({ familyLabel: family.label || null, children, week });
+    return report.answered ? { uid, report } : { skip: 'no_play' };
+  }
+  /** The family's owner, as the membership and the parent record both say (one owner per family in this release). */
+  async owner(familyId) {
+    for (const [uid, m] of await this.store.entries(`families/${familyId}/members`)) {
+      if (m.role !== 'owner' || m.status !== 'active') continue;
+      const parent = await this.store.get(`parents/${uid}`);
+      if (parent && parent.familyId === familyId && !parent.identityDeletion && parent.deleted !== true) return uid;
+    }
+    return null;
+  }
+  /** Every seated, active child with its progress normalised, in the family's order. */
+  async children(familyId, family) {
+    const out = [];
+    for (const id of family.activeChildIds || []) {
+      if (!(family.childIds || []).includes(id)) continue;
+      const c = await this.store.get(`families/${familyId}/children/${id}`);
+      if (c && c.status === 'active') out.push({ id, nickname: c.nickname, progress: normalizeProgress(await this.store.get(`families/${familyId}/learning/${id}`)) });
+    }
+    return out;
+  }
+  /** The address the identity provider holds now, verified and not disabled, or none: nothing goes to an unverified address. */
+  async address(uid) {
+    let user; try { user = await this.identity.lookup(uid, true); } catch { return null; }
+    return user && user.disabled !== true && user.emailVerified === true && typeof user.email === 'string' && user.email ? user.email : null;
+  }
+  /** The buttons' links: a signed token each, opening the app (/?email=…), which shows what it does and waits for a tap. */
+  links(uid, familyId, report) {
+    const app = `${this.origin}/`, until = (days) => this.now() + days * DAY, token = (payload) => signEmailToken(this.secret, { ...payload, u: uid, f: familyId, w: report.week });
+    const unsub = token({ a: 'unsub', v: 'progress', e: until(LINK_ACTIONS.unsub) }), children = {};
+    for (const c of report.children) {
+      const b = buttonsFor(c), l = {};
+      if (b.pace !== null) l.pace = `${app}?email=${token({ a: 'pace', c: c.childId, v: b.pace, e: until(LINK_ACTIONS.pace) })}`;
+      if (b.focus !== null) l.focus = `${app}?email=${token({ a: 'focus', c: c.childId, v: b.focus, e: until(LINK_ACTIONS.focus) })}`;
+      children[c.childId] = l;
+    }
+    return { app, settings: app, unsubscribe: `${app}?email=${unsub}`, oneClick: `${this.origin}/api/email/unsubscribe?t=${unsub}`, children };
+  }
+  /** The operator's look at a family's email: rendered with inert links whatever the switches say; it never claims and never sends. */
+  async preview(familyId, week = null) {
+    uuid(familyId); if (week !== null && weekStart(week) === null) fail(400, 'WEEK_INVALID');
+    const family = await this.store.get(`families/${familyId}`); if (!family || family.deleted === true) fail(404, 'FAMILY_NOT_FOUND');
+    const report = buildFamilyReport({ familyLabel: family.label || null, children: await this.children(familyId, family), week: week || lastWeek(this.now(), family.timeZone || DEFAULT_TIME_ZONE) });
+    const inert = `${this.origin}/?email=preview`, children = Object.fromEntries(report.children.map((c) => [c.childId, { pace: inert, focus: inert }]));
+    return { week: report.week, answered: report.answered, ...renderReport(report, { app: `${this.origin}/`, settings: `${this.origin}/`, unsubscribe: inert, children }) };
+  }
 }

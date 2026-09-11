@@ -9,7 +9,8 @@ const MINUTE = 60_000, DAY = 24 * 60 * MINUTE;
 // Remember this device (owner's request, 11 Sep 2026): how long a session lasts on a device the parent ticked it on.
 export const REMEMBER_MS = 30 * DAY;
 const FAMILY_LIMIT = 20; // Pilot safety cap, independent of paid seat count.
-const AUDIT_RETENTION_MS = 400 * DAY, OPERATION_RETENTION_MS = DAY;
+export const AUDIT_RETENTION_MS = 400 * DAY; // the weekly report job writes its run's row with the same expiry (report.mjs)
+const OPERATION_RETENTION_MS = DAY;
 export const DEFAULT_TIME_ZONE = 'Asia/Singapore'; // the family's calendar day for streaks; parent-editable later
 const sessionKey = (token) => /^[A-Za-z0-9_-]{43}$/.test(token || '') ? sha256(token) : null;
 

@@ -9,9 +9,19 @@
 //  • source: which door a change came through: 'signup' (the boxes), 'settings' (Mission Control), 'email' (a button in an email).
 // The record belongs to the sign-in account, not to the family, and never holds the address: the address stays with the
 // identity provider and is read when a report is sent. Deleting the sign-in account deletes the record (server/support.mjs).
+import { createHmac } from 'node:crypto';
 import { fail, object, text } from './security.mjs';
 
 export const EMAIL_VERSION = 'email-v1';
+// ---- the buttons in an email: v1.<base64url(json)>.<base64url(hmac-sha256)>, the payload { a: action, u: parent uid,
+// f: family, c: child, v: value, w: ISO week, e: expiry }. The key is an HMAC of SESSION_SECRET under its own label, so a
+// token can never pass for a session, a CSRF token or a pre-authentication cookie, all of which the same secret signs.
+export const LINK_ACTIONS = Object.freeze({ focus: 14, pace: 14, unsub: 365 }); // how many days each kind of button works
+const linkKey = (secret) => createHmac('sha256', secret).update('email-links-v1').digest();
+export function signEmailToken(secret, payload) {
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  return `v1.${body}.${createHmac('sha256', linkKey(secret)).update(`v1.${body}`).digest('base64url')}`;
+}
 const CHANGES_MAX = 20;
 export const prefsPath = (uid) => `emailPrefs/${uid}`;
 /** What the switches read: the record's state, or the defaults when none was ever written. */
