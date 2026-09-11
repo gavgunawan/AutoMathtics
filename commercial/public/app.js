@@ -918,7 +918,7 @@ function streakNote(run, shields) {
 }
 // a track card (2929-2957): the track's colour (mint once the sector is done), what comes next, the sector's five check
 // points as v2's tier map (crowns and numbers, never colour alone), and the button that starts the run the server picks
-function trackCard(t, p, canStart) {
+function trackCard(t, p, start) {
   const T = TRACK[t], done = p.done, due = p.bossDue, passed = Math.min(p.paper - 1, 100), sp = Math.min(p.paper, 100);
   const live = Math.min(5, Math.floor(passed / 20) + (passed > 0 && passed % 20 === 0 ? 0 : 1));
   const card = el('div', null, `track-card ${done ? 'c-mint' : T.c}`), head = el('div', null, 'track-head'), status = el('p', null, 'track-status');
@@ -935,8 +935,8 @@ function trackCard(t, p, canStart) {
     map.append(el('span', null, `tier-bar${cleared ? ' passed' : here ? ' lit' : ''}`), stop);
   }
   card.append(head, status, map);
-  if (canStart) card.append(button(due ? `👑 CHECK POINT T${p.bossCleared + 1} ▶` : done ? '🔁 Practice ▶' : `${T.emoji} Start ${T.label} ▶`,
-    () => startRun({ track: t }), `primary track-go${due || (!done && t === 'nav') ? ' gold' : done ? ' done' : ''}`));
+  if (start) card.append(button(due ? `👑 CHECK POINT T${p.bossCleared + 1} ▶` : done ? '🔁 Practice ▶' : `${T.emoji} Start ${T.label} ▶`,
+    start, `primary track-go${due || (!done && t === 'nav') ? ' gold' : done ? ' done' : ''}`));
   return card;
 }
 // a pending placement test stands where the track cards would (they wait for it)
@@ -1033,10 +1033,12 @@ async function childScreen(after = {}) {
   box.append(homeIntro(e, n), tiles, streakNote(g.liveRun || 0, w.shields || 0));
   if (st.active) { const s = st.active.session; box.append(el('p', `A ${s.mode === 'placement' ? 'placement test' : `${TRACK[s.track].name} session`} is open at question ${s.index + 1} of ${s.count}.`, 'notice'), button('Continue', () => playView(s, st.active.question), 'primary')); }
   const tracks = el('div', null, 'track-grid');
-  if (pending) tracks.append(placementCard(st)); else for (const t of ['engine', 'nav']) tracks.append(trackCard(t, st[t], !st.active));
+  if (pending) tracks.append(placementCard(st)); else for (const t of ['engine', 'nav']) tracks.append(trackCard(t, st[t], st.active ? null : () => beginRun(t, st)));
   box.append(tracks); if (!pending) box.append(jumpBanner(e, n));
   const rocket = rocketPanel(g); if (rocket) { if (after.boom === true) rocket.append(moneySplash('big')); box.append(rocket); }
-  const nav = el('div', null, 'row-buttons home-nav'); nav.append(button('🛒 Shop', shopScreen, 'ghost'), button('🗺 Map', mapScreen, 'ghost')); box.append(nav);
+  const nav = el('div', null, 'row-buttons home-nav'); // v2's four (3016-3021); How to opens on Engine, with a tab for Navigator
+  nav.append(button('🛒 Shop', shopScreen, 'ghost'), button('🗺 Map', mapScreen, 'ghost'), button('📖 How to', () => howToScreen('engine', { engine: e.level, nav: n.level }), 'ghost'), button('🎓 Guide', guideScreen, 'ghost'));
+  box.append(nav);
   if (st.scan?.available && !st.active && !pending) box.append(button('🧠 SYSTEM SCAN — weekly ×2 loot ▶', () => startRun({ track: 'engine', mode: 'scan' }), 'ghost c-violet scan-go'));
   else if (st.scan?.doneThisWeek) box.append(el('p', '🧠 System Scan done this week · resets Monday', 'subtle'));
   box.append(button('Parent sign-in', () => signInScreen(), 'text-button'));
@@ -1277,12 +1279,7 @@ function drawMap(st, g, mt) {
   const theme = lookup(MAP_THEMES, w.activeMap, null), cps = theme ? theme.cps : CP_COLORS, veh = gameItem(w.activeVehicle)?.kind === 'vehicle' ? gameItem(w.activeVehicle) : null;
   const box = panel(`🗺 SECTOR ${p.levelId} ROUTE · ${child.nickname.toUpperCase()}`, '', '', 'map');
   onBack = childScreen; applyLook(w);
-  const tabs = el('div', null, 'map-tabs'); tabs.setAttribute('role', 'tablist'); tabs.setAttribute('aria-label', 'track');
-  for (const t of ['engine', 'nav']) {
-    const T = TRACK[t], on = t === mt, tab = button(`${T.emoji} ${T.name}${st[t].done ? ' ✓' : ''}`, () => drawMap(st, g, t), `tiny map-tab ${T.c}${on ? ' on' : ''}`);
-    tab.setAttribute('role', 'tab'); tab.setAttribute('aria-selected', String(on)); tabs.append(tab);
-  }
-  box.append(tabs);
+  box.append(trackTabs(mt, (t) => drawMap(st, g, t), (t) => `${TRACK[t].emoji} ${TRACK[t].name}${st[t].done ? ' ✓' : ''}`));
   const label = `Sector ${p.levelId} route: ${p.bossCleared} of 5 check points cleared, ${passed} of 100 papers passed`;
   if (canDraw()) {
     const map = el('div', null, `tronmap ${accClass(child)}`);
@@ -1303,6 +1300,128 @@ function drawMap(st, g, mt) {
     el('p', '🏆 TROPHY CASE', 'log-title map-title'), ...trophyCase(st, child));
   const scan = scanCard(st); if (scan) box.append(scan);
   const row = el('div', null, 'row-buttons'); row.append(button('Back', childScreen, 'ghost')); box.append(row);
+}
+// ---- How to (v2 3076-3107) and the Guide (2550-2575): v2's static pages. How to explains the track's sector a line at a
+// time, then its tips, and opens by itself before a new sector's first paper; the Guide walks the loot, the shop, the rewards
+// and the map in seven slides. Nothing on either is sent anywhere. ----
+// Engine's How to for each sector (HOWTO 434-556): the idea, a worked example, the tips and hacks
+const HOWTO = [
+  { title: 'Addition with carrying', slides: [
+    { title: 'The idea', lines: ['Add column by column, starting from the RIGHT (the ones).', 'If a column adds to 10 or more, write the ones digit…', '…and CARRY the 1 to the next column on the left.'] },
+    { title: 'Example: 478 + 256', lines: ['Ones: 8 + 6 = 14 → write 4, carry 1', 'Tens: 7 + 5 + 1(carry) = 13 → write 3, carry 1', 'Hundreds: 4 + 2 + 1(carry) = 7 → write 7', 'Answer: 734 ✓'] }],
+    tips: ['HACK — Make tens: 9 + 7? Take 1 from the 7 → 10 + 6 = 16. Instant.', "Always whisper the carry: 'fourteen — write 4, carry 1'.", 'Check with estimation: 478+256 ≈ 480+260 = 740. Your answer should be close.'] },
+  { title: 'Subtraction with borrowing', slides: [
+    { title: 'The idea', lines: ['Subtract column by column from the RIGHT.', 'If the top digit is smaller, BORROW 10 from the left neighbour.', 'The neighbour goes down by 1; your digit goes up by 10.'] },
+    { title: 'Example: 402 − 178', lines: ["Ones: 2 − 8 can't do → borrow. But tens is 0!", 'Borrow chain: 4 becomes 3, the 0 becomes 10, then 10 becomes 9 and ones becomes 12.', 'Ones: 12 − 8 = 4 · Tens: 9 − 7 = 2 · Hundreds: 3 − 1 = 2', 'Answer: 224 ✓'] }],
+    tips: ['HACK — Count UP instead: 178 → 200 is 22, 200 → 402 is 202. 22+202 = 224.', 'Zeros in the middle mean a borrow chain — slow down there.', 'Check by adding back: 224 + 178 must equal 402.'] },
+  { title: 'Multiplication', slides: [
+    { title: 'The idea', lines: ['Know your tables 2–9 cold — everything is built on them.', 'Big × small: multiply each digit from the right, carry like addition.', 'Big × big: multiply by ones, then by tens (shift one place left), then ADD.'] },
+    { title: 'Example: 46 × 27', lines: ['46 × 7 = 322', '46 × 20 = 920', '322 + 920 = 1,242 ✓'] }],
+    tips: ['HACK — ×9 finger trick: fold the finger of the number; fingers left/right are the answer.', 'HACK — ×5 is ×10 halved: 46×5 = 460÷2 = 230.', 'Break numbers up: 46×27 = 46×25 + 46×2 if 25s are easier for you.'] },
+  { title: 'Division', slides: [
+    { title: 'The idea', lines: ["Division is multiplication backwards: 72 ÷ 8 asks '8 × ? = 72'.", 'For long numbers, work left to right: how many times does it fit? Multiply, subtract, bring down.'] },
+    { title: 'Example: 852 ÷ 4', lines: ['8 ÷ 4 = 2 → write 2', '5 ÷ 4 = 1 remainder 1 → write 1, keep the 1', '12 ÷ 4 = 3 → write 3', 'Answer: 213 ✓ (check: 213 × 4 = 852)'] }],
+    tips: ['Estimate first: 852 ÷ 4 ≈ 800 ÷ 4 = 200-ish.', 'HACK — Halving: ÷4 is halve twice, ÷8 is halve three times.', 'Always check with the times table going backwards.'] },
+  { title: 'Fractions I — same denominator', slides: [
+    { title: 'The idea', lines: ['The bottom number (denominator) is the SIZE of the pieces.', 'Same size pieces? Just add or subtract the TOP numbers.', "Then SIMPLIFY: divide top and bottom by the same number until you can't."] },
+    { title: 'Example: 5/12 + 1/12', lines: ['Same pieces (twelfths): 5 + 1 = 6 → 6/12', 'Simplify: divide both by 6 → 1/2 ✓'] }],
+    tips: ['Type fractions with the ∕ key: 1∕2.', 'HACK — To simplify fast, try dividing by 2, then 3, then 5.', "If top = bottom, the answer is just 1. If the bottom is 1, it's a whole number."] },
+  { title: 'Fractions II — different denominators', slides: [
+    { title: 'The idea', lines: ["Different size pieces can't be added directly — make them the SAME first.", "Multiply each fraction's top & bottom to reach a common denominator.", 'Multiplying fractions: top × top, bottom × bottom. Dividing: flip the second, then multiply.'] },
+    { title: 'Example: 1/3 + 1/4 (butterfly)', lines: ['Cross-multiply: 1×4 = 4 and 1×3 = 3 → tops', 'Multiply bottoms: 3 × 4 = 12', '(4 + 3) / 12 = 7/12 ✓'] }],
+    tips: ['HACK — The butterfly method above works for + and − every time.', "HACK — Dividing? 'Keep, Change, Flip': keep first, change ÷ to ×, flip second.", 'Simplify BEFORE multiplying when you can — smaller numbers, fewer mistakes.'] },
+];
+// what each sector's Navigator papers cover (server/questions/navigator.mjs NAV_TOPICS, as in v2's navigator.js; tests/ui-howto
+// holds the two equal)
+const NAV_TOPICS = [
+  { title: 'Sector A · Navigator', lines: ['Numbers to 1,000 — more than, less than, fill the blank.', 'Easy multiplication in stories: rows of eggs, bags of sweets, legs on animals — 2s, 3s, 5s and 10s. No dividing yet. The counts grow as the papers go on.', 'Halves and quarters first; thirds from paper 41; eighths and tenths from paper 61 — which is bigger, how many make a whole, a quarter of 20.', 'Trip times: same hour first, then across the hour, then 24-hour clock with hours AND minutes from paper 61.', 'Metres and centimetres, kilograms, litres, dollars and cents. Which is heavier, longer, holds more, takes longer — think about the real thing.'] },
+  { title: 'Sector B · Navigator', lines: ['Numbers to 10,000. Tables 6, 7, 8, 9 in two-step stories.', 'Two kinds of animal at once — 5 spiders and 7 ants, how many legs altogether?', 'Fractions: equivalent pairs, same top or same bottom — which is bigger, which is smaller? Perimeter of rectangles and squares.', 'Kilometres and millilitres. The 24-hour clock and trips that last hours and minutes. Reading a graph in words.', 'Times as many, how many more, order who is tallest.'] },
+  { title: 'Sector C · Navigator', lines: ['Numbers to 100,000. Factors and multiples.', "Decimals: money and measures with a decimal point (there's a . key).", 'Area of squares and rectangles. Angles bigger or smaller than a right angle.', 'Time across the hour. Multi-step money.'] },
+  { title: 'Sector D · Navigator', lines: ['Percentages of a number. Ratio. Average.', 'Rate — litres per minute, km per hour. Volume of a box.', 'Fraction of a set. Discounts: more or less than?', 'Area of a triangle.'] },
+  { title: 'Sector E · Navigator', lines: ['Speed, distance and time. Simple algebra with n and x.', 'Percentage increase and decrease. Pie charts in words.', "Work backwards from what's left. Circles with π = 22/7.", 'Sharing in a ratio. Dividing fractions.'] },
+  { title: 'Sector F · Navigator', lines: ['PSLE heuristics: guess and check, before–after, remainders, supposition.', 'Chickens and cows. Ages in the future. Meeting in the middle.', 'Unitary method, number patterns, averages that change.', 'Read twice. Draw the model in your head. Then answer.'] },
+];
+// Navigator's How to (2122-2129): how the track works, then what this sector covers
+const navHowTo = (lv) => ({ title: NAV_TOPICS[lv].title, slides: [
+  { title: 'How Navigator works', lines: ['Read the question. Tap 🔊 any time to hear it read out.', 'Type a number on the keypad and tap Go — or tap the answer button if there are choices.', '3 questions make a paper, 5 papers make a session: 15 questions, about ten minutes.', '100% unlocks the next papers. A 👑 check point every 20 papers, just like Engine.'] },
+  { title: "What's in this sector", lines: NAV_TOPICS[lv].lines }],
+  tips: ['Read it twice before you answer.', 'Ask: what do I have, what do I need to find?', 'For which-is-heavier questions, picture the real things.', 'Both tracks to 100 to jump to the next sector.'] });
+// v2's quick guide (122-159), in v3's words where v3 differs: a parent (not Dad) sets up the rewards and the Rocket, a reward's
+// points are held from the request and come back if it is refused, and a child starts wherever the parent set the grid
+const GUIDE_SLIDES = [
+  { emoji: '⚡🏆', title: 'Two kinds of loot', lines: ['⚡ Grid Coins — spend them in the 🛒 Shop on pets, looks, surprise boxes and vehicles.', '🏆 Reward Points — save them for real-life prizes in the 🎁 Reward Store.', 'You earn both at the same time. Every time.'] },
+  { emoji: '📝', title: 'How you earn', lines: ['A session is 5 papers on a timer, one question at a time. ⚙️ Engine: 25 sums. 🧭 Navigator: 15 word problems.', 'Score 100% and you pass: +⚡50 +🏆100, and the next papers unlock. Both tracks to 100 to jump to the next sector.', "Miss one? No loot — same papers again next time. You've got this."] },
+  { emoji: '👑🧠', title: 'Double loot', lines: ["Every 20 papers there's a 👑 CHECK POINT: 25 questions from that whole tier (15 on Navigator). Clear it → ×2 loot and the next tier opens.", "From Sector B, once a week, a 🧠 SYSTEM SCAN mixes everything you've learnt → ×2 loot.", 'Practise 3 days in a row → bonus +⚡50 +🏆100. Keep the chain alive!'] },
+  { emoji: '🛒', title: 'Spending ⚡ Grid Coins', lines: ['Tap 🛒 Shop on your home screen.', 'Pets ride along with you, outfits dress them, backgrounds and rings change your look.', '🎁 Surprise Box = a random new thing. 🥚 Mystery Egg = hatches after 5 passes.', '🚀 Family Rocket — when your parent builds one, fuel it together. Full tank = a prize you all share.'] },
+  { emoji: '🎁', title: 'Cashing in 🏆 Reward Points', lines: ['The 🎁 Reward Store is at the bottom of the Shop — real prizes your parent sets up.', 'Tap REDEEM → it goes to your parent to approve. The points are held while you wait, and come back if the answer is no.', 'Some prizes have a daily limit. Big ones take a while to save for — worth it.'] },
+  { emoji: '🗺', title: "See how you're doing", lines: ['🗺 Map — your sector is drawn as its letter: check points, your route so far, trophies for finished sectors.', 'Your home screen shows the papers passed on each check point and your log at the bottom.', 'The heatmap on the map shows which tiers are fast and right, and which need practice.'] },
+  { emoji: '🚀', title: 'Ready?', lines: ["You start where your parent set up your grid. A new sector's first paper shows you how its questions work — or tap 📖 How to any time.", 'Your PIN keeps your progress yours. Your parent can reset it if you forget.', "Progress saves to the cloud — any device, same you. Go get 'em!"] },
+];
+// Engine and Navigator as tabs (v2 3378-3381), the one shown filled in its colour
+function trackTabs(current, pick, label = (t) => `${TRACK[t].emoji} ${TRACK[t].name}`) {
+  const tabs = el('div', null, 'map-tabs'); tabs.setAttribute('role', 'tablist'); tabs.setAttribute('aria-label', 'track');
+  for (const t of ['engine', 'nav']) {
+    const on = t === current, tab = button(label(t), () => pick(t), `tiny map-tab ${TRACK[t].c}${on ? ' on' : ''}`);
+    tab.setAttribute('role', 'tab'); tab.setAttribute('aria-selected', String(on)); tabs.append(tab);
+  }
+  return tabs;
+}
+// A new sector's first paper opens its How to first (v2 2036-2039): paper 1 with nothing logged in that sector on that track, and
+// not yet seen on this device — "seen" is kept per child in this device's storage. A device that keeps nothing (a browser that
+// blocks site data) goes straight to the paper rather than showing the How to on every start.
+const HOWTO_SEEN = 'automathtics.howto.';
+function howToDue(childId, t, levelId) {
+  try {
+    const key = `${HOWTO_SEEN}${childId}`, seen = String(localStorage.getItem(key) || '').split(' ').filter(Boolean);
+    if (seen.includes(`${t}:${levelId}`)) return false;
+    localStorage.setItem(key, [...seen, `${t}:${levelId}`].join(' ')); return true;
+  } catch { return false; }
+}
+// a track's start button, and Next session or Try again on a result: the How to first when it is due, then the run the server picks
+async function beginRun(t, st = null) {
+  const s = st || await api('/learn/state'), p = s[t];
+  if (!s.active && !p.bossDue && !p.done && p.paper === 1 && !(s.history || []).some((h) => h.track === t && h.level === p.level) && howToDue(model.child.id, t, p.levelId))
+    return howToScreen(t, { engine: s.engine.level, nav: s.nav.level }, true);
+  return startRun({ track: t });
+}
+// How to: the slide's lines revealed one per Next step in the violet box, then the tips in the gold one. Opened before a first
+// paper it ends in "Got it — start practicing", from the home in Back (with a tab for the other track); ↺ Replay goes round
+// again. The card stays put while it reveals: only the box and what is under it change, and the box reads each new line out.
+function howToScreen(track, levels, thenStart = false) {
+  transientView = true;
+  const T = TRACK[track], lv = Math.max(0, Math.min(LAST_LEVEL, Number(levels?.[track]) || 0)), how = track === 'nav' ? navHowTo(lv) : HOWTO[lv];
+  const box = panel(`${T.emoji} ${T.name} · SECTOR ${LEVEL_IDS[lv]} · HOW TO`, how.title, '', 'howto');
+  onBack = childScreen; applyLook(gameModel?.wallet); root.setAttribute('aria-live', 'off');
+  if (!thenStart) box.append(trackTabs(track, (t) => howToScreen(t, levels)));
+  const steps = el('div', null, 'box c-violet how-box'), tail = el('div', null, 'how-tail'); steps.setAttribute('aria-live', 'polite');
+  let slide = 0, line = 1;
+  const show = () => {
+    const s = how.slides[slide], atEnd = slide === how.slides.length - 1 && line >= s.lines.length, row = el('div', null, 'row-buttons');
+    steps.replaceChildren(el('p', s.title, 'how-title'), ...s.lines.slice(0, line).map((L, i) => el('p', `• ${L}`, i === line - 1 ? 'how-line fade' : 'how-line')));
+    if (!atEnd) { row.append(button('Next step →', () => { if (line < s.lines.length) line++; else { slide++; line = 1; } show(); }, 'primary')); tail.replaceChildren(row); return; }
+    const tips = el('div', null, 'box c-gold how-box tips'); tips.append(el('p', '💡 Tips & hacks', 'how-title'), ...how.tips.map((tip) => el('p', `★ ${tip}`, 'how-line')));
+    row.append(thenStart ? button('Got it — start practicing ▶', () => startRun({ track }), 'primary') : button('Back', childScreen, 'primary'), button('↺ Replay', () => { slide = 0; line = 1; show(); }, 'ghost'));
+    tail.replaceChildren(tips, row);
+  };
+  show(); box.append(steps, tail);
+}
+// the Guide: seven slides under step dots in the child's colour; Next and ← Back walk them, skip and Let's go go home
+function guideScreen() {
+  transientView = true;
+  const n = GUIDE_SLIDES.length, box = panel(`🎓 QUICK GUIDE · ${model.child.nickname.toUpperCase()}`, '', '', 'w520 guide');
+  onBack = childScreen; applyLook(gameModel?.wallet); root.setAttribute('aria-live', 'off');
+  const dots = el('div', null, `guide-dots ${accClass(model.child)}`), stage = el('div', null, 'guide-stage'), row = el('div', null, 'row-buttons');
+  dots.setAttribute('role', 'img'); stage.setAttribute('aria-live', 'polite');
+  const show = (at) => {
+    const g = GUIDE_SLIDES[at], last = at === n - 1, slide = el('div', null, 'qin'), face = el('p', g.emoji, 'guide-emoji'), lines = el('div', null, 'box c-violet how-box');
+    dots.setAttribute('aria-label', `step ${at + 1} of ${n}`); dots.replaceChildren(...GUIDE_SLIDES.map((_, k) => el('span', null, k === at ? 'dot on' : k < at ? 'dot seen' : 'dot')));
+    face.setAttribute('aria-hidden', 'true');
+    g.lines.forEach((L, k) => { const p = el('p', `• ${L}`, 'how-line fade'); setVar(p, '--delay', `${(k * 0.12).toFixed(2)}s`); lines.append(p); });
+    slide.append(face, el('h2', g.title, 'guide-title'), lines); stage.replaceChildren(slide);
+    row.replaceChildren(...(at > 0 ? [button('← Back', () => show(at - 1), 'ghost')] : []), last ? button("Let's go ▶", childScreen, 'primary') : button('Next →', () => show(at + 1), 'primary'),
+      ...(last ? [] : [button('skip', childScreen, 'tiny')]));
+  };
+  show(0); box.append(dots, stage, row);
 }
 // ---- a session (v2 3110-3208): the status row, the timer bar, the flash, the question sheet, and v2's keypad beside Go,
 // Restart and Quit. The browser only sends the answer: the server marks it, rules on the time and pays for it. ----
@@ -1462,7 +1581,7 @@ async function summaryView(session, s) {
   const mini = el('p', null, 'mini-wallet'); mini.append('⚡ ', el('b', String(s.wallet?.gc ?? 0)), ' · 🏆 ', el('b', String(s.wallet?.rp ?? 0))); box.append(mini);
   if (!s.passed) { const rule = el('p', null, 'intro'); rule.append('The 100% rule: ', el('b', 'perfect score unlocks the next papers'), '. Same papers again next session — you\'ve got this! 💪'); box.append(rule); }
   const row = el('div', null, 'row-buttons');
-  row.append(button(s.passed ? 'Next session ▶' : 'Try again ▶', () => startRun({ track: session.track }), 'primary'), button('Home', refresh, 'ghost'));
+  row.append(button(s.passed ? 'Next session ▶' : 'Try again ▶', () => beginRun(session.track), 'primary'), button('Home', refresh, 'ghost')); // after a jump, the new sector's How to first (v2 2031-2039)
   box.append(row);
 }
 // Launch and Scrap cannot be taken back: a launched rocket owes its prize, a scrapped one refunds nobody. Like deleting

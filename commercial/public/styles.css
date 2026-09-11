@@ -539,6 +539,18 @@ input.answer-box:not(:placeholder-shown){border-style:solid;box-shadow:0 0 16px 
 .buy-date{min-width:82px;text-align:right;font-family:var(--mono);color:var(--dim);white-space:nowrap}
 /* an inner box (v2's howBox and tipsBox, 3722-3729): dark, ringed in its section's colour */
 .box{margin:10px 0;padding:14px 16px;border:1.5px solid var(--c,var(--v2line));border-radius:12px;background:var(--void);text-align:left}
+/* ---- How to (v2 3076-3107; st.howBox, tipsBox, howSlideTitle, howLine 3722-3731) and the Guide (2550-2575) ---- */
+.panel.howto>h1{margin-bottom:12px;font-size:22px}
+.how-box{margin:12px 0 14px}
+.how-box:not(.tips){min-height:120px}
+.how-title{margin:0 0 8px;font:700 15px var(--display);color:var(--violet)}
+.how-line{margin:0 0 4px;font-size:14.5px;line-height:1.6;color:var(--txt)}
+.how-line.fade{animation:fadeSlide .25s ease-out var(--delay,0s) both}
+.guide-dots{display:flex;gap:6px;justify-content:center;margin:6px 0 10px}
+.guide-dots .dot{width:8px;height:8px;border-radius:99px;background:var(--v2line);transition:width .25s,background .25s}
+.guide-dots .dot.seen{background:var(--accent)}.guide-dots .dot.on{width:22px;background:var(--accent)}
+.guide-emoji{margin:4px 0 6px;font-size:46px;line-height:1.1}
+.guide-title{margin:0 0 10px;font-size:22px;letter-spacing:.04em;text-transform:none}
 /* no motion: nothing animates, and neither the decor layer (static columns of symbols would only sit on the screen) nor a
    coin burst is drawn; the crate's prize shows at once */
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}html[data-mode] #decor,.splash{display:none}.crate-item,.crate-name{opacity:1}}

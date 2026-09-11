@@ -36,7 +36,7 @@ test('the home is v2\'s: the header with the name, sector and level, the wallet 
     '⚙️ ENGINE · A', '25 q', '🧭 NAVIGATOR · A', '15 q', 'Next: papers 1–5 · 100% to unlock',
     '⬆ Jump to Sector B needs ⚙️ Engine to 100 + 5 crowns and 🧭 Navigator to 100 + 5 crowns']) assert.ok(card.textContent.includes(words), words);
   for (const words of ['Allison\'s log', 'Date & time', 'A · 1–5', '25/25', '12:34', 'PASS', 'A · 🧭 1–5', '✕ quit at Q4']) assert.ok(log.textContent.includes(words), words);
-  for (const label of ['Switch user', '⚙️ Start Engine ▶', '🧭 Start Navigator ▶', '🛒 Shop', '🗺 Map', 'Parent sign-in']) assert.ok(h.nodes('BUTTON').some((b) => b.textContent === label), label);
+  for (const label of ['Switch user', '⚙️ Start Engine ▶', '🧭 Start Navigator ▶', '🛒 Shop', '🗺 Map', '📖 How to', '🎓 Guide', 'Parent sign-in']) assert.ok(h.nodes('BUTTON').some((b) => b.textContent === label), label);
   assert.equal(all(card).filter((n) => /\btier-node\b/.test(n.className || '')).length, 10, 'five check points on each track');
   assert.ok(!h.root.textContent.includes('Welcome,'), 'v3\'s old home is gone');
 });
