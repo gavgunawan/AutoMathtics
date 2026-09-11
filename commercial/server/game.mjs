@@ -306,7 +306,7 @@ export class Game {
     return this.store.transaction(async (tx) => {
       const { s, family, cfg } = await this.parent(tx, ctx, false); const children = [];
       for (const id of family.childIds || []) { const child = await tx.get(`families/${s.familyId}/children/${id}`); const prog = normalizeProgress(await tx.get(`families/${s.familyId}/learning/${id}`));
-        if (child) children.push({ child: { id, nickname: child.nickname, icon: child.icon, status: child.status }, pacePercent: prog.pacePercent,
+        if (child) children.push({ child: { id, nickname: child.nickname, icon: child.icon, status: child.status }, pacePercent: prog.pacePercent, scanFocus: prog.scanFocus === true,
           engine: { ...trk(prog, 'engine'), levelId: LEVELS[trk(prog, 'engine').level].id, done: trackDone(prog, 'engine'), bossDue: bossDue(prog, 'engine') },
           nav: { ...trk(prog, 'nav'), levelId: LEVELS[trk(prog, 'nav').level].id, done: trackDone(prog, 'nav'), bossDue: bossDue(prog, 'nav') }, wallet: this.publicWallet(prog.wallet), stats: prog.stats, history: prog.history.slice(0, 12), heatmap: heatmap(prog) }); }
       return { timeZone: family.timeZone || 'Asia/Singapore', rewards: cfg.rewards.map(rewardPublic), rocket: publicRocket(cfg.rocket), rocketHistory: cfg.rocketHistory, children };
@@ -359,12 +359,16 @@ export class Game {
       const response = { wallet: this.publicWallet(next.wallet) }; tx.set(base, next);
       tx.set(opPath, { action: 'adjust', fingerprint: fp, response, at: this.now(), expireAt: this.now() + OP_LIFE }); this.foundation.audit(tx, 'game.parent_adjust', s.uid, s.familyId, body.childId); return response; });
   }
+  // A child's pace and, since email-v1, whether the System Scan focuses on the child's weak styles (progress.mjs buildScanQuestions): either or both.
   async settings(ctx, body) {
-    object(body, ['timeZone', 'childId', 'pacePercent']);
+    object(body, ['timeZone', 'childId', 'pacePercent', 'scanFocus']);
+    if (body.scanFocus !== undefined && typeof body.scanFocus !== 'boolean') fail(400, 'INVALID_REQUEST');
+    const hasPace = body.pacePercent !== undefined, hasFocus = body.scanFocus !== undefined;
     return this.store.transaction(async (tx) => { const { s, family } = await this.parent(tx, ctx, true); let nextFamily = family, childPath = null, prog = null;
       if (body.timeZone !== undefined && body.timeZone !== null) { const tz = text(body.timeZone, 1, 64); try { new Intl.DateTimeFormat('en', { timeZone: tz }).format(new Date()); } catch { fail(400, 'INVALID_TIME_ZONE'); } nextFamily = { ...family, timeZone: tz }; }
-      if (body.childId !== undefined && body.childId !== null) { uuid(body.childId); if (!family.childIds.includes(body.childId) || !Number.isInteger(body.pacePercent) || body.pacePercent < 10 || body.pacePercent > 200) fail(400, 'INVALID_PACE'); childPath = `families/${s.familyId}/learning/${body.childId}`; prog = normalizeProgress(await tx.get(childPath)); }
-      if (nextFamily !== family) tx.set(`families/${s.familyId}`, nextFamily); if (childPath) tx.set(childPath, { ...prog, pacePercent: body.pacePercent }); this.foundation.audit(tx, 'game.settings', s.uid, s.familyId, body.childId || null);
-      return { timeZone: nextFamily.timeZone, childId: body.childId || null, pacePercent: body.childId ? body.pacePercent : null }; });
+      if (body.childId !== undefined && body.childId !== null) { uuid(body.childId); if (!family.childIds.includes(body.childId) || (!hasPace && !hasFocus) || (hasPace && (!Number.isInteger(body.pacePercent) || body.pacePercent < 10 || body.pacePercent > 200))) fail(400, 'INVALID_PACE'); childPath = `families/${s.familyId}/learning/${body.childId}`; prog = normalizeProgress(await tx.get(childPath)); }
+      const next = childPath ? { ...prog, ...(hasPace ? { pacePercent: body.pacePercent } : {}), ...(hasFocus ? { scanFocus: body.scanFocus } : {}) } : null;
+      if (nextFamily !== family) tx.set(`families/${s.familyId}`, nextFamily); if (next) tx.set(childPath, next); this.foundation.audit(tx, 'game.settings', s.uid, s.familyId, body.childId || null);
+      return { timeZone: nextFamily.timeZone, childId: body.childId || null, pacePercent: next ? next.pacePercent : null, scanFocus: next ? next.scanFocus === true : null }; });
   }
 }
