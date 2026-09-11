@@ -282,12 +282,15 @@ function signInScreen(signup = false, afterReady = null, reauth = false) {
   const form = el('form', null, 'auth-form');
   const email = field('Parent email', 'email', { autocomplete: 'email', maxLength: 254 });
   const password = field('Password', 'password', { autocomplete: signup ? 'new-password' : 'current-password', minLength: signup ? 12 : 1, maxLength: 128 });
+  // A new password is typed twice: one slip in a masked box would lock the parent out of the account made a minute before.
+  const again = signup ? field('Type the password again', 'password', { autocomplete: 'new-password', minLength: 12, maxLength: 128 }) : null;
   const submit = el('button', signup ? 'Create parent account' : 'Sign in as parent', 'primary'); submit.type = 'submit';
   const consent = signup ? consentBoxes() : null; // email-v1: the two sign-up boxes
-  form.append(email.wrap, password.wrap, ...(consent ? consent.labels : []), submit);
+  form.append(email.wrap, password.wrap, ...(again ? [again.wrap] : []), ...(consent ? consent.labels : []), submit);
   form.onsubmit = (event) => { event.preventDefault(); run(async () => {
+    if (again && again.input.value !== password.input.value) { note('The two passwords don’t match. Type the same password in both boxes; nothing has been sent.'); return; }
     if (consent && !consent.agreed()) { note('Tick the first box to create the account: account and progress emails are part of the service. News and offers stay optional.'); return; }
-    const a = await auth(); const value = password.input.value; password.input.value = '';
+    const a = await auth(); const value = password.input.value; password.input.value = ''; if (again) again.input.value = '';
     const result = await (signup ? a.signUp(email.input.value, value) : a.signIn(email.input.value, value));
     if (consent) await recordConsent(a, consent.agreed(), consent.news());
     await authStep(result, afterReady);

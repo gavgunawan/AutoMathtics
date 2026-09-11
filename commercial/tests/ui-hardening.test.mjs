@@ -10,6 +10,23 @@ test('UI: normal sign-in actually mounts the email, password and submit controls
   assert.equal(h.nodes('INPUT').filter(n => n.type === 'password').length, 1);
   assert.ok(h.root.textContent.includes('Sign in as parent'));
 });
+
+test('UI: sign-up asks for the password twice; while the two differ, Create refuses with a clear note and nothing is sent; the same password twice goes through', async (t) => {
+  const h = await uiFixture(t, { signedIn: false }); h.api.signInScreen(true);
+  const pw = h.nodes('INPUT').filter((n) => n.type === 'password');
+  assert.equal(pw.length, 2); assert.ok(h.root.textContent.includes('Type the password again')); assert.ok(pw.every((n) => n.autocomplete === 'new-password' && n.minLength === 12));
+  let made = 0; h.setAuth('newParent', { signUp: async () => { made++; return { stage: 'verify' }; }, idToken: async () => h.f.token('newParent') });
+  h.nodes('INPUT').find((n) => n.type === 'checkbox').checked = true;
+  const form = h.nodes('FORM')[0], before = h.requests.length, submit = async () => { form.onsubmit({ preventDefault() {} }); await h.idle(); };
+  h.nodes('INPUT')[0].value = 'synthetic@example.test'; pw[0].value = 'SyntheticPasswordOnly'; pw[1].value = 'SyntheticPasswordOnIy';
+  await submit();
+  assert.equal(made, 0, 'no account'); assert.equal(h.requests.length, before, 'not a single request');
+  assert.ok(h.message.textContent.includes('The two passwords don’t match'), h.message.textContent); assert.equal(pw[0].value, 'SyntheticPasswordOnly', 'both kept for the fix');
+  pw[1].value = ''; await submit(); assert.equal(made, 0, 'an empty second box differs too'); assert.equal(h.requests.length, before);
+  pw[1].value = 'SyntheticPasswordOnly'; await submit();
+  assert.equal(made, 1); assert.ok(h.root.textContent.includes('Check your inbox.')); assert.deepEqual(pw.map((n) => n.value), ['', ''], 'neither box keeps the password');
+  h.api.signInScreen(); assert.equal(h.nodes('INPUT').filter((n) => n.type === 'password').length, 1, 'signing in asks once'); assert.ok(!h.root.textContent.includes('Type the password again'));
+});
 test('UI S1-003: same-parent MFA continuation preserves only nickname/icon and clears PINs', async (t) => {
   const h = await uiFixture(t); await h.draft();
   assert.ok(h.nodes('INPUT').every(n => n.value !== '763829'));

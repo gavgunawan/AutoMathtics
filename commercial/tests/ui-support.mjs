@@ -76,6 +76,7 @@ export async function uiFixture(t, { family = true, signedIn = true, clock = nul
   const submitLogin = async () => {
     const form = nodes(root, 'FORM')[0]; assert.ok(form, 'login form missing');
     const inputs = nodes(form, 'INPUT'); inputs[0].value = 'synthetic@example.test'; inputs[1].value = 'SyntheticPasswordOnly';
+    for (const again of inputs.slice(2)) if (again.type === 'password') again.value = inputs[1].value; // sign-up asks for it twice
     form.onsubmit({ preventDefault() {} }); await idle();
   };
   const draft = async (nickname = 'Private draft') => {
