@@ -37,6 +37,8 @@ export const RETENTION = Object.freeze({
   'deletions/{f}': 'the deletion record: who asked, who executed, what was removed and what was kept',
   'supportOperations/*': 'which operator started which corrective action, and how it ended',
   'sweeps/*': 'the routine invariant sweep: counts and findings; expires by TTL 90 days after each run',
+  'emailPrefs/{uid}': 'the parent account\'s email choices and their history (the consent record): the sign-in account outlives the family; deleted with that account',
+  'reports/*': 'weekly report status per family and week (sent or skipped, attempts, provider message id; no content); expires by TTL 400 days after each week',
 });
 export const DELETION_BATCH = 300; // comfortably under Firestore's 500 writes per transaction
 const ACCESS = new Set(['trial', 'active', 'grace']);

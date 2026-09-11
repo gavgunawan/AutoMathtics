@@ -61,6 +61,23 @@ end of the run. Nothing here requires code; every failure is a ticket for the ne
 | D2 | Request deletion; cancel; request again | the 14-day notice; cancel restores; the operator can force-execute on staging and the tombstone remains |
 | D3 | After deletion, delete the sign-in account | refused before the family is gone; then the provider account disappears; the trial cannot be taken again on the same phone |
 
+## Email (email-v1)
+
+With `EMAIL_PROVIDER=fake` nothing is sent: read each email in Firestore → `outbox` (kept 14 days), or run
+`node scripts/report.mjs preview FAMILY_UUID` (the HTML, links inert). With Resend and no verified domain, only the Resend
+account owner's own address receives mail (`DEPLOY_V3.md` → Email).
+
+| # | Do | Expect |
+|---|---|---|
+| E1 | Sign up a new parent: press *Create parent account* with the first box unticked, then ticked, leaving the news box as it is | refused with a note until the first box is ticked; the news box starts unticked; afterwards Mission Control's *Email updates* shows the weekly report on and news off |
+| E2 | In Mission Control untick *Weekly progress report* and save; after 5 minutes idle tick it again and save | saved at once after a recent sign-in; after 5 minutes a fresh password + SMS check comes first, then the app asks to set the switches again — nothing is saved by itself |
+| E3 | Let the children play at least 20 questions in a week; open the inbox after Monday 07:00 Singapore (or run the job: Cloud Run → Jobs → `automathtics-v3-report` → Execute) | one email per family: the subject names the children, the missions and the % right; per child the three lists (✅ right and fast, 🐢 right but slow, ⚠️ wrong again and again), the pace line, the System Scan line; the game's colours; readable on the phone; no raw ids |
+| E4 | Tap *Set Allison's pace to 75%* in the email | the app opens on a panel saying exactly what changes (and the pace now); Cancel changes nothing; Confirm changes it (Game & progress shows it); the same button again is harmless |
+| E5 | Tap *Focus Geralt's System Scan on these*, confirm; then start Geralt's next System Scan | Game & progress shows the scan focus on; the scan has 25 questions, most of them the styles the email named; unlock, the 25/25 rule and the double pay unchanged; *Switch Geralt's scan focus off* reverses it |
+| E6 | Use the mail app's own *Unsubscribe* beside the sender (Gmail, Apple Mail); on another account tap *Stop weekly reports* in the footer | the one-click unsubscribe turns the report off without opening anything; the footer link opens the app's panel and turns it off on Confirm; Mission Control shows it off; no report next Monday |
+| E7 | A week with the weekly report switched off; a week in which no child answered a question | no email; the job's log says `progress_off` or `no_play` |
+| E8 | Before Monday, change the parent's sign-in email to one not yet verified (or disable the account in the console) | no email, the log says `no_verified_address`; nothing goes to an unverified address |
+
 ## Failure states
 
 | # | Do | Expect |
