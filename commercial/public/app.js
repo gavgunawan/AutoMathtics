@@ -94,15 +94,22 @@ const tidy = (value) => String(value || '').replace(/[\s().-]/g, '');
 const e164 = (value) => /^\+[1-9]\d{6,14}$/.test(tidy(value));
 // the robot check belongs on the screen from the moment it opens, not only once Send has been pressed
 function armCaptcha() { auth().then((a) => a.armCaptcha?.()).catch(() => {}); }
-function panel(kicker, title, subtitle) {
+// variant: one of v2's narrower cards (narrow 420px, w460, w520) or a screen's own class
+function panel(kicker, title, subtitle, variant = '') {
   authModule?.resetCaptcha?.(); // the robot check belongs to the screen that built it; one left behind strands its frame
   stopSendClock(); screenId++; onBack = null; // the same for the Send countdown, and Back is each screen's to set again
   root.replaceChildren();
-  const box = el('section', null, 'panel'); box.setAttribute('data-deck', model?.role === 'child' ? 'GRID // ONLINE' : 'MISSION CONTROL // ONLINE'); // the corner tag every deck carries
-  box.append(el('p', kicker, 'kicker'), el('h1', title), el('p', subtitle, 'muted'));
+  // the shell follows the role: styles.css hides the parents' masthead from the launch pad and a child's screens, and the footer from those
+  document.documentElement?.setAttribute('data-mode', model?.role === 'child' ? 'kid' : model?.role === 'selector' ? 'select' : 'parent');
+  const box = el('section', null, variant ? `panel ${variant}` : 'panel');
+  box.append(el('p', kicker, 'kicker'), el('h1', title), el('p', subtitle, 'intro muted'));
   root.append(box); return box;
 }
-function note(text) { status.textContent = text || ''; }
+// v2's message colours: mint for a ✓ line, red for a refusal (tone 'bad', from run) or a ✗ or ⚠ line, gold for the rest
+function note(text, tone) {
+  status.textContent = text || '';
+  status.className = !text ? 'message' : `message msg-${tone || (/^✓/.test(text) ? 'ok' : /^[✗⚠]/.test(text) ? 'bad' : 'note')}`;
+}
 // ---- the Send countdown (the SMS resend ladder, DEPLOY_V3.md section 5) ----
 // H:MM:SS with the hours unbounded, so a day's wait reads 24:00:00 rather than a clock that wrapped to 0:00:00.
 function hms(seconds) {
@@ -151,7 +158,7 @@ async function run(fn) {
   working = true; root.setAttribute('aria-busy', 'true');
   try { note(''); await fn(); }
   catch (error) {
-    note(messages[error.code] || (error.code?.startsWith('auth/') ? providerMessage(error) : error.message || 'Please try again.'));
+    note(messages[error.code] || (error.code?.startsWith('auth/') ? providerMessage(error) : error.message || 'Please try again.'), 'bad');
   } finally {
     working = false; root.removeAttribute('aria-busy');
     if (sessionRefreshPending) {
@@ -203,7 +210,7 @@ async function authStep(result, afterReady = null) {
   }
   if (result.stage === 'signin') { signInScreen(false, afterReady, Boolean(afterReady)); note(result.notice); return; }
   if (result.stage === 'verify') {
-    const box = panel('STEP 1 OF 3 · EMAIL', 'Check your inbox.', 'Open the verification email, then come back here. Nothing about your family exists until this is done.');
+    const box = panel('STEP 1 OF 3 · EMAIL', 'Check your inbox.', 'Open the verification email, then come back here. Nothing about your family exists until this is done.', 'w460');
     if (afterReady) onBack = cancelVerification;
     box.append(rail(1), button('I have verified my email', async () => authStep(await (await auth()).checkEmail(), afterReady), 'primary'),
       button('Resend verification email', async () => { await (await auth()).resendEmail(); note('Verification email requested.'); }, 'ghost'));
@@ -211,7 +218,7 @@ async function authStep(result, afterReady = null) {
   }
   const enrolling = result.stage === 'enroll';
   const box = panel(enrolling ? 'STEP 1 OF 3 · MOBILE' : 'SECOND CHECK', enrolling ? 'Protect the command deck.' : 'Your second security check',
-    enrolling ? 'Verify your own mobile number. Children never need a phone or an email address.' : `Send a code to ${result.phone || 'your verified mobile'} to finish signing in.`);
+    enrolling ? 'Verify your own mobile number. Children never need a phone or an email address.' : `Send a code to ${result.phone || 'your verified mobile'} to finish signing in.`, 'w460');
   if (enrolling) box.append(rail(1));
   if (afterReady) onBack = cancelVerification; // the second check of a parent action: Back abandons the action, as Cancel would
   const phone = field('Mobile number, including country code', 'tel', { placeholder: '+62...', autocomplete: 'tel' });
@@ -249,7 +256,7 @@ async function authStep(result, afterReady = null) {
 // Stage 4.4: the lost-phone ceremony (RECOVERY.md). No session exists here; the server answers the same for any email.
 function recoveryScreen(email) {
   reauthEpoch++; model = null;
-  const box = panel('ACCOUNT RECOVERY', 'Lost your phone?', 'Recovery takes seven days and needs your email inbox. Nobody can shorten it. Your family and children stay exactly as they are.');
+  const box = panel('ACCOUNT RECOVERY', 'Lost your phone?', 'Recovery takes seven days and needs your email inbox. Nobody can shorten it. Your family and children stay exactly as they are.', 'w460');
   onBack = () => signInScreen();
   box.append(el('p', `1. Start recovery for ${email}.  2. Reset your password from the emailed link \u2014 that proves the inbox is yours.  3. After the waiting period, complete recovery here, then sign in and verify your new mobile.`, 'notice'));
   const when = (ms) => new Date(ms).toLocaleString();
@@ -274,7 +281,7 @@ function signInScreen(signup = false, afterReady = null, reauth = false) {
   const box = panel(reauth ? 'PARENT VERIFICATION' : 'MISSION CONTROL',
     reauth ? 'Confirm it\u2019s you.' : (signup ? 'A new crew starts here.' : 'Big futures. Small steps.'),
     reauth ? 'This sensitive parent action needs a fresh password and SMS check.' :
-      (signup ? 'Create your adult account first. Then build a private grid for your explorers.' : 'One secure parent account. A personal learning grid for every child.'));
+      (signup ? 'Create your adult account first. Then build a private grid for your explorers.' : 'One secure parent account. A personal learning grid for every child.'), 'w460');
   if (!reauth) box.append(rail(1));
   if (reauth) onBack = cancelVerification; else if (signup) onBack = () => signInScreen();
   const form = el('form', null, 'auth-form');
@@ -415,7 +422,7 @@ function planChangeControls(box, billing, e, family) {
 function downgradeScreen(plan, family, op) {
   transientView = true;
   const active = family.children.filter((c) => c.status === 'active'), choose = active.length > plan.seats;
-  const box = panel('CHANGE PLAN', `${plan.name}: ${plan.seats} child slots`, choose ? `Choose who keeps a seat from the next renewal (up to ${plan.seats}). The others keep all their progress and can be given a seat again later.` : 'The change takes effect at the next renewal. Nobody loses a seat before then.');
+  const box = panel('CHANGE PLAN', `${plan.name}: ${plan.seats} child slots`, choose ? `Choose who keeps a seat from the next renewal (up to ${plan.seats}). The others keep all their progress and can be given a seat again later.` : 'The change takes effect at the next renewal. Nobody loses a seat before then.', 'w460');
   onBack = refresh; // every parent sub-screen: Back is its own Back button, to the workspace
   const picks = new Map();
   if (choose) for (const c of active) {
@@ -429,7 +436,7 @@ function downgradeScreen(plan, family, op) {
 }
 function deletionScreen(family) {
   transientView = true;
-  const box = panel('DELETE FAMILY', family.label, 'The children\u2019s profiles, progress, coins and this family\u2019s settings will be removed after 14 days. Payment records and the security audit trail are kept as required. A used free trial stays used. Your sign-in account itself is separate and is not deleted here.');
+  const box = panel('DELETE FAMILY', family.label, 'The children\u2019s profiles, progress, coins and this family\u2019s settings will be removed after 14 days. Payment records and the security audit trail are kept as required. A used free trial stays used. Your sign-in account itself is separate and is not deleted here.', 'w460');
   const op = crypto.randomUUID(); onBack = refresh;
   box.append(el('p', 'You can cancel any time in the next 14 days from the parent workspace. Download your data first if you want to keep it.', 'notice'),
     button('Delete after 14 days', async () => { await api('/family/deletion', { operationId: op }); note('Deletion scheduled.'); await refresh(); }, 'primary'), button('Back', refresh, 'ghost'));
@@ -514,7 +521,7 @@ function changeMobileScreen() {
   keepSdkSession = true;
   reauthenticate(async () => {
     transientView = true;
-    const box = panel('CHANGE MOBILE', 'Your new number.', 'A code goes to the new number. The old one stops working for sign-in the moment the new one is verified.');
+    const box = panel('CHANGE MOBILE', 'Your new number.', 'A code goes to the new number. The old one stops working for sign-in the moment the new one is verified.', 'w460');
     const cancel = async () => { keepSdkSession = false; if (authModule) await authModule.clear(); await refresh(); };
     onBack = cancel;
     const phone = field('New mobile number, including country code', 'tel', { placeholder: '+62...', autocomplete: 'tel' });
@@ -557,7 +564,7 @@ function startChooser(defaults = {}) {
 }
 function addChildScreen(draft = {}) {
   transientView = true;
-  const box = panel('NEW CHILD PROFILE', 'Meet your next explorer.', 'A nickname and an icon are all the grid needs. Age and year level help us place the explorer. No child email, phone number, photo or full birth date \u2014 ever.');
+  const box = panel('NEW CHILD PROFILE', 'Meet your next explorer.', 'A nickname and an icon are all the grid needs. Age and year level help us place the explorer. No child email, phone number, photo or full birth date \u2014 ever.', 'w460');
   onBack = refresh;
   const name = field('Nickname', 'text', { maxLength: 24, autocomplete: 'off', value: draft.nickname || '' });
   const select = el('select'); select.setAttribute('aria-label', 'Profile icon');
@@ -584,7 +591,7 @@ function addChildScreen(draft = {}) {
 }
 function startScreen(child) {
   transientView = true;
-  const box = panel('LAUNCH POINT', child.nickname, 'Only possible before the child has played anything. A recent parent sign-in is required.');
+  const box = panel('LAUNCH POINT', child.nickname, 'Only possible before the child has played anything. A recent parent sign-in is required.', 'w460');
   onBack = refresh;
   const start = startChooser({ yearLevel: child.yearLevel, start: child.start });
   box.append(start.wrap, start.options, button('Save starting point', async () => {
@@ -594,7 +601,7 @@ function startScreen(child) {
 }
 function resetPinScreen(child) {
   transientView = true;
-  const box = panel('PARENT ACTION', `Reset ${child.nickname}\u2019s PIN`, 'This invalidates existing child sessions. A recent parent sign-in is required.');
+  const box = panel('PARENT ACTION', `Reset ${child.nickname}\u2019s PIN`, 'This invalidates existing child sessions. A recent parent sign-in is required.', 'narrow');
   onBack = refresh;
   const { first, repeat, valid } = pinFields();
   box.append(first.wrap, repeat.wrap, button('Set new PIN', async () => {
