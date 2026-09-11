@@ -271,8 +271,11 @@ image; `gcloud run jobs describe` shows the image digest).
 remembers the first one it saw and compares again on every refresh, and in the background (GET `/api/health`, which reads and
 sets no cookie, and never while a request is in flight) whenever the tab comes back into view and every five minutes while it
 is in view; a different release shows a bar, *A new version of AutoMathtics is ready.*, whose *Update now* reloads the
-page. It never reloads by itself, and on the kids' tablet it waits until a paper ends. Tabs opened before the first release that
-has this checker need one manual reload (`ACCEPTANCE.md` U1).
+page. It never reloads by itself, and on the kids' tablet it waits until a paper ends. A tab coming back into view refreshes
+nothing itself: a change of session made in another tab reaches it by the tabs' own signal, so it can never overwrite a cookie
+that other tab has just rotated. During a deploy's traffic switch the first answers may come from either revision, so a tab may
+show the bar once too often (tapping it reloads what is already the new version) or once too late (the next check shows it).
+Tabs opened before the first release that has this checker need one manual reload (`ACCEPTANCE.md` U1).
 
 ```bash
 export TRUSTED_PROXY_HOPS=2

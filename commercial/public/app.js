@@ -163,7 +163,7 @@ function showUpdate() {
   root.append(updateBar);
 }
 async function bootstrap() { const b = await api('/bootstrap'); sawRelease(b.release); return b; }
-// In the background (the five-minute tick; a tab back in view on a screen that is not refreshed) the page asks GET /api/health, which
+// In the background (the five-minute tick, and a tab coming back into view) the page asks GET /api/health, which
 // reads no cookie and sets none, and asks nothing while a request is in flight (`working`): /api/bootstrap could hand out a fresh
 // pre-authentication cookie over the session cookie a hand-over, a PIN, Switch child or a sign-in has just set (review of 12 Sep
 // 2026). Health names the deployed commit, or null with the version beside it: bootstrap's value either way. Never an error shown.
@@ -912,11 +912,10 @@ channel?.addEventListener('message', () => {
   if (working) { sessionRefreshPending = true; return; }
   run(async () => { if (authModule) await authModule.clear(); await refresh(); });
 });
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState !== 'visible') return;
-  if (model && !working && !transientView) run(refresh); // refresh bootstraps, which compares the release
-  else checkRelease(); // a draft, a game or the sign-in screen stays as it is: only the release is asked for
-});
+// A tab back in view asks /api/health about the release and refreshes nothing: a refresh bootstraps, and a bootstrap could hand out
+// a cookie over the one another tab has just rotated (a hand-over, a PIN, Switch child, a sign-in). A change of session reaches this
+// tab by the tabs' own signal above, sent once the change is done (review of 12 Sep 2026).
+document.addEventListener('visibilitychange', () => (document.visibilityState === 'visible' ? checkRelease() : undefined));
 await run(refresh);
 setInterval(function releaseTick() { return document.visibilityState === 'visible' ? checkRelease() : undefined; }, RELEASE_CHECK_MS); // Update now: every five minutes in view
 // Back from a hosted checkout (Stage 4.1). The redirect proves nothing: the provider's signed webhook
