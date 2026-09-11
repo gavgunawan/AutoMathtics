@@ -29,7 +29,15 @@ every week and the same child would keep progressing for nothing.
    project guards as the grant tool, takes the v2 record as a file (it never connects to the v2
    project), refuses a child who already has any progress (`ALREADY_HAS_PROGRESS`), never merges,
    writes an audit row, and is a dry run unless `CONFIRM_MIGRATION=write`. Tested in
-   `tests/migrate.test.mjs`.
+   `tests/migrate.test.mjs`. Its `rocket` form carries the family's v2 Family Rocket with its exact
+   fuel into that same family's game config: the crew must be active children of that family whose
+   nicknames are the v2 crew names, each already imported from v2 with v2 spending exactly equal to
+   their fuel plus any other spending the operator declares for that child
+   (`V2_ROCKET_FUEL_SPENT_MISMATCH` otherwise); it refuses a family that is deleted or has a deletion
+   request, a family that already has a rocket (`ROCKET_EXISTS`) or that has had its v2 rocket
+   imported once before (`V2_ROCKET_ALREADY_IMPORTED`), writes only with `CONFIRM_MIGRATION=rocket`,
+   and it moves no points — no ledger row, no wallet — because the fuel already left the children's
+   carried balances as v2 spending.
 
 ## The one thing a fresh account cannot fake: the verified phone
 

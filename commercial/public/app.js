@@ -649,6 +649,19 @@ function summaryView(session, s) {
   for (const e of s.gameEvents || []) if (e.item) box.append(el('p', `${e.type === 'hatched' ? '🥚 HATCH!' : '🏆 UNLOCK!'} ${e.item.emoji} ${e.item.name}`, 'notice'));
   box.append(el('p', `Wallet: ⚡ ${s.wallet.gc} · 🏆 ${s.wallet.rp}`, 'muted'), button('Back to my grid', refresh, 'primary'));
 }
+// Launch and Scrap cannot be taken back: a launched rocket owes its prize, a scrapped one refunds nobody. Like deleting
+// the family (deletionScreen), each opens its own screen first, and nothing is sent until the parent confirms there.
+function rocketConfirmScreen(rocket, action) {
+  transientView = true;
+  const scrap = action === 'scrap';
+  const box = panel('PARENT · FAMILY ROCKET', scrap ? 'Scrap this rocket?' : 'Launch this rocket now?', scrap
+    ? 'Scrapping ends this rocket for good. The fuel already in it is not refunded to anyone, and the rocket cannot be brought back.'
+    : 'Launching ends fuelling now, before the goal is reached, and the family owes the prize. It cannot be undone.');
+  box.append(el('p', `${rocket.prize.emoji} ${rocket.prize.name} · ${rocket.totalFuel}/${rocket.goal}`, 'notice'),
+    // Back comes first: the second tap of a double-tap on Launch or Scrap lands where the first button is.
+    button('Back', parentGameScreen, 'ghost'),
+    button(scrap ? 'Yes, scrap it' : 'Yes, launch now', async () => { await parentGameMutation('/game/parent/rocket', { action, rocketId: rocket.id }); }, 'primary'));
+}
 async function parentGameMutation(path, payload) {
   try { await api(path, payload); await parentGameScreen(); }
   catch (error) {
@@ -669,7 +682,7 @@ async function parentGameScreen() {
   const re = field('New reward name', 'text', { maxLength: 40 }), rc = field('Cost in 🏆', 'number', { value: 100, min: 1, max: 100000 }); box.append(re.wrap, rc.wrap, button('Add reward for all children', async () => { const reward = { id: `rw-${crypto.randomUUID()}`, emoji: '🎁', name: re.input.value, cost: Number(rc.input.value), hidden: false, cap: 0, childIds: g.children.map((x) => x.child.id) }; await parentGameMutation('/game/parent/rewards', { rewards: [...g.rewards, reward] }); }, 'ghost'));
   box.append(el('h2', '🚀 Family Rocket'));
   if (!g.rocket) { const prize = field('Prize', 'text', { placeholder: 'Ice cream', maxLength: 50 }), goal = field('Goal in ⚡', 'number', { value: 2000, min: 50 }), min = field('Minimum each', 'number', { value: 300, min: 0 }); box.append(prize.wrap, goal.wrap, min.wrap, button('Build rocket', async () => { await parentGameMutation('/game/parent/rocket', { action: 'build', prize: { emoji: '🎁', name: prize.input.value }, currency: 'gc', goal: Number(goal.input.value), minEach: Number(min.input.value), crewChildIds: g.children.map((x) => x.child.id) }); }, 'primary')); }
-  else { box.append(el('p', `${g.rocket.prize.emoji} ${g.rocket.prize.name} · ${g.rocket.totalFuel}/${g.rocket.goal} · ${g.rocket.status}`, 'notice')); if (g.rocket.status === 'fueling') box.append(button('Launch now', async () => { await parentGameMutation('/game/parent/rocket', { action: 'launch', rocketId: g.rocket.id }); }, 'ghost'), button('Scrap (no refund)', async () => { await parentGameMutation('/game/parent/rocket', { action: 'scrap', rocketId: g.rocket.id }); }, 'text-button')); else box.append(button('Prize delivered · clear', async () => { await parentGameMutation('/game/parent/rocket', { action: 'claim', rocketId: g.rocket.id }); }, 'primary')); }
+  else { box.append(el('p', `${g.rocket.prize.emoji} ${g.rocket.prize.name} · ${g.rocket.totalFuel}/${g.rocket.goal} · ${g.rocket.status}`, 'notice')); if (g.rocket.status === 'fueling') box.append(button('Launch now', () => rocketConfirmScreen(g.rocket, 'launch'), 'ghost'), button('Scrap (no refund)', () => rocketConfirmScreen(g.rocket, 'scrap'), 'text-button')); else box.append(button('Prize delivered · clear', async () => { await parentGameMutation('/game/parent/rocket', { action: 'claim', rocketId: g.rocket.id }); }, 'primary')); }
   box.append(button('Back to family', refresh, 'ghost'));
 }
 

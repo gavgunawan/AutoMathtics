@@ -146,6 +146,28 @@ test('UI Stage 2 game: parent workspace exposes server-backed game/progress cont
   assert.ok(h.root.textContent.includes('Family Rocket'));
 });
 
+test('UI Family Rocket: one click on Scrap or Launch now changes nothing; only the confirmation screen sends it', async (t) => {
+  const h = await uiFixture(t); const kid = (await h.f.child(h.a.ctx)).child; await h.api.refresh();
+  const cfg = () => h.f.store.get(`families/${h.a.familyId}/game/config`);
+  const build = () => h.f.game.rocket(h.a.ctx, { action: 'build', prize: { emoji: '🍦', name: 'Ice cream' }, currency: 'gc', goal: 100, minEach: 0, crewChildIds: [kid.id] });
+  await build(); await h.click('Game & progress');
+  const posts = () => h.requests.filter((r) => r.path === '/api/game/parent/rocket').length;
+  await h.click('Scrap (no refund)');
+  assert.ok(h.root.textContent.includes('Scrap this rocket?') && h.root.textContent.includes('not refunded'));
+  assert.equal((await cfg()).rocket.status, 'fueling', 'one click does not scrap'); assert.equal(posts(), 0, 'nothing was sent');
+  await h.click('Back'); assert.ok(h.root.textContent.includes('PARENT · GAME & PROGRESS'));
+  await h.click('Launch now');
+  assert.ok(h.root.textContent.includes('Launch this rocket now?'));
+  assert.equal((await cfg()).rocket.status, 'fueling', 'one click does not launch'); assert.equal(posts(), 0);
+  await h.click('Back');
+  await h.click('Scrap (no refund)'); await h.click('Yes, scrap it');
+  const scrapped = await cfg(); assert.equal(scrapped.rocket, null); assert.equal(scrapped.rocketHistory.at(-1).status, 'scrapped'); assert.equal(posts(), 1);
+  assert.ok(h.root.textContent.includes('Build rocket'), 'back on the game screen');
+  await build(); await h.click('Back to family'); await h.click('Game & progress');
+  await h.click('Launch now'); await h.click('Yes, launch now');
+  assert.equal((await cfg()).rocket.status, 'launched'); assert.ok(h.root.textContent.includes('Prize delivered · clear'));
+});
+
 test('UI Stage 2 game: sensitive parent game writes require fresh reauthentication and are not auto-submitted afterward', async (t) => {
   const h = await uiFixture(t); const kid = (await h.f.child(h.a.ctx)).child; await h.api.refresh();
   await h.click('Game & progress'); h.f.advance(301000);

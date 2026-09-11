@@ -73,7 +73,10 @@ export class Support {
       const ledger = (await tx.list(`families/${f}/learning/${id}/ledger`)).sort((a, b) => a.seq - b.seq);
       children.push({ id: c.id, nickname: c.nickname, icon: c.icon, status: c.status, createdAt: c.createdAt || null, demographics: c.demographics || null, start: c.start || null, progress: prog ? normalizeProgress(prog) : null, ledger });
     }
-    const config = await tx.get(`families/${f}/game/config`);
+    // The v2 rocket import's one-shot marker (server/migrate.mjs) is operator bookkeeping, not the family's
+    // data, and this is the one response that carries the game config as stored: it stays out.
+    const stored = await tx.get(`families/${f}/game/config`);
+    const config = stored ? Object.fromEntries(Object.entries(stored).filter(([k]) => k !== 'rocketMigration')) : null;
     const billing = (await tx.list(`families/${f}/billing`)).sort((a, b) => a.at - b.at)
       .map((e) => ({ id: e.id, type: e.type, plan: e.plan, periodEnd: e.periodEnd, amountCents: e.amountCents ?? null, at: e.at, actor: e.actor, state: e.result?.state || null }));
     const trail = await this.familyAudit(tx, f), audit = trail.rows.map((a) => ({ action: a.action, at: a.at, childId: a.childId || null })); // every row of this family's, in pages (fourth round)
