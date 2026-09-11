@@ -5,6 +5,8 @@ import { effectiveEntitlement } from './subscription.mjs';
 import { recoveryView } from './recovery.mjs';
 
 const MINUTE = 60_000, DAY = 24 * 60 * MINUTE;
+// Remember this device (owner's request, 11 Sep 2026): how long a session lasts on a device the parent ticked it on.
+export const REMEMBER_MS = 30 * DAY;
 const FAMILY_LIMIT = 20; // Pilot safety cap, independent of paid seat count.
 const AUDIT_RETENTION_MS = 400 * DAY, OPERATION_RETENTION_MS = DAY;
 export const DEFAULT_TIME_ZONE = 'Asia/Singapore'; // the family's calendar day for streaks; parent-editable later
@@ -94,7 +96,7 @@ export class Foundation {
     if (childId && !family.activeChildIds.includes(childId)) fail(403, 'CHILD_INACTIVE');
     return e;
   }
-  async login(idToken, previousToken) {
+  async login(idToken, previousToken, { remember } = {}) {
     text(idToken, 20, 8192);
     // The token's signature is verified locally first; the account throttle then runs on the proven
     // uid before the single fresh Auth lookup (review finding S1B-A).
@@ -117,8 +119,14 @@ export class Foundation {
       if (parent && who.authTime <= (parent.reauthAfter || 0)) fail(403, 'REAUTHENTICATE');
       // Stage 3.5: a family being deleted, or deleted, gets no new session at all — the sweep must find none (after the tombstone the parent record points at no family, so a returning parent signs in and starts fresh)
       if (family && (family.deleted === true || family.deletion?.status === 'executing')) fail(403, 'FAMILY_DELETED');
+      // Remember this device: the parent ticked it on this sign-in's SMS step, or this is the fresh check of a parent action
+      // on a device already remembered for the same account (that screen does not ask again). The session then lasts 30
+      // days from this sign-in, in whichever mode the device is left; authorize() and the identity recheck still run at
+      // every use, and sensitive actions still need a sign-in within five minutes (requireRecent).
+      const keep = typeof remember === 'boolean' ? remember : Boolean(old && old.uid === who.uid && old.remember === true && old.expiresAt > this.now());
+      const expiresAt = this.now() + (keep ? REMEMBER_MS : 30 * MINUTE);
       const s = { ...who, familyId: parent?.familyId || null, role: 'parent', childId: null,
-        csrf: randomToken(), createdAt: this.now(), expiresAt: this.now() + 30 * MINUTE, expireAt: this.now() + 30 * MINUTE };
+        csrf: randomToken(), createdAt: this.now(), expiresAt, expireAt: expiresAt, ...(keep ? { remember: true } : {}) };
       if (!parent) tx.set(path, { familyId: null, reauthAfter: 0, createdAt: this.now(), phoneKey });
       else if (parent.phoneKey !== phoneKey) tx.set(path, { ...parent, phoneKey });
       if (old) tx.delete(`sessions/${oldKey}`);
@@ -140,7 +148,7 @@ export class Foundation {
         if (c) children.push(publicChild(c));
       }
       const recovery = s.role === 'parent' ? recoveryView(await tx.get(`recoveries/${s.uid}`), this.now()) : null; // Stage 4.4: a finished request is shown until acknowledged
-      return { role: s.role, csrf: s.csrf, ...(s.role === 'parent' ? { parent: { uid: s.uid }, recovery } : {}), family: family ? {
+      return { role: s.role, csrf: s.csrf, ...(s.role === 'parent' ? { parent: { uid: s.uid }, recovery, rememberedUntil: s.remember === true ? s.expiresAt : null } : {}), family: family ? {
         id: family.id, label: family.label, children,
         ...(s.role === 'parent' ? { entitlement: effectiveEntitlement(family, this.now()), activeCount: family.activeChildIds.length, deletion: family.deletion ? { requestedAt: family.deletion.requestedAt, effectiveAt: family.deletion.effectiveAt } : null } : {}),
       } : null };
@@ -228,8 +236,9 @@ export class Foundation {
   async lock(ctx) {
     return this.store.transaction(async (tx) => {
       const { s, parent } = await this.authorize(tx, ctx, ['parent']);
+      // a remembered device stays on the launch pad for what is left of its 30 days, never less than the usual 12 hours
       const token = this.rotateSession(tx, ctx, s, {
-        role: 'selector', childId: null, pinVersion: null, expiresAt: this.now() + 12 * 60 * MINUTE,
+        role: 'selector', childId: null, pinVersion: null, expiresAt: Math.max(this.now() + 12 * 60 * MINUTE, s.remember === true ? s.expiresAt : 0),
       });
       tx.set(`parents/${s.uid}`, { ...parent, reauthAfter: Math.max(parent.reauthAfter || 0, s.authTime, Math.floor(this.now() / 1000)) });
       this.audit(tx, 'session.child_mode', s.uid, s.familyId);

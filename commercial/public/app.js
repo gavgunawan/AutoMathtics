@@ -2,6 +2,13 @@ const root = document.querySelector('#app'), status = document.querySelector('#m
 const icons = { fox: '\u{1f98a}', panda: '\u{1f43c}', tiger: '\u{1f42f}', wolf: '\u{1f43a}', robot: '\u{1f916}', rocket: '\u{1f680}' };
 let csrf = '', model = null, authModule = null, working = false, transientView = false;
 let reauthEpoch = 0, sessionRefreshPending = false, keepSdkSession = false; // keepSdkSession: a change of mobile needs the provider's fresh sign-in kept open
+// rememberChoice: the parent's answer to “Remember this device” on a sign-in's SMS step, sent with the session request;
+// undefined on the fresh check of a parent action, where the server keeps whatever the device already had
+let rememberChoice;
+const REMEMBER_PREF = 'automathtics.remember'; // this device's last answer, so the box comes back as the parent left it
+// screenId: which panel is on screen, so a late answer never touches a button that has gone; onBack: what the browser's
+// Back does on this screen (null: stay put); sendClock: the one ticking Send countdown. panel() resets all three.
+let screenId = 0, onBack = null, sendClock = null;
 const channel = 'BroadcastChannel' in window ? new BroadcastChannel('automathtics-session') : null;
 const messages = {
   CHILD_LIMIT_REACHED: 'All child slots are in use. A larger allowance is needed to add another child.',
@@ -43,12 +50,17 @@ const PROVIDER = {
   'auth/code-expired': 'That code has expired. Send a new one.', 'auth/invalid-verification-code': 'That code did not match.',
   'auth/second-factor-already-in-use': 'That mobile number is already enrolled on this account.', 'auth/multi-factor-info-not-found': 'That mobile factor is no longer on the account. Sign in again.',
 };
+// [^)] rather than [a-z-]: the provider derives a code from its own error text, so one can carry a full stop or
+// a digit — auth/internal-error-encountered. is a real one — and the narrower class left the entire message in,
+// which printed the code twice and ended the sentence with two full stops.
+const providerText = (error) => String(error?.message || '').replace(/^Firebase:\s*/, '').replace(/\s*\(auth\/[^)]+\)\.?$/, '').replace(/^Error\.?$/, '').trim();
+// A refusal that may be our own resend ladder without its seconds: the provider's bare internal error, or a
+// relayed resource-exhausted whose SMS_WAIT did not survive the trip.
+const possibleRefusal = (error) => /resource[-_ ]exhausted/i.test(`${error?.code || ''} ${error?.message || ''}`)
+  || (/^auth\/internal-error/.test(String(error?.code || '')) && !providerText(error));
 function providerMessage(error) {
   if (PROVIDER[error.code]) return PROVIDER[error.code];
-  // [^)] rather than [a-z-]: the provider derives a code from its own error text, so one can carry a full stop or
-  // a digit — auth/internal-error-encountered. is a real one — and the narrower class left the entire message in,
-  // which printed the code twice and ended the sentence with two full stops.
-  const text = String(error.message || '').replace(/^Firebase:\s*/, '').replace(/\s*\(auth\/[^)]+\)\.?$/, '').replace(/^Error\.?$/, '').trim();
+  const text = providerText(error);
   // An internal error with nothing to read is all the provider says when it will not send an SMS — whether our own
   // resend ladder refused or the provider itself failed. Say what the parent can do about either.
   if (!text && /^auth\/internal-error/.test(String(error.code || ''))) return 'The sign-in provider could not send a code just now. If you have asked for one already, the next is spaced out \u2014 wait a few minutes and try again. If this was your first try, tell the operator.';
@@ -62,7 +74,7 @@ function el(tag, text, className) {
   return node;
 }
 function button(label, action, className = '') {
-  const b = el('button', label, className); b.type = 'button'; b.onclick = () => run(action); return b;
+  const b = el('button', label, className); b.type = 'button'; b.onclick = () => (b.disabled ? undefined : run(action)); return b; // a counting-down Send is disabled: nothing runs
 }
 function field(label, type = 'text', options = {}) {
   const wrap = el('label', null, 'field'), input = el('input');
@@ -80,12 +92,56 @@ const e164 = (value) => /^\+[1-9]\d{6,14}$/.test(tidy(value));
 function armCaptcha() { auth().then((a) => a.armCaptcha?.()).catch(() => {}); }
 function panel(kicker, title, subtitle) {
   authModule?.resetCaptcha?.(); // the robot check belongs to the screen that built it; one left behind strands its frame
+  stopSendClock(); screenId++; onBack = null; // the same for the Send countdown, and Back is each screen's to set again
   root.replaceChildren();
   const box = el('section', null, 'panel'); box.setAttribute('data-deck', model?.role === 'child' ? 'GRID // ONLINE' : 'MISSION CONTROL // ONLINE'); // the corner tag every deck carries
   box.append(el('p', kicker, 'kicker'), el('h1', title), el('p', subtitle, 'muted'));
   root.append(box); return box;
 }
 function note(text) { status.textContent = text || ''; }
+// ---- the Send countdown (the SMS resend ladder, DEPLOY_V3.md section 5) ----
+// H:MM:SS with the hours unbounded, so a day's wait reads 24:00:00 rather than a clock that wrapped to 0:00:00.
+function hms(seconds) {
+  const s = Math.max(0, Math.ceil(Number(seconds) || 0)), pad = (n) => String(n).padStart(2, '0');
+  return `${Math.floor(s / 3600)}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`;
+}
+function stopSendClock() { if (sendClock) { clearInterval(sendClock); sendClock = null; } }
+// The Send button of the three screens that ask for an SMS: verify mobile, the sign-in challenge, change mobile. The
+// owner asked for a clock, not "try again in 15 minutes": until a send is allowed the button is disabled and shows
+// the time left as H:MM:SS, ticking each second, and it comes back at zero. The count comes from the provider's
+// seconds when a refusal carries them, otherwise from this device's mirror of the ladder (auth.js nextSendAt);
+// with neither there is no clock and the parent reads the plain sentence. One clock ticks at a time and panel()
+// stops it with its screen, so no interval outlives the button it drives.
+function sendControl(label, destination, send) {
+  const mine = screenId; let b = null;
+  const hold = (until) => {
+    if (mine !== screenId) return; // the screen has gone; its button with it
+    stopSendClock();
+    const tick = () => {
+      const left = Math.ceil((until - Date.now()) / 1000);
+      if (left <= 0) { stopSendClock(); b.disabled = false; b.textContent = label; return; }
+      b.disabled = true; b.textContent = `Send again in ${hms(left)}`;
+    };
+    tick(); if (b.disabled) sendClock = setInterval(tick, 1000);
+  };
+  const mirror = async () => { try { return Number(await (await auth()).nextSendAt?.(destination())) || 0; } catch { return 0; } };
+  // release: the destination changed (a different number typed), so a clock for the old one no longer applies
+  const check = async (release = false) => { const at = await mirror(); if (at > Date.now()) hold(at); else if (release) hold(0); };
+  b = button(label, async () => {
+    try { await send(); }
+    catch (error) {
+      if (error?.waitSeconds > 0) { hold(Date.now() + error.waitSeconds * 1000); throw error; }
+      if (possibleRefusal(error)) {
+        const at = await mirror();
+        if (at > Date.now()) { hold(at); throw Error('No code was sent. Codes to one number are spaced out: the Send button counts down to when the next one should be allowed.'); }
+      }
+      throw error; // the plain sentence (providerMessage) with no clock: nothing to count from
+    }
+    await check(); // the rung this send has just climbed
+  }, 'ghost');
+  check(); // a screen opened inside a wait starts counting at once
+  return { button: b, check };
+}
 async function run(fn) {
   if (working) return;
   working = true; root.setAttribute('aria-busy', 'true');
@@ -134,9 +190,9 @@ async function authStep(result, afterReady = null) {
       // Reauthentication can outlast the old cookie/preauthentication CSRF lifetime.
       csrf = (await api('/bootstrap')).csrf;
       if (afterReady?.valid && !afterReady.valid()) return;
-      await api('/auth/session', { idToken: result.idToken });
+      await api('/auth/session', { idToken: result.idToken, ...(typeof rememberChoice === 'boolean' ? { remember: rememberChoice } : {}) });
     }
-    finally { if (!keepSdkSession) await (await auth()).clear(); result.idToken = ''; }
+    finally { if (!keepSdkSession) await (await auth()).clear(); result.idToken = ''; rememberChoice = undefined; }
     await refresh(); channel?.postMessage('changed');
     if (afterReady) await afterReady();
     return;
@@ -144,6 +200,7 @@ async function authStep(result, afterReady = null) {
   if (result.stage === 'signin') { signInScreen(false, afterReady, Boolean(afterReady)); note(result.notice); return; }
   if (result.stage === 'verify') {
     const box = panel('STEP 1 OF 3 · EMAIL', 'Check your inbox.', 'Open the verification email, then come back here. Nothing about your family exists until this is done.');
+    if (afterReady) onBack = cancelVerification;
     box.append(rail(1), button('I have verified my email', async () => authStep(await (await auth()).checkEmail(), afterReady), 'primary'),
       button('Resend verification email', async () => { await (await auth()).resendEmail(); note('Verification email requested.'); }, 'ghost'));
     return;
@@ -152,17 +209,36 @@ async function authStep(result, afterReady = null) {
   const box = panel(enrolling ? 'STEP 1 OF 3 · MOBILE' : 'SECOND CHECK', enrolling ? 'Protect the command deck.' : 'Your second security check',
     enrolling ? 'Verify your own mobile number. Children never need a phone or an email address.' : `Send a code to ${result.phone || 'your verified mobile'} to finish signing in.`);
   if (enrolling) box.append(rail(1));
+  if (afterReady) onBack = cancelVerification; // the second check of a parent action: Back abandons the action, as Cancel would
   const phone = field('Mobile number, including country code', 'tel', { placeholder: '+62...', autocomplete: 'tel' });
   const consent = el('input'); consent.type = 'checkbox';
   const consentLabel = el('label', null, 'check');
   consentLabel.append(consent, el('span', 'I agree to receive a verification SMS. Google processes this number for authentication and abuse prevention; carrier charges may apply.'));
   if (enrolling) box.append(phone.wrap, consentLabel);
   const otp = field('SMS verification code', 'text', { inputMode: 'numeric', pattern: '[0-9]{6}', maxLength: 6, autocomplete: 'one-time-code' });
-  box.append(button('Send verification code', async () => {
+  // the destination is the typed number when enrolling; on the challenge it is the enrolled factor, which auth.js knows
+  const send = sendControl('Send verification code', () => tidy(phone.input.value), async () => {
     if (enrolling && !e164(phone.input.value)) { note('Enter the number in international form, for example +62 812 3456 7890.'); return; }
     note('Tick \u201cI\u2019m not a robot\u201d just below, then the code is sent.'); await (await auth()).sendCode(tidy(phone.input.value), consent.checked); note('Code sent. Enter it below.');
-  }, 'ghost'), captchaBox(), otp.wrap,
-    button('Verify code', async () => authStep(await (await auth()).confirmCode(otp.input.value), afterReady), 'primary'));
+  });
+  if (enrolling) phone.input.addEventListener('input', () => send.check(true));
+  // Remember this device (owner's request, 11 Sep 2026): asked on a sign-in's own SMS step only. Enrolment ends in a fresh
+  // sign-in anyway, and the check of a parent action keeps what the device already had (the server decides that).
+  rememberChoice = undefined;
+  let remember = null;
+  const rememberLabel = !enrolling && !afterReady ? el('label', null, 'check') : null;
+  if (rememberLabel) {
+    remember = el('input'); remember.type = 'checkbox';
+    try { remember.checked = localStorage.getItem(REMEMBER_PREF) === '1'; } catch { /* no storage: unticked */ }
+    const words = el('span', 'Remember this device for 30 days');
+    words.append(el('small', 'Opening the app again from a bookmark or home-screen shortcut skips signing in. Tick it only on a device you trust. \u201cHand over to kids\u201d still locks parent access, and changing your password signs every remembered device out.'));
+    rememberLabel.append(remember, words);
+  }
+  box.append(send.button, captchaBox(), otp.wrap, ...(rememberLabel ? [rememberLabel] : []),
+    button('Verify code', async () => {
+      if (remember) { rememberChoice = remember.checked; try { if (remember.checked) localStorage.setItem(REMEMBER_PREF, '1'); else localStorage.removeItem(REMEMBER_PREF); } catch { /* no storage */ } }
+      return authStep(await (await auth()).confirmCode(otp.input.value), afterReady);
+    }, 'primary'));
   armCaptcha();
   if (!enrolling && result.email) box.append(button('I can\u2019t receive the code', () => recoveryScreen(result.email), 'text-button')); // Stage 4.4
 }
@@ -170,6 +246,7 @@ async function authStep(result, afterReady = null) {
 function recoveryScreen(email) {
   reauthEpoch++; model = null;
   const box = panel('ACCOUNT RECOVERY', 'Lost your phone?', 'Recovery takes seven days and needs your email inbox. Nobody can shorten it. Your family and children stay exactly as they are.');
+  onBack = () => signInScreen();
   box.append(el('p', `1. Start recovery for ${email}.  2. Reset your password from the emailed link \u2014 that proves the inbox is yours.  3. After the waiting period, complete recovery here, then sign in and verify your new mobile.`, 'notice'));
   const when = (ms) => new Date(ms).toLocaleString();
   box.append(button('1. Start recovery', async () => { const r = await api('/auth/recovery/start', { email }); note(`Recovery requested. If this account exists, it can be completed from ${when(r.readyAt)} at the earliest. Now reset your password from the email link.`); }, 'primary'),
@@ -195,6 +272,7 @@ function signInScreen(signup = false, afterReady = null, reauth = false) {
     reauth ? 'This sensitive parent action needs a fresh password and SMS check.' :
       (signup ? 'Create your adult account first. Then build a private grid for your explorers.' : 'One secure parent account. A personal learning grid for every child.'));
   if (!reauth) box.append(rail(1));
+  if (reauth) onBack = cancelVerification; else if (signup) onBack = () => signInScreen();
   const form = el('form', null, 'auth-form');
   const email = field('Parent email', 'email', { autocomplete: 'email', maxLength: 254 });
   const password = field('Password', 'password', { autocomplete: signup ? 'new-password' : 'current-password', minLength: signup ? 12 : 1, maxLength: 128 });
@@ -205,15 +283,16 @@ function signInScreen(signup = false, afterReady = null, reauth = false) {
     await authStep(await (signup ? a.signUp(email.input.value, value) : a.signIn(email.input.value, value)), afterReady);
   }); };
   box.append(form);
-  if (reauth) box.append(button('Cancel verification', async () => {
-    reauthEpoch++; keepSdkSession = false;
-    if (authModule) await authModule.clear();
-    await refresh(); note('Verification cancelled. The unfinished action was discarded.');
-  }, 'ghost'));
+  if (reauth) box.append(button('Cancel verification', cancelVerification, 'ghost'));
   if (!reauth) box.append(button(signup ? 'Already registered? Sign in' : 'New here? Create a parent account', () => signInScreen(!signup), 'ghost'));
   if (!signup && !reauth) box.append(button('Forgot password?', async () => { if (!email.input.checkValidity()) { email.input.reportValidity(); return; }
     await (await auth()).resetPassword(email.input.value); note('If this email can receive a reset link, one has been requested. Mobile verification is still required.'); }, 'text-button'));
   box.append(el('p', 'EMAIL VERIFIED  //  MOBILE VERIFIED  //  FAMILY-ONLY ACCESS', 'trust'));
+}
+async function cancelVerification() {
+  reauthEpoch++; keepSdkSession = false;
+  if (authModule) await authModule.clear();
+  await refresh(); note('Verification cancelled. The unfinished action was discarded.');
 }
 function reauthenticate(afterReady) {
   // This scope comes from authenticated /me, not an editable email form or storage.
@@ -333,6 +412,7 @@ function downgradeScreen(plan, family, op) {
   transientView = true;
   const active = family.children.filter((c) => c.status === 'active'), choose = active.length > plan.seats;
   const box = panel('CHANGE PLAN', `${plan.name}: ${plan.seats} child slots`, choose ? `Choose who keeps a seat from the next renewal (up to ${plan.seats}). The others keep all their progress and can be given a seat again later.` : 'The change takes effect at the next renewal. Nobody loses a seat before then.');
+  onBack = refresh; // every parent sub-screen: Back is its own Back button, to the workspace
   const picks = new Map();
   if (choose) for (const c of active) {
     const label = el('label', null, 'check'), input = document.createElement('input'); input.type = 'checkbox';
@@ -346,7 +426,7 @@ function downgradeScreen(plan, family, op) {
 function deletionScreen(family) {
   transientView = true;
   const box = panel('DELETE FAMILY', family.label, 'The children\u2019s profiles, progress, coins and this family\u2019s settings will be removed after 14 days. Payment records and the security audit trail are kept as required. A used free trial stays used. Your sign-in account itself is separate and is not deleted here.');
-  const op = crypto.randomUUID();
+  const op = crypto.randomUUID(); onBack = refresh;
   box.append(el('p', 'You can cancel any time in the next 14 days from the parent workspace. Download your data first if you want to keep it.', 'notice'),
     button('Delete after 14 days', async () => { await api('/family/deletion', { operationId: op }); note('Deletion scheduled.'); await refresh(); }, 'primary'), button('Back', refresh, 'ghost'));
 }
@@ -403,6 +483,7 @@ async function parentScreen() {
   }, 'primary'));
   if (family.children.length) row.append(button('Game & progress', parentGameScreen, 'ghost'));
   row.append(button('Sign out', signOut, 'ghost')); box.append(row);
+  if (model?.rememberedUntil) box.append(el('p', `This device stays signed in until ${new Date(model.rememberedUntil).toLocaleDateString()}. Sign out to forget it.`, 'notice')); // Remember this device
   box.append(button('Change my mobile number', changeMobileScreen, 'text-button')); // Stage 4 review: the old phone still works, the number is changing
   for (const child of family.children) { box.append(button(`Reset ${child.nickname}\u2019s PIN`, () => resetPinScreen(child), 'text-button')); box.append(button(`Change ${child.nickname}\u2019s starting point`, () => startScreen(child), 'text-button')); }
   // Stage 3.5: the family's own data to keep, and the way to leave — 14 days to change your mind
@@ -430,20 +511,23 @@ function changeMobileScreen() {
   reauthenticate(async () => {
     transientView = true;
     const box = panel('CHANGE MOBILE', 'Your new number.', 'A code goes to the new number. The old one stops working for sign-in the moment the new one is verified.');
+    const cancel = async () => { keepSdkSession = false; if (authModule) await authModule.clear(); await refresh(); };
+    onBack = cancel;
     const phone = field('New mobile number, including country code', 'tel', { placeholder: '+62...', autocomplete: 'tel' });
     const consent = el('input'); consent.type = 'checkbox'; const consentLabel = el('label', null, 'check');
     consentLabel.append(consent, el('span', 'I agree to receive a verification SMS on this number. Google processes it for authentication and abuse prevention; carrier charges may apply.'));
     const otp = field('SMS verification code', 'text', { inputMode: 'numeric', pattern: '[0-9]{6}', maxLength: 6, autocomplete: 'one-time-code' });
-    box.append(phone.wrap, consentLabel,
-      button('Send code to the new number', async () => {
-        if (!e164(phone.input.value)) { note('Enter the number in international form, for example +62 812 3456 7890.'); return; }
-        note('Tick \u201cI\u2019m not a robot\u201d just below, then the code is sent.'); await (await auth()).changeMobileSend(tidy(phone.input.value), consent.checked); note('Code sent to the new number. Enter it below.');
-      }, 'ghost'), captchaBox(), otp.wrap,
+    const send = sendControl('Send code to the new number', () => tidy(phone.input.value), async () => {
+      if (!e164(phone.input.value)) { note('Enter the number in international form, for example +62 812 3456 7890.'); return; }
+      note('Tick \u201cI\u2019m not a robot\u201d just below, then the code is sent.'); await (await auth()).changeMobileSend(tidy(phone.input.value), consent.checked); note('Code sent to the new number. Enter it below.');
+    });
+    phone.input.addEventListener('input', () => send.check(true)); // the clock belongs to the number typed
+    box.append(phone.wrap, consentLabel, send.button, captchaBox(), otp.wrap,
       button('Verify new number', async () => {
         const r = await (await auth()).changeMobileConfirm(otp.input.value); keepSdkSession = false;
         await api('/auth/logout', {}); channel?.postMessage('changed'); model = null; signInScreen(); note(r.notice); // the next sign-in carries the new factor
       }, 'primary'),
-      button('Cancel', async () => { keepSdkSession = false; if (authModule) await authModule.clear(); await refresh(); }, 'ghost'));
+      button('Cancel', cancel, 'ghost'));
     armCaptcha();
   });
 }
@@ -470,6 +554,7 @@ function startChooser(defaults = {}) {
 function addChildScreen(draft = {}) {
   transientView = true;
   const box = panel('NEW CHILD PROFILE', 'Meet your next explorer.', 'A nickname and an icon are all the grid needs. Age and year level help us place the explorer. No child email, phone number, photo or full birth date \u2014 ever.');
+  onBack = refresh;
   const name = field('Nickname', 'text', { maxLength: 24, autocomplete: 'off', value: draft.nickname || '' });
   const select = el('select'); select.setAttribute('aria-label', 'Profile icon');
   for (const [key, icon] of Object.entries(icons)) { const option = el('option', `${icon} ${key}`); option.value = key; select.append(option); }
@@ -496,6 +581,7 @@ function addChildScreen(draft = {}) {
 function startScreen(child) {
   transientView = true;
   const box = panel('LAUNCH POINT', child.nickname, 'Only possible before the child has played anything. A recent parent sign-in is required.');
+  onBack = refresh;
   const start = startChooser({ yearLevel: child.yearLevel, start: child.start });
   box.append(start.wrap, start.options, button('Save starting point', async () => {
     try { await api(`/children/${child.id}/start`, { start: start.value(), yearLevel: Number(start.year.value) }); note('Starting point saved.'); await refresh(); }
@@ -505,6 +591,7 @@ function startScreen(child) {
 function resetPinScreen(child) {
   transientView = true;
   const box = panel('PARENT ACTION', `Reset ${child.nickname}\u2019s PIN`, 'This invalidates existing child sessions. A recent parent sign-in is required.');
+  onBack = refresh;
   const { first, repeat, valid } = pinFields();
   box.append(first.wrap, repeat.wrap, button('Set new PIN', async () => {
     if (!valid()) { note('Enter the same six-digit PIN twice.'); return; }
@@ -522,6 +609,7 @@ function selectorScreen() {
   box.append(cards(model.family.children.filter((c) => c.status === 'active'), (child) => {
     transientView = true;
     const pane = panel('YOUR PRIVATE GRID', child.nickname, 'Enter your six-digit PIN.');
+    onBack = refresh; // back to the launch pad, as "Choose another child"
     const p = field('Child PIN', 'password', { inputMode: 'numeric', maxLength: 6, pattern: '[0-9]{6}', autocomplete: 'off' });
     const enter = async () => { const code = p.input.value; p.input.value = ''; await api(`/children/${child.id}/enter`, { pin: code }); channel?.postMessage('changed'); await refresh(); };
     p.input.addEventListener('keydown', (event) => { if (event.key === 'Enter') run(enter); });
@@ -591,6 +679,7 @@ async function childScreen() {
 }
 async function shopScreen() {
   transientView = true; const g = await api('/game/state'); gameModel = g; const box = panel('GRID SHOP', 'Spend what you earned.', 'Cosmetics and utilities use ⚡ Grid Coins. Family rewards use 🏆 Reward Points. Prices and outcomes come from the server.');
+  onBack = childScreen;
   box.append(el('p', `Wallet · ⚡ ${g.wallet.gc} · 🏆 ${g.wallet.rp} · 🛡️ ${g.wallet.shields}`, 'notice'));
   const inv = new Set(g.wallet.inventory || []);
   for (const it of g.catalog.filter((x) => !x.hatch && !x.unlock)) {
@@ -609,6 +698,7 @@ async function shopScreen() {
 }
 async function mapScreen() {
   transientView = true; const [st, g] = await Promise.all([api('/learn/state'), api('/game/state')]); gameModel = g; const box = panel('MISSION MAP', 'Progress & fluency', 'Your map is calculated from server-recorded sessions. Accuracy and time cannot be edited by the browser.'); if (g.wallet.activeMap) box.className += ` ${g.wallet.activeMap}`;
+  onBack = childScreen;
   for (const t of ['engine', 'nav']) { const p = st[t], card = el('div', null, 'track'); card.append(el('strong', `${TRACK[t].emoji} ${TRACK[t].name} · Sector ${p.levelId}`), el('span', `${Math.min(100, p.paper - 1)} papers · ${p.bossCleared} crowns`, 'card-meta')); box.append(card); }
   if (!g.heatmap.length) box.append(el('p', 'Complete some sessions to light up the fluency grid.', 'muted'));
   for (const c of g.heatmap.sort((a,b) => a.track.localeCompare(b.track) || a.level-b.level || a.tier-b.tier)) { const row = el('div', null, 'heat-row'); row.append(el('strong', `${TRACK[c.track].emoji} ${c.levelId} · Tier ${c.tier}`), el('span', `${c.accuracy}% · ${c.avgSeconds ?? '—'} s avg · ${c.attempts} questions`, 'card-meta')); box.append(row); }
@@ -617,6 +707,7 @@ async function mapScreen() {
 function displayText(d) { if (d.layout === 'stack') return `${d.top} ${d.sym} ${d.bottom} =`; if (d.layout === 'frac') return `${d.pre ? `${d.pre} ` : ''}${d.parts.map((p) => (p.sym ? p.sym : `${p.n}/${p.d}`)).join(' ')} =`; return d.text; }
 function playView(session, q) {
   stopTimer(); transientView = true; const t = TRACK[q.track || session.track], box = panel(`${t.emoji} ${t.name} · SECTOR ${q.levelId || session.levelId}`, runLabel(session), `Question ${q.index + 1} of ${session.count}${session.mode === 'placement' ? '' : ` · paper ${q.paper}`}`);
+  onBack = refresh; // to the child's home: the session stays open there under "Continue", nothing is quit or lost
   const shout = gameModel?.wallet?.activeShout, tier = playStreak >= 18 ? 3 : playStreak >= 14 ? 2 : playStreak >= 9 ? 1 : playStreak >= 4 ? 0 : -1;
   if (tier >= 0) box.append(el('p', (SHOUTS[shout] || ['COMBO!', 'SUPER COMBO!', 'HYPER COMBO!', 'ULTRA COMBO!!'])[tier], 'combo'));
   box.append(el('p', displayText(q.display), 'question'));
@@ -636,6 +727,7 @@ function summaryView(session, s) {
   transientView = true;
   if (s.placement) { // the test is done: where each track begins
     const box = panel('🎯 PLACEMENT COMPLETE', 'Your grid is set.', `${s.correct} out of ${s.total} in the test. Coins start with your first real papers.`);
+    onBack = refresh;
     const words = { ahead: 'ready for the next sector', 'on-level': 'right in the middle of the sector', building: 'building up through the sector', foundations: 'from the start of the sector', previous: 'a sector back, from the middle', 'previous-start': 'a sector back, from the start' };
     for (const tr of ['engine', 'nav']) { const p = s.placement[tr]; box.append(el('p', `${TRACK[tr].emoji} ${TRACK[tr].name}: starts at Sector ${p.levelId}, paper ${p.paper} — ${words[p.band] || p.band} (${p.correct}/${p.total} right).`, 'notice')); }
     box.append(button('Go to my grid', refresh, 'primary')); return;
@@ -644,6 +736,7 @@ function summaryView(session, s) {
   const box = panel(`${t.emoji} ${t.name} · ${s.papers}`, s.passed ? 'PASS!' : 'Not this time.',
     s.passed ? (s.rewarded ? `${s.correct} out of ${s.total}. ⚡ +${s.gcEarned} 🏆 +${s.rpEarned}` : `${s.correct} out of ${s.total}. Practice runs keep you sharp but pay nothing — coins come back when the other track finishes the sector.`)
       : `${s.correct} out of ${s.total}${s.timeout ? `, ${s.timeout} timed out` : ''}. A pass needs every question right.`);
+  onBack = refresh;
   if (s.leveledUp) box.append(el('p', `Sector ${s.newLevelId} unlocked!`, 'notice'));
   else if (s.bossNext) box.append(el('p', '👑 A check point is next: questions from the whole tier, double loot.', 'notice'));
   for (const e of s.gameEvents || []) if (e.item) box.append(el('p', `${e.type === 'hatched' ? '🥚 HATCH!' : '🏆 UNLOCK!'} ${e.item.emoji} ${e.item.name}`, 'notice'));
@@ -657,6 +750,7 @@ function rocketConfirmScreen(rocket, action) {
   const box = panel('PARENT · FAMILY ROCKET', scrap ? 'Scrap this rocket?' : 'Launch this rocket now?', scrap
     ? 'Scrapping ends this rocket for good. The fuel already in it is not refunded to anyone, and the rocket cannot be brought back.'
     : 'Launching ends fuelling now, before the goal is reached, and the family owes the prize. It cannot be undone.');
+  onBack = parentGameScreen; // its own Back button's step: nothing is launched or scrapped
   box.append(el('p', `${rocket.prize.emoji} ${rocket.prize.name} · ${rocket.totalFuel}/${rocket.goal}`, 'notice'),
     // Back comes first: the second tap of a double-tap on Launch or Scrap lands where the first button is.
     button('Back', parentGameScreen, 'ghost'),
@@ -671,6 +765,7 @@ async function parentGameMutation(path, payload) {
 }
 async function parentGameScreen() {
   transientView = true; const g = await api('/game/parent'); const box = panel('PARENT · GAME & PROGRESS', 'Learning controls and family rewards', 'Only the parent session can change pace, rewards, credits or the Family Rocket.');
+  onBack = refresh;
   const tz = field('Family time zone', 'text', { value: g.timeZone, maxLength: 64 }); box.append(tz.wrap, button('Save time zone', async () => { await parentGameMutation('/game/parent/settings', { timeZone: tz.input.value }); }, 'ghost'));
   for (const row of g.children) {
     const card = el('div', null, 'track'); card.append(el('strong', `${icons[row.child.icon] || '🤖'} ${row.child.nickname}`), el('span', `⚙️ ${row.engine.levelId} ${Math.min(100,row.engine.paper-1)}/100 · 🧭 ${row.nav.levelId} ${Math.min(100,row.nav.paper-1)}/100 · ⚡${row.wallet.gc} · 🏆${row.wallet.rp}`, 'card-meta'));
@@ -699,7 +794,32 @@ await run(refresh);
 // is what changes the plan, so tell the parent what to expect and look again shortly.
 const returned = typeof location === 'object' && location?.search ? new URLSearchParams(location.search) : null;
 if (returned?.get('checkout')) {
+// Support's reset for this device's SMS countdown: opening the app with ?resetsms removes every record the Send
+// countdown keeps (auth.js), for when an operator has cleared the server's count after a delivery fault. It runs
+// before the address is tidied below, which drops the flag again.
+try { if (/[?&]resetsms(=|&|$)/.test(location.search)) for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && k.startsWith('automathtics.sms.')) localStorage.removeItem(k); } } catch { /* no storage, or no location here */ }
   if (typeof history === 'object' && history?.replaceState) history.replaceState(null, '', location.pathname);
   if (returned.get('result') === 'success') { note('Payment received. Your plan updates as soon as the payment provider confirms it; this page checks again in a moment.'); setTimeout(() => { if (!working) run(refresh); }, 4000); }
   else note('Checkout cancelled. Nothing was charged.');
 }
+// Back stays inside v3, as far as a browser lets a page decide. The owner (11 Sep 2026) pressed Back on the kids' page and landed on the old v2 site: not a
+// link — v3 has none — but the browser's own history, because that tab showed v2 before v3 was opened in it. So
+// the page marks its own entry (after the query string above is dropped: the URL stays as it is now) and stands a
+// guard entry on top. Back then lands on the marked entry without leaving the document; the app takes the step
+// itself — a game screen, the shop, the map, play or a summary go to the child's home, a parent sub-screen to the
+// workspace, a top-level screen stays put — and the guard goes back up, so every later Back is caught the same way.
+// Only history traversal inside this document fires popstate: a navigation the app starts (the hosted checkout,
+// the masthead link) is an ordinary navigation and is never held back. Browsers may skip an entry a page pushed
+// before anyone touched it, and some skip entries pushed without a tap after repeated presses, so this is best effort:
+// Back pressed before the first tap, or mashed, can still leave. The old v2 site is offline since 11 Sep 2026, so a Back
+// that escapes lands on GitHub's 404 page, not the old game; opening v3 in a fresh tab leaves nothing behind it.
+function guardBack() {
+  if (typeof history !== 'object' || typeof history?.pushState !== 'function' || typeof window?.addEventListener !== 'function') return;
+  try { history.replaceState({ automathtics: 'app' }, ''); history.pushState({ automathtics: 'guard' }, ''); } catch { return; }
+  window.addEventListener('popstate', (event) => {
+    if (event?.state?.automathtics !== 'app') return; // Forward onto the guard, or an entry this page did not make
+    try { history.pushState({ automathtics: 'guard' }, ''); } catch { /* the step below still happens */ }
+    if (onBack) run(onBack);
+  });
+}
+guardBack();

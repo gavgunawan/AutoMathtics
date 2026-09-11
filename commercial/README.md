@@ -133,6 +133,10 @@ A parent session lasts at most 30 minutes. Selector/child mode lasts at most 12 
 but revocation, membership, PIN version and entitlement are rechecked at use. A parent
 operation requiring fresh authentication has a five-minute authentication-age limit.
 The clock barrier uses the later of server time and the original authentication time.
+When the parent ticks *Remember this device* on a sign-in's SMS step, the session on that device lasts 30 days
+from that sign-in instead, in whichever mode the device is left (Mission Control or the launch pad). The same
+rechecks run at every use, sensitive actions still need a sign-in within five minutes, handing over to the kids
+still locks parent access, and a password change or a change of mobile ends it.
 
 ## Staging configuration - do not deploy to the prototype project
 

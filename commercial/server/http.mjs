@@ -7,10 +7,9 @@ import { WEBHOOK_BODY_LIMIT } from './payments.mjs';
 // Firebase Hosting forwards only the specially named __session cookie to Cloud Run.
 const COOKIE = '__session';
 const FILES = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'],
-  '/auth.js': ['auth.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css'],
+  '/auth.js': ['auth.js', 'text/javascript'], '/sms-schedule.js': ['sms-schedule.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css'],
   // the game's own faces, served from this origin (public/fonts, SIL Open Font License): no third-party request at sign-in
   ...Object.fromEntries(['Orbitron-700', 'Rajdhani-500', 'Rajdhani-600', 'Rajdhani-700', 'JetBrainsMono-600'].map((f) => [`/fonts/${f}.woff2`, [`fonts/${f}.woff2`, 'font/woff2']])) };
-const PARENT_COOKIE_S = 30 * 60, DEVICE_COOKIE_S = 12 * 3600; // match the server-side session lifetimes
 const cookieToken = (req) => {
   const matches = (req.headers.cookie || '').split(';').map((v) => v.trim()).filter((v) => v.startsWith(`${COOKIE}=`));
   return matches.length === 1 ? matches[0].slice(COOKIE.length + 1) : null;
@@ -47,6 +46,12 @@ async function body(req) {
   try { return JSON.parse(raw.toString('utf8')); } catch { fail(400, 'INVALID_JSON'); }
 }
 export function createApp(service, cfg, { publicDir = new URL('../public/', import.meta.url), reportError = () => {}, learning = null, game = null, billing = null, payments = null, support = null, recovery = null, peerFactor = 20 } = {}) {
+  // A session cookie lives exactly as long as the session row it names (F12), read back from the row the service has just
+  // written: 30 minutes for a parent, 12 hours on the launch pad, or what is left of 30 days on a remembered device.
+  async function sessionCookie(res, token) {
+    const row = await service.store.get(`sessions/${sha256(token)}`);
+    setCookie(res, token, row ? Math.max(1, Math.ceil((row.expiresAt - service.now()) / 1000)) : 0);
+  }
   function setCookie(res, value, maxAge) {
     res.setHeader('Set-Cookie', `${COOKIE}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${cfg.emulator ? '' : '; Secure'}`);
   }
@@ -137,7 +142,8 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
         data = await body(req);
       }
       if (req.method === 'POST' && path === '/api/auth/session') {
-        object(data, ['idToken']);
+        object(data, ['idToken', 'remember']);
+        if (data.remember !== undefined && typeof data.remember !== 'boolean') fail(400, 'INVALID_REQUEST'); // Remember this device: true, false, or not asked
         // Failures are counted per client address (see clientAddress); successes cost nothing here
         // and are limited per account inside login(), so a flood of bad tokens from one address —
         // or from everyone behind a mis-measured proxy — cannot lock honest parents out.
@@ -146,7 +152,7 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
           // A token without even a valid signature costs a saturated address nothing more than a read: the budgets are looked at
           // before any work (Stage 4 review, third round). A validly signed token is never refused for its address.
           if (!(await service.identity.verifyLocal(data.idToken))) { for (const [bucket, factor] of budgets('login-fail', req)) await service.peek(bucket, 30 * factor); fail(401, 'INVALID_LOGIN'); }
-          next = await service.login(data.idToken, token);
+          next = await service.login(data.idToken, token, { remember: data.remember });
         }
         catch (error) {
           // Address budgets count failed credentials only. A saturated shared IP must not block a
@@ -157,7 +163,7 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
           }
           throw error;
         }
-        setCookie(res, next, PARENT_COOKIE_S); return json(200, { ok: true });
+        await sessionCookie(res, next); return json(200, { ok: true });
       }
       if (req.method === 'POST' && path === '/api/auth/logout') {
         object(data, []);
@@ -213,17 +219,17 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
       if (game && path === '/api/game/parent/settings') return json(200, await game.settings(ctx, data));
       if (path === '/api/family') {
         const { token: next, ...result } = await service.createFamily(ctx, data);
-        if (next) setCookie(res, next, PARENT_COOKIE_S);
+        if (next) await sessionCookie(res, next);
         return json(200, result);
       }
       if (path === '/api/children') return json(201, await service.createChild(ctx, data, req.headers['idempotency-key']));
-      if (path === '/api/session/lock') { object(data, []); const next = await service.lock(ctx); setCookie(res, next, DEVICE_COOKIE_S); return json(200, { ok: true }); }
-      if (path === '/api/session/select') { object(data, []); const next = await service.selector(ctx); setCookie(res, next, DEVICE_COOKIE_S); return json(200, { ok: true }); }
+      if (path === '/api/session/lock') { object(data, []); const next = await service.lock(ctx); await sessionCookie(res, next); return json(200, { ok: true }); }
+      if (path === '/api/session/select') { object(data, []); const next = await service.selector(ctx); await sessionCookie(res, next); return json(200, { ok: true }); }
       const match = path.match(/^\/api\/children\/([a-f0-9-]+)\/(enter|pin|start)$/);
       if (match) {
         if (match[2] === 'start') return json(200, await service.setChildStart(ctx, match[1], data));
         object(data, ['pin']);
-        if (match[2] === 'enter') { const next = await service.selectChild(ctx, match[1], data.pin); setCookie(res, next, DEVICE_COOKIE_S); }
+        if (match[2] === 'enter') { const next = await service.selectChild(ctx, match[1], data.pin); await sessionCookie(res, next); }
         else await service.resetPin(ctx, match[1], data.pin);
         return json(200, { ok: true });
       }
