@@ -84,6 +84,17 @@ test('a new sector\'s first paper opens its How to first, once per child and sec
   await plain.click('⚙️ Start Engine ▶'); assert.ok(plain.root.textContent.includes('Paper 1 · 1/25'));
 });
 
+test('How to always has a way out: Back from its first line goes home and starts nothing, opened from the home or before a first paper; the privacy notes name the key it keeps', async (t) => {
+  const h = await kid(t, { storage: memoryStorage() }), sessions = () => h.requests.filter((r) => r.path === '/api/learn/session').length;
+  await h.click('📖 How to'); assert.ok(has(h, 'Next step →') && has(h, 'Back'), 'Back beside Next step, from the first line (QA, 12 Sep 2026)');
+  await h.click('Back'); assert.ok(home(h));
+  await h.click('⚙️ Start Engine ▶'); assert.ok(h.root.textContent.includes('⚙️ ENGINE · SECTOR A · HOW TO') && has(h, 'Back'));
+  await h.click('Back'); assert.ok(home(h)); assert.equal(sessions(), 0, 'nothing was started');
+  await h.click('⚙️ Start Engine ▶'); assert.ok(h.root.textContent.includes('Paper 1 · 1/25'), 'seen: the next start goes straight to the paper');
+  const privacy = await readFile(new URL('../PRIVACY.md', import.meta.url), 'utf8');
+  assert.ok(privacy.includes('`automathtics.howto.<childId>`'), 'PRIVACY.md names the device key the How to keeps');
+});
+
 test('the Navigator topics in the page are the server\'s own', async () => {
   const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
   const client = vm.runInNewContext(`(${/const NAV_TOPICS = (\[[\s\S]*?\n\]);/.exec(app)[1]})`);

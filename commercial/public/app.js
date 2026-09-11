@@ -955,8 +955,18 @@ function stopTimer() { if (timer) { clearInterval(timer); timer = null; } }
 // nothing is equipped (as v2 played them), snd_retro's 8-bit squares, snd_space's sine glides. The audio context is made by
 // the first tap that sounds (a browser allows audio from a tap), and anything that fails is silence.
 function ac() {
-  try { const Ctx = window.AudioContext || window.webkitAudioContext; if (!Ctx) return null; audioCtx ||= new Ctx(); if (audioCtx.state === 'suspended') audioCtx.resume?.(); return audioCtx; } catch { return null; }
+  try { const Ctx = window.AudioContext || window.webkitAudioContext; if (!Ctx) return null; audioCtx ||= new Ctx(); if (audioCtx.state === 'suspended') audioCtx.resume?.()?.catch?.(() => {}); return audioCtx; } catch { return null; }
 }
+// iPad Safari lets WebAudio start only inside a tap, and a sound here plays once the server has answered, when the tap is long over
+// (QA, 12 Sep 2026). So on a kid's device a tap — the PIN pad's first — makes the context, or wakes one the system has suspended, and
+// plays one silent sample inside the tap itself; the sounds after it then play. A parent's screens make no audio at all, and a click a
+// script made (untrusted) is no tap: a context made then could not start.
+function unlockAudio(event) {
+  if (!kidMode || event?.isTrusted === false || audioCtx?.state === 'running') return;
+  const c = ac(); if (!c) return;
+  try { const s = c.createBufferSource(); s.buffer = c.createBuffer(1, 1, 22050); s.connect(c.destination); s.start(0); } catch { /* silence */ }
+}
+for (const type of ['touchend', 'click', 'keydown']) document.addEventListener?.(type, unlockAudio, true);
 function voice(f0, f1, at, dur, type, vol, glides) {
   const c = ac(); if (!c) return;
   try {
@@ -1168,7 +1178,7 @@ async function childScreen(after = {}) {
     const tile = el('div', null, `wallet-tile ${c}`); tile.append(el('span', big, 'yen'), el('span', sub, 'wallet-sub')); tiles.append(tile);
   }
   box.append(homeIntro(e, n), tiles, streakNote(g.liveRun || 0, w.shields || 0));
-  if (st.active) { const s = st.active.session; box.append(el('p', `A ${s.mode === 'placement' ? 'placement test' : `${TRACK[s.track].name} session`} is open at question ${s.index + 1} of ${s.count}.`, 'notice'), button('Continue', () => playView(s, st.active.question), 'primary')); }
+  if (st.active) { const s = st.active.session; box.append(el('p', `A ${s.mode === 'placement' ? 'placement test' : `${TRACK[s.track].name} session`} is open at question ${s.index + 1} of ${s.count}.`, 'notice'), actionRow(button('Continue', () => playView(s, st.active.question), 'primary'))); }
   const tracks = el('div', null, 'track-grid');
   if (pending) tracks.append(placementCard(st)); else for (const t of ['engine', 'nav']) tracks.append(trackCard(t, st[t], st.active ? null : () => beginRun(t, st)));
   box.append(tracks); if (!pending) box.append(jumpBanner(e, n));
@@ -1176,9 +1186,9 @@ async function childScreen(after = {}) {
   const nav = el('div', null, 'row-buttons home-nav'); // v2's four (3016-3021); How to opens on Engine, with a tab for Navigator
   nav.append(button('🛒 Shop', shopScreen, 'ghost'), button('🗺 Map', mapScreen, 'ghost'), button('📖 How to', () => howToScreen('engine', { engine: e.level, nav: n.level }), 'ghost'), button('🎓 Guide', guideScreen, 'ghost'));
   box.append(nav);
-  if (st.scan?.available && !st.active && !pending) box.append(button('🧠 SYSTEM SCAN — weekly ×2 loot ▶', () => startRun({ track: 'engine', mode: 'scan' }), 'ghost c-violet scan-go'));
+  if (st.scan?.available && !st.active && !pending) { const scan = actionRow(button('🧠 SYSTEM SCAN — weekly ×2 loot ▶', () => startRun({ track: 'engine', mode: 'scan' }), 'ghost c-violet')); scan.className = 'row-buttons scan-row'; box.append(scan); }
   else if (st.scan?.doneThisWeek) box.append(el('p', '🧠 System Scan done this week · resets Monday', 'subtle'));
-  box.append(button('Parent sign-in', () => signInScreen(), 'text-button'));
+  box.append(actionRow(button('Parent sign-in', () => signInScreen(), 'text-button')));
   const log = homeLog(child, st.history);
   root.replaceChildren(homeHeader(child, st, w), box, ...(log ? [log] : [])); showUpdate(); // the page was rebuilt after panel(): a newer release's bar goes back on
 }
@@ -1535,9 +1545,11 @@ function howToScreen(track, levels, thenStart = false) {
   const show = () => {
     const s = how.slides[slide], atEnd = slide === how.slides.length - 1 && line >= s.lines.length, row = el('div', null, 'row-buttons');
     steps.replaceChildren(el('p', s.title, 'how-title'), ...s.lines.slice(0, line).map((L, i) => el('p', `• ${L}`, i === line - 1 ? 'how-line fade' : 'how-line')));
-    if (!atEnd) { row.append(button('Next step →', () => { if (line < s.lines.length) line++; else { slide++; line = 1; } show(); }, 'primary')); tail.replaceChildren(row); return; }
+    // Back is there from the first line on (QA, 12 Sep 2026: opened from the home, Next step was the only way out)
+    if (!atEnd) { row.append(button('Next step →', () => { if (line < s.lines.length) line++; else { slide++; line = 1; } show(); }, 'primary'), button('Back', childScreen, 'ghost')); tail.replaceChildren(row); return; }
     const tips = el('div', null, 'box c-gold how-box tips'); tips.append(el('p', '💡 Tips & hacks', 'how-title'), ...how.tips.map((tip) => el('p', `★ ${tip}`, 'how-line')));
-    row.append(thenStart ? button('Got it — start practicing ▶', () => startRun({ track }), 'primary') : button('Back', childScreen, 'primary'), button('↺ Replay', () => { slide = 0; line = 1; show(); }, 'ghost'));
+    row.append(thenStart ? button('Got it — start practicing ▶', () => startRun({ track }), 'primary') : button('Back', childScreen, 'primary'), button('↺ Replay', () => { slide = 0; line = 1; show(); }, 'ghost'),
+      ...(thenStart ? [button('Back', childScreen, 'ghost')] : []));
     tail.replaceChildren(tips, row);
   };
   show(); box.append(steps, tail);

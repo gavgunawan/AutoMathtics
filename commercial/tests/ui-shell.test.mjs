@@ -33,5 +33,5 @@ test('the shell follows the role: a parent keeps the masthead, the launch pad hi
   h.nodes('INPUT')[0].value = '763829'; await h.click('Enter my grid'); assert.equal(h.html.attrs['data-mode'], 'kid');
   await h.click('Parent sign-in'); assert.equal(h.html.attrs['data-mode'], 'parent', 'sign-in opened from a child\'s grid is a parent screen');
   const css = await read('../public/styles.css');
-  for (const rule of ['html[data-mode=kid] .masthead', 'html[data-mode=kid] footer', 'html[data-mode=select] .masthead']) assert.ok(css.includes(rule), rule);
+  for (const rule of ['html[data-mode=kid] .masthead', 'html[data-mode=kid] footer', 'html[data-mode=select] .masthead', 'html[data-mode=select] footer']) assert.ok(css.includes(rule), rule); // the footer off the PIN pad too (QA, 12 Sep 2026)
 });

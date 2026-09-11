@@ -32,7 +32,8 @@ export function control(root, label) {
 // function (f, a) → that address, run before the page loads, for an address that needs the fixture's ids (an email button)
 // recordBodies: routes whose request bodies the test may read back from requests; only routes that carry no credential, such as '/api/learn/answer'
 // svg: a DOM that makes SVG nodes (document.createElementNS), as a browser does (omit: it cannot, and the page must manage without)
-export async function uiFixture(t, { family = true, signedIn = true, clock = null, storage = null, location = null, recordBodies = [], svg = false } = {}) {
+// audio: a stand-in for window.AudioContext (omit: the page has no WebAudio and plays nothing)
+export async function uiFixture(t, { family = true, signedIn = true, clock = null, storage = null, location = null, recordBodies = [], svg = false, audio = null } = {}) {
   const f = fixture();
   const a = signedIn ? (family ? await f.family('parentA', 2) : await f.login('parentA')) : null;
   if (typeof location === 'function') location = await location(f, a);
@@ -69,7 +70,7 @@ export async function uiFixture(t, { family = true, signedIn = true, clock = nul
     pushState(state) { this.entries.splice(this.index + 1); this.entries.push({ state }); this.index++; },
     replaceState(state) { this.entries[this.index] = { state }; } };
   const windowEvents = {};
-  const window = { BroadcastChannel: Channel, speechSynthesis, SpeechSynthesisUtterance, history, addEventListener: (name, fn) => { windowEvents[name] = fn; } };
+  const window = { BroadcastChannel: Channel, speechSynthesis, SpeechSynthesisUtterance, history, addEventListener: (name, fn) => { windowEvents[name] = fn; }, ...(audio ? { AudioContext: audio } : {}) };
   // Intervals are held, never run on their own: a test ticks them (and moves its clock) explicitly.
   const intervals = new Map(); let intervalId = 0;
   const context = vm.createContext({ document, window, history, BroadcastChannel: Channel, crypto: webcrypto, fetch: fetchForPage, console, TextEncoder, URLSearchParams, ...(storage ? { localStorage: storage } : {}), ...(location ? { location } : {}),
@@ -95,6 +96,7 @@ export async function uiFixture(t, { family = true, signedIn = true, clock = nul
   return { f, a, root, message, html, decor, api, requests, broadcasts, nodes: tag => nodes(root, tag), click: label => control(root, label).onclick(),
     idle, setAuth, submitLogin, draft, cookie: () => cookie, setCookie: value => { cookie = `__session=${value}`; },
     visibility: () => documentEvents.visibilitychange?.(), sessionChange: () => channelHandler?.(),
+    tap: (type = 'click') => documentEvents[type]?.({ type }), // a user's tap as the document sees it first (a click, a touchend, a key)
     // the release check (app.js releaseTick) lives as long as the page: ticked with the other clocks, never counted among them;
     // tick's promise settles once every clock has done its work (the check's question to the server included)
     history, intervals: () => [...intervals.values()].filter((fn) => fn.name !== 'releaseTick').length, tick: () => Promise.all([...intervals.values()].map((fn) => fn())),
