@@ -20,6 +20,7 @@
 //      never beside anything else on the line.
 import { dayISO, normalizeProgress, LEVELS } from './progress.mjs';
 import { GRACE_DAYS } from './subscription.mjs';
+import { SHOP_ITEMS } from './game.mjs';
 
 const DAY = 86_400_000;
 export const MIN_CELL = 5;            // --min-cell: the smallest number of families any printed number may come from
@@ -337,6 +338,209 @@ function matrixCell(c, column, cell) {
     medianSeconds: c.medianSeconds, medianShare: c.medianShare, passRate: c.passRate, flag: c.flag || null };
 }
 
+// ---------------------------------------------------------------- section 3 — rewards and the shop
+// A parent types a reward's name by hand, so the report never prints one beside anything else: each name is
+// normalised into a category, the categories carry the numbers, and an appendix lists the de-duplicated raw
+// names with nothing else on the line. The keyword lists include Indonesian, because the pilot's families
+// write in it: uang jajan is pocket money, jajan is a snack, main game is screen-and-console time, nonton is
+// watching something.
+export const REWARD_CATEGORIES = Object.freeze(['screen_time', 'money', 'outing', 'food', 'toy', 'game', 'book', 'activity', 'other']);
+export const CATEGORY_LABEL = Object.freeze({ screen_time: 'Screen time', money: 'Money / cash', outing: 'Outing',
+  food: 'Food / treat', toy: 'Toy', game: 'Game / console', book: 'Book', activity: 'Activity', other: 'Other' });
+const KEYWORDS = Object.freeze({
+  screen_time: ['screen', 'screen time', 'screentime', 'tv', 'television', 'telly', 'youtube', 'netflix', 'disney', 'ipad', 'tablet', 'phone', 'phone time', 'cartoon', 'anime', 'tiktok',
+    'nonton', 'menonton', 'tonton', 'nonton tv', 'waktu layar', 'layar', 'hp'],
+  money: ['money', 'cash', 'pocket money', 'allowance', 'dollar', 'dollars', 'rupiah', 'ringgit', 'peso', 'baht', 'savings',
+    'uang', 'uang jajan', 'uang saku', 'duit', 'tabungan'],
+  outing: ['outing', 'trip', 'day out', 'park', 'theme park', 'water park', 'playground', 'zoo', 'aquarium', 'museum', 'beach', 'cinema', 'movie', 'movies', 'mall', 'picnic', 'holiday', 'vacation', 'camping',
+    'taman', 'kebun binatang', 'pantai', 'bioskop', 'piknik', 'jalan jalan', 'liburan'],
+  food: ['ice cream', 'icecream', 'chocolate', 'candy', 'sweets', 'snack', 'snacks', 'cake', 'pizza', 'burger', 'mcdonald', 'kfc', 'boba', 'bubble tea', 'donut', 'doughnut', 'biscuit', 'dessert', 'treat', 'fries', 'milkshake', 'juice', 'soda',
+    'es krim', 'cokelat', 'permen', 'jajan', 'jajanan', 'kue', 'makan', 'makanan', 'bakso', 'martabak', 'sate', 'jus'],
+  toy: ['toy', 'toys', 'lego', 'doll', 'puzzle', 'figure', 'action figure', 'plush', 'slime', 'bike', 'bicycle', 'scooter', 'skateboard',
+    'mainan', 'boneka', 'sepeda'],
+  game: ['game', 'games', 'gaming', 'game time', 'video game', 'video games', 'playstation', 'ps4', 'ps5', 'xbox', 'nintendo', 'switch', 'roblox', 'minecraft', 'fortnite', 'mobile legends', 'free fire', 'steam', 'console', 'pc game',
+    'main game', 'mabar'],
+  book: ['book', 'books', 'comic', 'comics', 'manga', 'novel', 'magazine', 'story', 'stories',
+    'buku', 'komik', 'majalah', 'cerita'],
+  activity: ['swimming', 'swim', 'football', 'soccer', 'basketball', 'badminton', 'sport', 'sports', 'dance', 'dancing', 'music', 'piano', 'guitar', 'drawing', 'painting', 'craft', 'baking', 'cooking', 'karate', 'taekwondo', 'bowling', 'skating', 'yoga', 'futsal', 'tennis', 'sleepover', 'class', 'lesson', 'playdate',
+    'berenang', 'renang', 'sepak bola', 'bulu tangkis', 'olahraga', 'menari', 'gitar', 'menggambar', 'memasak', 'les'],
+  other: [],
+});
+const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// longest keyword first: "uang jajan" is pocket money although it contains "jajan", and "main game" is the
+// console although it contains "game". A tie goes to the earlier category in REWARD_CATEGORIES.
+const MATCHERS = Object.entries(KEYWORDS).flatMap(([category, words]) => words.map((word) => ({ category, word,
+  re: new RegExp(`(?<![\\p{L}\\p{N}])${word.split(/\s+/).map(escape).join('\\s+')}(?![\\p{L}\\p{N}])`, 'u') })))
+  .sort((a, b) => b.word.length - a.word.length || REWARD_CATEGORIES.indexOf(a.category) - REWARD_CATEGORIES.indexOf(b.category));
+/** Fold a parent-entered name to plain lower-case words: accents, emoji and punctuation all become spaces. */
+export const normalizeName = (name) => String(name ?? '').normalize('NFKD').replace(/\p{M}+/gu, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+export function rewardCategory(name) {
+  const text = normalizeName(name);
+  if (!text) return 'other';
+  for (const m of MATCHERS) if (m.re.test(text)) return m.category;
+  return 'other';
+}
+/** Cost bands, so the owner can see what a typical reward of a kind costs without any single reward showing. */
+export const COST_BANDS = Object.freeze([[1, 99], [100, 199], [200, 499], [500, 999], [1000, 1999], [2000, 4999], [5000, null]]);
+export function costBand(cost) {
+  if (!Number.isFinite(cost)) return 'not given';
+  for (const [from, to] of COST_BANDS) if (cost >= from && (to === null || cost <= to)) return to === null ? `${from}+` : `${from}–${to}`;
+  return 'not given';
+}
+/**
+ * Rewards by category: how many families use one, what it costs in reward points, how often it is asked for,
+ * approved and refused, and how long a reward waits for its first redemption.
+ *
+ * The wait is the one number the stored shape limits: the game config keeps one `updatedAt` for the whole
+ * reward list, not a date per reward (server/game.mjs → setRewards), so a pair counts only where the list has
+ * not been saved again since that first redemption. Rocket fuel paid in reward points is not a reward: it is
+ * counted on its own line, and the rocket's prize name never enters a category or the appendix.
+ */
+export function rewardInsights(snapshot, cell) {
+  const live = snapshot.families.filter((f) => !f.deleted);
+  const per = new Map(REWARD_CATEGORIES.map((k) => [k, { families: new Set(), costs: [], rewards: 0,
+    redemptions: 0, approvals: 0, refusals: 0, pending: 0, waits: [], waitFamilies: new Set(), bands: new Map() }]));
+  const names = new Set();
+  const configured = new Set(), rocket = { redemptions: 0, families: new Set() };
+  for (const f of live) {
+    const known = new Map();
+    if ((f.rewards || []).length) configured.add(f.id);
+    const band = (slot, key, familyId) => {
+      if (!slot.bands.has(key)) slot.bands.set(key, { rewards: 0, redemptions: 0, families: new Set() });
+      const b = slot.bands.get(key); b.families.add(familyId); return b;
+    };
+    for (const r of f.rewards || []) {
+      const category = rewardCategory(r.name), slot = per.get(category);
+      known.set(r.id, { category, cost: r.cost });
+      slot.rewards++; slot.families.add(f.id);
+      if (Number.isFinite(r.cost)) slot.costs.push(r.cost);
+      if (typeof r.name === 'string' && r.name.trim()) names.add(r.name.trim());
+      band(slot, costBand(r.cost), f.id).rewards++;
+    }
+    const first = new Map();
+    for (const { wallet } of f.progress || []) {
+      for (const red of wallet?.redemptions || []) {
+        if (!red || typeof red !== 'object') continue;
+        if (red.rewardId === 'rocket') { rocket.redemptions++; rocket.families.add(f.id); continue; }
+        const seen = known.get(red.rewardId), category = seen ? seen.category : rewardCategory(red.name);
+        const slot = per.get(category);
+        if (!seen && typeof red.name === 'string' && red.name.trim()) names.add(red.name.trim()); // a reward the parent has since removed
+        slot.redemptions++; slot.families.add(f.id);
+        if (red.status === 'approved') slot.approvals++;
+        else if (red.status === 'rejected') slot.refusals++;
+        else slot.pending++;
+        band(slot, costBand(seen?.cost ?? red.cost), f.id).redemptions++;
+        if (Number.isFinite(red.requestedAt) && (!first.has(red.rewardId) || first.get(red.rewardId).at > red.requestedAt)) first.set(red.rewardId, { at: red.requestedAt, category });
+      }
+    }
+    if (Number.isFinite(f.configUpdatedAt)) {
+      for (const [, v] of first) {
+        if (f.configUpdatedAt > v.at) continue; // the list was saved again after that redemption: the pair says nothing
+        const slot = per.get(v.category);
+        slot.waits.push((v.at - f.configUpdatedAt) / DAY); slot.waitFamilies.add(f.id);
+      }
+    }
+  }
+  const categories = REWARD_CATEGORIES.map((key) => {
+    const s = per.get(key), n = s.families.size;
+    return { key, label: CATEGORY_LABEL[key],
+      families: cell(n, n), rewards: cell(s.rewards, n),
+      averageCost: cell(round(mean(s.costs), 0), n), medianCost: cell(round(median(s.costs), 0), n),
+      redemptions: cell(s.redemptions, n), approvals: cell(s.approvals, n), refusals: cell(s.refusals, n), pending: cell(s.pending, n),
+      daysToFirstRedemption: cell(round(median(s.waits), 1), s.waitFamilies.size),
+      bands: [...s.bands.entries()].sort(byBand).map(([band, b]) => ({ band,
+        families: cell(b.families.size, b.families.size), rewards: cell(b.rewards, b.families.size), redemptions: cell(b.redemptions, b.families.size) })) };
+  });
+  return { categories, configuredFamilies: cell(configured.size, configured.size),
+    rocketFuel: { redemptions: cell(rocket.redemptions, rocket.families.size), families: cell(rocket.families.size, rocket.families.size) },
+    names: [...names].sort((a, b) => a.localeCompare(b)).slice(0, 500) };
+}
+const bandBounds = (label) => (label === 'not given' ? Number.MAX_SAFE_INTEGER : Number(label.split(/[–+]/)[0]));
+const byBand = (a, b) => bandBounds(a[0]) - bandBounds(b[0]);
+
+/**
+ * The shop, from the wallets and the ledgers: what is bought and what is ignored, who owns what, the balance a
+ * child held when they bought, and what the two currencies do — earned, spent, saved, and spent as a share of
+ * earned. The ledger is the source of truth for money (server/ledger.mjs): each row stores the balance after
+ * it, so the balance at the moment of a purchase is that balance minus the row's own (negative) amount.
+ */
+export function shopInsights(snapshot, cell) {
+  const live = snapshot.families.filter((f) => !f.deleted);
+  const catalogue = new Map(SHOP_ITEMS.map((x) => [x.id, x]));
+  const items = new Map(), kinds = new Map(), owned = new Map();
+  const money = { gc: blank(), rp: blank() };
+  const childFamilies = new Set();
+  let children = 0;
+  const itemSlot = (id) => { if (!items.has(id)) items.set(id, { purchases: 0, spent: 0, families: new Set(), children: new Set(), balances: [] }); return items.get(id); };
+  const kindSlot = (kind) => { if (!kinds.has(kind)) kinds.set(kind, { purchases: 0, spent: { gc: 0, rp: 0 }, families: new Set(), children: new Set(), costs: [] }); return kinds.get(kind); };
+  for (const f of live) {
+    for (const { childId, wallet } of f.progress || []) {
+      children++; childFamilies.add(f.id);
+      for (const id of wallet?.inventory || []) {
+        if (!owned.has(id)) owned.set(id, { children: new Set(), families: new Set() });
+        owned.get(id).children.add(`${f.id}:${childId}`); owned.get(id).families.add(f.id);
+      }
+      for (const c of ['gc', 'rp']) {
+        const balance = Number.isFinite(wallet?.[c]) ? wallet[c] : 0;
+        money[c].saved += balance; money[c].savedPerChild.push(balance); money[c].families.add(f.id);
+      }
+    }
+    for (const { childId, rows } of f.ledgers || []) {
+      const spent = { gc: 0, rp: 0 };
+      for (const r of rows || []) {
+        if (!r || typeof r !== 'object') continue;
+        for (const c of ['gc', 'rp']) {
+          const delta = Number.isFinite(r[c]) ? r[c] : 0;
+          if (delta > 0) money[c].earned += delta;
+          else if (delta < 0) { money[c].spent += -delta; spent[c] += -delta; }
+        }
+        if (r.type === 'shop.buy') {
+          const it = catalogue.get(r.ref) || null, slot = itemSlot(r.ref);
+          slot.purchases++; slot.spent += -(r.gc || 0); slot.families.add(f.id); slot.children.add(`${f.id}:${childId}`);
+          if (r.balance && Number.isFinite(r.balance.gc)) slot.balances.push(r.balance.gc - (r.gc || 0)); // the balance before the charge
+          const k = kindSlot(it ? it.kind : 'unknown');
+          k.purchases++; k.spent.gc += -(r.gc || 0); k.families.add(f.id); k.children.add(`${f.id}:${childId}`); k.costs.push(-(r.gc || 0));
+          if (r.balance && Number.isFinite(r.balance.gc)) money.gc.purchaseBalances.push(r.balance.gc - (r.gc || 0));
+        } else if (r.type === 'reward.request' || r.type === 'rocket.fuel' || (r.type === 'parent.adjust' && ((r.gc || 0) < 0 || (r.rp || 0) < 0))) {
+          const k = kindSlot(r.type === 'reward.request' ? 'reward' : r.type === 'rocket.fuel' ? 'rocket fuel' : 'parent adjustment');
+          k.purchases++; k.families.add(f.id); k.children.add(`${f.id}:${childId}`);
+          k.spent.gc += Math.max(0, -(r.gc || 0)); k.spent.rp += Math.max(0, -(r.rp || 0));
+          if (r.type === 'reward.request' && r.balance && Number.isFinite(r.balance.rp)) money.rp.purchaseBalances.push(r.balance.rp - (r.rp || 0));
+        }
+      }
+      for (const c of ['gc', 'rp']) if (spent[c] > 0) money[c].spentPerChild.push(spent[c]);
+    }
+  }
+  const itemRows = [...items.entries()].map(([id, s]) => {
+    const it = catalogue.get(id) || null, own = owned.get(id) || { children: new Set(), families: new Set() };
+    const basis = s.families.size;
+    return { id, name: it?.name || 'not in the catalogue', kind: it?.kind || 'unknown', cost: it?.cost ?? null,
+      purchases: cell(s.purchases, basis), children: cell(s.children.size, basis), spent: cell(s.spent, basis),
+      owners: cell(own.children.size, own.families.size),
+      ownedPercent: cell(children ? round(own.children.size * 100 / children, 1) : null, own.families.size),
+      medianBalanceBefore: cell(round(median(s.balances), 0), basis), rank: s.purchases };
+  }).sort((a, b) => b.rank - a.rank || a.id.localeCompare(b.id));
+  const publishable = itemRows.filter((r) => !r.purchases.suppressed);
+  const currencies = Object.fromEntries(['gc', 'rp'].map((c) => {
+    const m = money[c], n = m.families.size;
+    return [c, { earned: cell(m.earned, n), spent: cell(m.spent, n), saved: cell(m.saved, n),
+      spendingPercent: cell(m.earned > 0 ? round(m.spent * 100 / m.earned, 1) : null, n),
+      medianSpentPerChild: cell(round(median(m.spentPerChild), 0), n), medianSavedPerChild: cell(round(median(m.savedPerChild), 0), n),
+      medianBalanceAtPurchase: cell(round(median(m.purchaseBalances), 0), n) }];
+  }));
+  return { children: cell(children, childFamilies.size),
+    items: itemRows.map(({ rank, ...r }) => r),
+    most: publishable.slice(0, 5).map(({ rank, ...r }) => r),
+    least: publishable.slice(-5).reverse().map(({ rank, ...r }) => r),
+    neverBought: SHOP_ITEMS.filter((x) => x.cost > 0 && !items.has(x.id)).map((x) => ({ id: x.id, name: x.name, kind: x.kind, cost: x.cost })),
+    kinds: [...kinds.entries()].sort((a, b) => b[1].purchases - a[1].purchases || a[0].localeCompare(b[0])).map(([kind, s]) => ({ kind,
+      purchases: cell(s.purchases, s.families.size), children: cell(s.children.size, s.families.size),
+      spentGc: cell(s.spent.gc, s.families.size), spentRp: cell(s.spent.rp, s.families.size),
+      medianCost: cell(round(median(s.costs), 0), s.families.size) })),
+    currencies };
+}
+const blank = () => ({ earned: 0, spent: 0, saved: 0, families: new Set(), spentPerChild: [], savedPerChild: [], purchaseBalances: [] });
+
 // ---------------------------------------------------------------- reading the store (the only I/O)
 /**
  * One read-only pass for the whole report. Walks families in pages, and per family reads its children's
@@ -394,6 +598,8 @@ export function buildReport(snapshot, { minCell = MIN_CELL, by = 'year' } = {}) 
       suppressedBelow: minCell, dayWindow: snapshot.days },
     households: households(snapshot, cell),
     speed: { engine: speedMatrix(snapshot, 'engine', cell, { minCell, by: column }), nav: speedMatrix(snapshot, 'nav', cell, { minCell, by: column }) },
+    rewards: rewardInsights(snapshot, cell),
+    shop: shopInsights(snapshot, cell),
   };
 }
 /** The audit row one run writes — built here so a test can check it names the operator and no family. */

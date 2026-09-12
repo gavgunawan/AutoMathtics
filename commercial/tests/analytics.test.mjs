@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { MemoryStore } from './support.mjs';
 import { cellFactory, median, mean, monthShift, monthRange, answeredIn, activityOf, households,
   subscriptionCalendar, dailyActive, bandOf, timedRow, speedMatrix, EASY, HARD,
+  rewardCategory, normalizeName, costBand, rewardInsights, shopInsights,
   buildReport, collectSnapshot, auditRow, MIN_CELL } from '../server/analytics.mjs';
 
 const DAY = 86_400_000;
@@ -356,4 +357,233 @@ test('the report carries both matrices, and the thresholds it used', () => {
   assert.equal(report.speed.nav.rows[0].cells.find((c) => c.column === '9').sessions, 5);
   assert.deepEqual(report.speed.engine.columns, ['9']);
   assert.deepEqual(report.speed.engine.thresholds, { easy: EASY, hard: HARD, minSessions: 5, minFamilies: 5 });
+});
+
+// ---------------------------------------------------------------- section 3 — rewards and the shop
+test('a parent-entered reward name folds to a category, in English and in Indonesian', () => {
+  const c = rewardCategory;
+  assert.equal(c('Screen time'), 'screen_time');
+  assert.equal(c('30 min TV'), 'screen_time');
+  assert.equal(c('Nonton YouTube'), 'screen_time');
+  assert.equal(c('Waktu layar 1 jam'), 'screen_time');
+  assert.equal(c('Pocket money'), 'money');
+  assert.equal(c('Uang jajan'), 'money');                 // pocket money, although it contains jajan
+  assert.equal(c('uang jajan 10rb'), 'money');
+  assert.equal(c('Duit tambahan'), 'money');
+  assert.equal(c('Jajan di kantin'), 'food');             // jajan on its own is a snack
+  assert.equal(c('Ice cream'), 'food');
+  assert.equal(c('Es krim'), 'food');
+  assert.equal(c('Martabak'), 'food');
+  assert.equal(c('Trip to the zoo'), 'outing');
+  assert.equal(c('Jalan-jalan ke mall'), 'outing');
+  assert.equal(c('Ke bioskop'), 'outing');
+  assert.equal(c('New Lego set'), 'toy');
+  assert.equal(c('Mainan baru'), 'toy');
+  assert.equal(c('Main game 1 jam'), 'game');             // the console, although it contains game
+  assert.equal(c('Roblox time'), 'game');
+  assert.equal(c('Mabar sama kakak'), 'game');
+  assert.equal(c('A new book'), 'book');
+  assert.equal(c('Beli komik'), 'book');
+  assert.equal(c('Swimming lesson'), 'activity');
+  assert.equal(c('Berenang'), 'activity');
+  assert.equal(c('Les gitar'), 'activity');
+  assert.equal(c('Hadiah kejutan'), 'other');             // nothing matched: never guessed at
+  assert.equal(c(''), 'other');
+  assert.equal(c(null), 'other');
+  // a keyword only counts as a whole word, so a longer word that contains one is not a match
+  assert.equal(c('Jajanan pasar'), 'food');
+  assert.equal(c('Gameboy'), 'other');
+  // emoji, accents and punctuation are folded away before matching
+  assert.equal(normalizeName('🍦 Ice-cream!!'), 'ice cream');
+  assert.equal(rewardCategory('🍦 Ice-cream!!'), 'food');
+  assert.equal(rewardCategory('café trip'), 'outing');
+});
+
+test('cost bands put a reward beside its like', () => {
+  assert.equal(costBand(1), '1–99');
+  assert.equal(costBand(99), '1–99');
+  assert.equal(costBand(100), '100–199');
+  assert.equal(costBand(500), '500–999');
+  assert.equal(costBand(5000), '5000+');
+  assert.equal(costBand(99999), '5000+');
+  assert.equal(costBand(0), 'not given');
+  assert.equal(costBand(null), 'not given');
+});
+
+const reward = (id, name, cost) => ({ id, emoji: '🎁', name, cost, hidden: false, cap: 1, childIds: [] });
+const redemption = (rewardId, name, cost, status, requestedAt) => ({ id: id('r'), rewardId, emoji: '🎁', name, cost, date: '2026-09-05', status, requestedAt, ...(status === 'pending' ? {} : { decidedAt: requestedAt + 3600_000 }) });
+
+test('rewards by category: families, costs, redemptions, approvals, refusals, and the wait for the first redemption', () => {
+  const configuredAt = NOW - 10 * DAY, asked = NOW - 7 * DAY;
+  const families = Array.from({ length: 5 }, () => {
+    const f = fam({ rewards: [reward('r1', 'Ice cream', 200), reward('r2', 'Uang jajan', 500)], configUpdatedAt: configuredAt });
+    f.progress[0].wallet.redemptions = [
+      redemption('r1', 'Ice cream', 200, 'approved', asked),
+      redemption('r1', 'Ice cream', 200, 'rejected', asked + DAY),
+      redemption('r2', 'Uang jajan', 500, 'pending', asked + 2 * DAY),
+      { id: id('r'), rewardId: 'rocket', emoji: '🚀', name: 'Rocket fuel - Trip to Bali', cost: 100, date: '2026-09-06', status: 'approved', requestedAt: asked },
+    ];
+    return f;
+  });
+  const r = rewardInsights({ now: NOW, days: 90, families }, cell);
+  const food = r.categories.find((c) => c.key === 'food'), moneyCat = r.categories.find((c) => c.key === 'money');
+  assert.equal(food.families.value, 5);
+  assert.equal(food.rewards.value, 5);
+  assert.equal(food.medianCost.value, 200);
+  assert.equal(food.averageCost.value, 200);
+  assert.equal(food.redemptions.value, 10);
+  assert.equal(food.approvals.value, 5);
+  assert.equal(food.refusals.value, 5);
+  assert.equal(food.pending.value, 0);
+  assert.equal(food.daysToFirstRedemption.value, 3);         // the list was saved ten days ago, first asked seven days ago
+  assert.deepEqual(food.bands.map((b) => [b.band, b.rewards.value, b.redemptions.value]), [['200–499', 5, 10]]);
+  assert.equal(moneyCat.pending.value, 5);
+  assert.equal(moneyCat.medianCost.value, 500);
+  assert.deepEqual(moneyCat.bands.map((b) => b.band), ['500–999']);
+  assert.equal(r.categories.find((c) => c.key === 'toy').families.value, null); // nobody: suppressed
+  assert.equal(r.configuredFamilies.value, 5);
+  // rocket fuel paid in reward points is counted on its own line, and its prize name is nowhere in the report
+  assert.equal(r.rocketFuel.redemptions.value, 5);
+  assert.deepEqual(r.names, ['Ice cream', 'Uang jajan']);
+  assert.equal(JSON.stringify(r).includes('Bali'), false);
+  // the appendix is de-duplicated raw names and nothing else on the line
+  assert.equal(r.names.every((n) => typeof n === 'string'), true);
+});
+
+test('the wait for a first redemption is counted only where the reward list has not been saved again since', () => {
+  const asked = NOW - 7 * DAY;
+  const families = Array.from({ length: 5 }, () => {
+    const f = fam({ rewards: [reward('r1', 'Ice cream', 200)], configUpdatedAt: NOW - 2 * DAY }); // the list was saved again, after the redemption
+    f.progress[0].wallet.redemptions = [redemption('r1', 'Ice cream', 200, 'approved', asked)];
+    return f;
+  });
+  const r = rewardInsights({ now: NOW, days: 90, families }, cell);
+  const food = r.categories.find((c) => c.key === 'food');
+  assert.equal(food.redemptions.value, 5);
+  assert.equal(food.daysToFirstRedemption.value, null);   // no usable pair: the app stores one updatedAt for the whole list
+  assert.equal(food.daysToFirstRedemption.suppressed, true);
+});
+
+test('a reward the parent has since removed is still categorised, from the name the redemption kept', () => {
+  const families = Array.from({ length: 5 }, () => {
+    const f = fam({ rewards: [], configUpdatedAt: NOW - DAY });
+    f.progress[0].wallet.redemptions = [redemption('gone', 'Main game 1 jam', 300, 'approved', NOW - 3 * DAY)];
+    return f;
+  });
+  const r = rewardInsights({ now: NOW, days: 90, families }, cell);
+  assert.equal(r.categories.find((c) => c.key === 'game').redemptions.value, 5);
+  assert.equal(r.configuredFamilies.value, null);          // none of them has a reward list now
+  assert.deepEqual(r.names, ['Main game 1 jam']);
+});
+
+// a ledger chain with honest running balances, as server/ledger.mjs writes it
+function ledger(entries) {
+  let gc = 0, rp = 0, seq = 0, prev = null;
+  return entries.map((e) => {
+    gc += e.gc || 0; rp += e.rp || 0; seq++;
+    const r = { id: `row-${seq}`, type: e.type, gc: e.gc || 0, rp: e.rp || 0, ref: e.ref || null, note: null, at: e.at || NOW - DAY, seq, prev, balance: { gc, rp } };
+    prev = r.id; return r;
+  });
+}
+const shopper = (extra = []) => ledger([
+  { type: 'learn.session', gc: 500, rp: 1000 },
+  { type: 'shop.buy', gc: -300, ref: 'ring_pulse' },
+  { type: 'reward.request', rp: -200, ref: 'red-1' },
+  ...extra,
+]);
+
+test('the shop arithmetic comes from the ledger: earned, spent, saved, the share spent, and the balance held at the moment of purchase', () => {
+  const families = Array.from({ length: 5 }, () => {
+    const f = fam();
+    f.progress[0].wallet = { gc: 200, rp: 800, inventory: ['ring_pulse'], purchases: [], redemptions: [] };
+    f.ledgers[0].rows = shopper();
+    return f;
+  });
+  const s = shopInsights({ now: NOW, days: 90, families }, cell);
+  assert.equal(s.children.value, 5);
+  assert.equal(s.currencies.gc.earned.value, 2500);
+  assert.equal(s.currencies.gc.spent.value, 1500);
+  assert.equal(s.currencies.gc.saved.value, 1000);
+  assert.equal(s.currencies.gc.spendingPercent.value, 60);
+  assert.equal(s.currencies.gc.medianSpentPerChild.value, 300);
+  assert.equal(s.currencies.gc.medianSavedPerChild.value, 200);
+  assert.equal(s.currencies.gc.medianBalanceAtPurchase.value, 500);   // 200 after the charge, 300 charged
+  assert.equal(s.currencies.rp.earned.value, 5000);
+  assert.equal(s.currencies.rp.spent.value, 1000);
+  assert.equal(s.currencies.rp.saved.value, 4000);
+  assert.equal(s.currencies.rp.spendingPercent.value, 20);
+  assert.equal(s.currencies.rp.medianBalanceAtPurchase.value, 1000);
+  // the item, by catalogue name, and the share of children who own it
+  const ring = s.items.find((i) => i.id === 'ring_pulse');
+  assert.equal(ring.name, 'Pulse ring');
+  assert.equal(ring.kind, 'ring');
+  assert.equal(ring.cost, 300);
+  assert.equal(ring.purchases.value, 5);
+  assert.equal(ring.spent.value, 1500);
+  assert.equal(ring.owners.value, 5);
+  assert.equal(ring.ownedPercent.value, 100);
+  assert.equal(ring.medianBalanceBefore.value, 500);
+  assert.deepEqual(s.most.map((i) => i.id), ['ring_pulse']);
+  assert.deepEqual(s.least.map((i) => i.id), ['ring_pulse']);
+  assert.equal(s.neverBought.some((i) => i.id === 'ring_halo'), true);
+  assert.equal(s.neverBought.some((i) => i.id === 'ring_pulse'), false);
+  assert.equal(s.neverBought.some((i) => i.id === 'pet_fox'), false);   // hatched pets are not for sale
+  // split by item kind, and reward points spent through the Reward Store on their own line
+  const kinds = Object.fromEntries(s.kinds.map((k) => [k.kind, k]));
+  assert.equal(kinds.ring.purchases.value, 5);
+  assert.equal(kinds.ring.spentGc.value, 1500);
+  assert.equal(kinds.ring.medianCost.value, 300);
+  assert.equal(kinds.reward.purchases.value, 5);
+  assert.equal(kinds.reward.spentRp.value, 1000);
+  assert.equal(kinds.reward.spentGc.value, 0);
+});
+
+test('an item four families bought is not a number the shop section may print', () => {
+  const families = Array.from({ length: 5 }, (_, i) => {
+    const f = fam();
+    f.progress[0].wallet = { gc: 200, rp: 800, inventory: i < 4 ? ['ring_pulse'] : [], purchases: [], redemptions: [] };
+    f.ledgers[0].rows = i < 4 ? shopper() : ledger([{ type: 'learn.session', gc: 500, rp: 1000 }, { type: 'reward.request', rp: -200, ref: 'red-1' }]);
+    return f;
+  });
+  const s = shopInsights({ now: NOW, days: 90, families }, cell);
+  const ring = s.items.find((i) => i.id === 'ring_pulse');
+  assert.equal(ring.purchases.value, null);
+  assert.equal(ring.purchases.suppressed, true);
+  assert.equal(ring.medianBalanceBefore.value, null);
+  assert.deepEqual(s.most, []);                    // nothing publishable
+  assert.equal(s.currencies.rp.spent.value, 1000); // the currency totals still stand: five families
+});
+
+test('rocket fuel and a parent credit are spending too, each on its own line, and neither is a shop item', () => {
+  const families = Array.from({ length: 5 }, () => {
+    const f = fam();
+    f.progress[0].wallet = { gc: 100, rp: 800, inventory: [], purchases: [], redemptions: [] };
+    f.ledgers[0].rows = ledger([
+      { type: 'learn.session', gc: 500, rp: 1000 },
+      { type: 'parent.adjust', gc: -100 },
+      { type: 'rocket.fuel', gc: -300, ref: 'rocket-1' },
+      { type: 'reward.request', rp: -200, ref: 'red-1' },
+    ]);
+    return f;
+  });
+  const s = shopInsights({ now: NOW, days: 90, families }, cell);
+  const kinds = Object.fromEntries(s.kinds.map((k) => [k.kind, k]));
+  assert.equal(kinds['rocket fuel'].spentGc.value, 1500);
+  assert.equal(kinds['parent adjustment'].spentGc.value, 500);
+  assert.equal(kinds.ring, undefined);
+  assert.deepEqual(s.items, []);
+  assert.equal(s.currencies.gc.spent.value, 2000);
+  assert.equal(s.currencies.gc.spendingPercent.value, 80);
+});
+
+test('the report carries both section 3 halves', () => {
+  const families = Array.from({ length: 5 }, () => {
+    const f = fam({ rewards: [reward('r1', 'Nonton film', 300)], configUpdatedAt: NOW - 5 * DAY });
+    f.progress[0].wallet = { gc: 200, rp: 800, inventory: ['ring_pulse'], purchases: [], redemptions: [] };
+    f.ledgers[0].rows = shopper();
+    return f;
+  });
+  const report = buildReport({ now: NOW, days: 90, families }, { minCell: 5 });
+  assert.equal(report.rewards.categories.find((c) => c.key === 'screen_time').rewards.value, 5);
+  assert.equal(report.shop.currencies.gc.spendingPercent.value, 60);
 });
