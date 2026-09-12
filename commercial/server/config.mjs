@@ -1,5 +1,11 @@
 import { mailerConfig } from './mailer.mjs';
 
+// One address shape for every address this file checks. Written once because it was written twice: a copy whose backslashes
+// were eaten on the way in became [^s@<>"], which excludes the letter s, so support@… was refused and the service died at
+// startup before it could listen (13 Sep 2026). A pattern that only one line depends on is a pattern nobody re-reads.
+const ADDRESS = /^[^\s@<>"]{1,64}@[^\s@<>"]{1,190}\.[^\s@<>"]{2,}$/;
+const FROM = /^(?:[^<>]{1,64}<)?[^\s@<>"]{1,64}@[^\s@<>"]{1,190}\.[^\s@<>"]{2,}>?$/;
+
 export function config(env = process.env) {
   const mode = env.APP_MODE;
   if (!['emulator', 'staging', 'production'].includes(mode)) throw Error('Set APP_MODE explicitly.');
@@ -66,16 +72,16 @@ export function config(env = process.env) {
   // Feedback (server/feedback.mjs): with FEEDBACK_TO set and EMAIL_PROVIDER=resend each note is also emailed to the owner, under the
   // report job's mail settings (mailer.mjs mailerConfig); without FEEDBACK_TO the service emails nothing at all.
   const feedbackTo = env.FEEDBACK_TO || null;
-  if (feedbackTo !== null && !/^[^\s@<>"]{1,64}@[^\s@<>"]{1,190}\.[^\s@<>"]{2,}$/.test(feedbackTo)) throw Error('FEEDBACK_TO must be one email address: where feedback is copied to.');
+  if (feedbackTo !== null && !ADDRESS.test(feedbackTo)) throw Error('FEEDBACK_TO must be one email address: where feedback is copied to.');
   const feedback = { to: feedbackTo, mail: feedbackTo ? mailerConfig(env) : null };
   // The waiting list writes to people who have no account (server/waitlist.mjs), so it writes as no-reply: nothing useful
   // happens if someone answers a machine. WAITLIST_REPLY_TO points Reply at a person all the same, for whoever answers anyway.
   // Without WAITLIST_FROM the list writes as whatever EMAIL_FROM is, which is the pilot's behaviour and never wrong, only blunt.
   const listFrom = env.WAITLIST_FROM || null, listReply = env.WAITLIST_REPLY_TO || null;
-  if (listFrom !== null && !/^(?:[^<>]{1,64}<)?[^s@<>"]{1,64}@[^s@<>"]{1,190}.[^s@<>"]{2,}>?$/.test(listFrom)) throw Error('WAITLIST_FROM must be an address, or "Name <address>".');
-  if (listReply !== null && !/^[^s@<>"]{1,64}@[^s@<>"]{1,190}.[^s@<>"]{2,}$/.test(listReply)) throw Error('WAITLIST_REPLY_TO must be one email address.');
-  const mail = mailerConfig(env);
-  const waitlist = { replyTo: listReply, mail: { ...mail, ...(listFrom ? { from: listFrom } : {}) } };
+  if (listFrom !== null && !FROM.test(listFrom)) throw Error('WAITLIST_FROM must be an address, or "Name <address>".');
+  if (listReply !== null && !ADDRESS.test(listReply)) throw Error('WAITLIST_REPLY_TO must be one email address.');
+  // Only when something will actually send: mailerConfig demands the Resend key, and a service that copies nothing needs none.
+  const waitlist = { replyTo: listReply, mail: feedbackTo ? { ...feedback.mail, ...(listFrom ? { from: listFrom } : {}) } : null };
   const port = Number(env.PORT || 8787);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw Error('Invalid PORT.');
   return { mode, emulator, projectId, origin, secret, pepper, previousPeppers, proxyHops, port, releaseSha, feedback, waitlist, payments: { provider, webhookSecrets: { fake: webhookSecret }, stripe },
