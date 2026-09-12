@@ -134,6 +134,11 @@ function clearLook() { applyLook(null); }
 function setMode() {
   const mode = model?.role === 'child' ? 'kid' : model?.role === 'selector' ? 'select' : 'parent';
   document.documentElement?.setAttribute('data-mode', mode); if (mode !== 'kid') clearLook();
+  // The corner of the masthead used to read PRIVATE PILOT, which was true of a pilot and is wrong of a product. It now holds
+  // the family's own name once there is one, and nothing at all before that: a parent sees whose grid this is, and a stranger
+  // is told nothing about anyone (the owner's request of 12 Sep 2026).
+  const corner = document.getElementById?.('pilot');
+  if (corner) corner.textContent = mode === 'parent' && model?.family?.label ? model.family.label : '';
 }
 // variant: one of v2's narrower cards (narrow 420px, w460, w520) or a screen's own class; play: a question session is on screen,
 // so a newer release's bar waits for its end (Update now); page: the name a note from this screen reports (Send feedback)

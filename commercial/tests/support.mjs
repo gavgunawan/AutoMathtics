@@ -82,7 +82,9 @@ export function fixture() {
   const recovery = new Recovery({ foundation: service, store, identity, secret, now: () => clock });
   const email = new Email({ foundation: service, store, identity, secret, now: () => clock });
   const feedback = new Feedback({ foundation: service, store, now: () => clock, release: 'test-release' }); // no mailer: nothing is copied to anyone
-  const waitlist = new Waitlist({ store, now: () => clock, release: 'test-release' });
+  const waitlistMail = [];
+  const waitlist = new Waitlist({ store, now: () => clock, release: 'test-release', secret, origin: 'https://pilot.example.test',
+    replyTo: 'support@example.test', mailer: { send: async (m) => { waitlistMail.push(m); return { id: 'fake', provider: 'fake' }; } } });
   const leaving = new LeavingFlow({ foundation: service, store, billing, payments, email, now: () => clock });
   // what the identity provider's own password reset changes, as the server sees it
   function resetPassword(uid) { const u = users.get(uid); u.tokensValidAfterTime = new Date(clock).toUTCString(); u.passwordHash = `hash-${randomUUID()}`; }
@@ -116,7 +118,7 @@ export function fixture() {
     const childCtx = await service.authenticate(await service.selectChild(selCtx, kid.id, '763829'));
     return { p, child: kid, selCtx, childCtx };
   }
-  return { service, learning, game, billing, payments, support, recovery, email, feedback, waitlist, leaving, resetPassword, enrollPhone, gateway, store, identity, users, tokens, auth, token, login, family, child, childSession, now: () => clock, advance: (ms) => { clock += ms; } };
+  return { service, learning, game, billing, payments, support, recovery, email, feedback, waitlist, waitlistMail, leaving, resetPassword, enrollPhone, gateway, store, identity, users, tokens, auth, token, login, family, child, childSession, now: () => clock, advance: (ms) => { clock += ms; } };
 }
 export const rejected = (code) => (err) => err.code === code;
 // the answer the server holds, in the shape the browser would send — and a nearby wrong one

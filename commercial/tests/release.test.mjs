@@ -11,10 +11,16 @@ import { fixture, secret } from './support.mjs';
 import { RETENTION } from '../server/support.mjs';
 import { verifyRelease } from '../scripts/verify-release.mjs';
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
-test('v3.0 version agrees across manifest, page and backend', async () => {
-  assert.equal(VERSION, '3.0.0');
+// The minor number is the pull request the release was merged from (the owner's rule of 12 Sep 2026), so a version names a
+// change anyone can go and read. The footer carries it with no date beside it: a date ages on a page deployed several times a
+// week, and which commit a release runs is already a fact /api/health states.
+test('the version agrees across manifest, page and backend, the footer carries it without a date, and no pilot badge is left', async () => {
+  assert.match(VERSION, /^\d+\.\d+\.\d+$/);
   assert.equal(JSON.parse(await read('../package.json')).version, VERSION);
-  assert.match(await read('../public/index.html'), /v3\.0 &middot; 6 Sep 2026/);
+  const page = await read('../public/index.html'), short = `v${VERSION.split('.').slice(0, 2).join('.')}`;
+  assert.ok(page.includes(`<footer>${short} <span>`), `the footer names this release (${short})`);
+  assert.ok(!/&middot;\s*\d+ \w+ \d{4}/.test(page), 'and no date stands beside it');
+  assert.ok(!page.includes('PRIVATE PILOT'), 'the pilot badge is gone: that corner holds the family’s own name now');
 });
 test('Hosting routes shell and API to the server, not the old static game', async () => {
   const cfg = JSON.parse(await read('../firebase.staging.json'));
