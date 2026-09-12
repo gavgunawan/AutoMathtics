@@ -2153,6 +2153,10 @@ function joinScreen() {
       : over ? 'The opening trial has finished. Accounts are open as usual.'
         : `The grid opens on ${TRIAL.opensWords}. Leave your email and we will write to you that morning.`,
     'w520 join', { back: false, page: 'join' });
+  // This screen belongs to nobody yet: setMode() has just dressed it as a parent's, masthead and all. A stranger who followed
+  // a link should not be told they are in Mission Control, and the tab they leave open should say what the page is.
+  document.documentElement?.setAttribute('data-mode', 'join');
+  try { document.title = 'AutoMathtics — maths practice they ask to do'; } catch { /* a document without a title to set */ }
 
   const what = el('div', null, 'join-block');
   what.append(el('span', 'WHAT YOUR CHILD PLAYS', 'section-label'),
