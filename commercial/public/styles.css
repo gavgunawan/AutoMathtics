@@ -654,3 +654,14 @@ input.pace-range:focus-visible{outline:2px solid var(--accent);outline-offset:3p
    coin burst is drawn; the crate's prize shows at once */
 /* the busy ring fades in and turns by animation alone, so without animation it would never be seen: show it at rest */
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}html[data-mode] #decor,.splash{display:none}.crate-item,.crate-name{opacity:1}#app[aria-busy=true]:after{opacity:1}}
+/* /join: the one screen that explains before it asks. Blocks of plain lines under a label, in the panel the rest of the app
+   uses, so a stranger's first page and a parent's tenth are recognisably the same product. */
+.join .join-block{margin:18px 0 0;text-align:left}
+.join .join-block .section-label{display:block;margin:0 0 8px}
+.join-line{display:flex;gap:10px;align-items:baseline;margin:0 0 7px}
+.join-mark{flex:0 0 22px;text-align:center;font:700 13px var(--display);color:var(--cyan)}
+.join-words{font:500 13px/1.6 var(--ui);color:var(--ink);overflow-wrap:anywhere}
+.join-words b{color:var(--cyan)}
+.join-offer{margin:18px 0 0;padding:12px 14px;border:1.5px solid var(--gold);border-radius:12px;font:600 13px/1.6 var(--ui);color:var(--gold);text-align:left}
+.field.check{flex-direction:row;align-items:flex-start;gap:9px}
+.field.check span{font:500 12px/1.5 var(--ui);color:var(--dim)}

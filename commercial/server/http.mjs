@@ -8,7 +8,8 @@ import { REMEMBER_MS } from './service.mjs';
 
 // Firebase Hosting forwards only the specially named __session cookie to Cloud Run.
 const COOKIE = '__session';
-const FILES = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'],
+// /join is the same document as '/': one page, which reads its own path and shows the joining screen there (app.js).
+const FILES = { '/': ['index.html', 'text/html'], '/join': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'],
   '/auth.js': ['auth.js', 'text/javascript'], '/sms-schedule.js': ['sms-schedule.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css'],
   // the game's own faces, served from this origin (public/fonts, SIL Open Font License): no third-party request at sign-in
   ...Object.fromEntries(['Orbitron-700', 'Rajdhani-500', 'Rajdhani-600', 'Rajdhani-700', 'JetBrainsMono-600'].map((f) => [`/fonts/${f}.woff2`, [`fonts/${f}.woff2`, 'font/woff2']])) };
@@ -70,7 +71,7 @@ async function oneClick(req) {
   const text = Buffer.concat(parts).toString('utf8');
   return type === 'multipart/form-data' ? /name="List-Unsubscribe"\r?\n(?:[^\r\n]+\r?\n)*\r?\nOne-Click\r?\n/i.test(text) : new URLSearchParams(text).get('List-Unsubscribe') === 'One-Click';
 }
-export function createApp(service, cfg, { publicDir = new URL('../public/', import.meta.url), reportError = () => {}, learning = null, game = null, billing = null, payments = null, support = null, recovery = null, email = null, feedback = null, leaving = null, peerFactor = 20 } = {}) {
+export function createApp(service, cfg, { publicDir = new URL('../public/', import.meta.url), reportError = () => {}, learning = null, game = null, billing = null, payments = null, support = null, recovery = null, email = null, feedback = null, leaving = null, waitlist = null, peerFactor = 20 } = {}) {
   // A session cookie lives exactly as long as the session row it names (F12), read back from the row the service has just
   // written: 30 minutes for a parent, 12 hours on the launch pad, or what is left of 30 days on a remembered device. The
   // rotation has already committed, so a failed read never fails the request (review of PR #44): the cookie then gets the
@@ -282,6 +283,17 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
           kept = !(await feedback.record(input, { ctx: live ? await service.authenticate(token) : null, budgets })).replay;
         } finally { if (!kept) release(slot); } // a refusal, or a retry found in the transaction, gives the slot back
         return json(200, { ok: true });
+      }
+      // The waiting list (/join). Signed out by definition: nobody has an account yet. The budgets are the feedback route's
+      // shape and smaller — one address a parent leaves once, not a note they may send again — and an address already on the
+      // list costs none of them, so tapping Join twice is never refused.
+      if (waitlist && req.method === 'POST' && path === '/api/waitlist') {
+        const input = waitlist.parse(data), hour = 60 * 60_000;
+        const client = clientAddress(req, cfg.proxyHops), peer = peerAddress(req);
+        throttle('waitlist:all', 60, hour);
+        const budgets = [[`waitlist:${by64(client)}`, 5], [`waitlist:56:${by56(client)}`, 10], ...(client === peer ? [] : [[`waitlist:peer:${peer}`, 40]])];
+        for (const [bucket, maximum] of budgets) await service.rate(bucket, maximum, hour);
+        return json(200, await waitlist.join(input));
       }
       if (stored) throttle(`session:${sha256(token)}`, 120, 60_000);
       const ctx = await service.authenticate(token);
