@@ -156,7 +156,7 @@ test('every procedure in the desk documents names a command this repository actu
   // the desk says plainly where the repository cannot do what a procedure would like
   assert.match(docs['SUPPORT_DESK.md'], /no `refund` verb in `scripts\/support\.mjs`/);
   assert.match(docs['SUPPORT_DESK.md'], /no cancel verb in `scripts\/support\.mjs`/);
-  assert.match(docs['SUPPORT_DESK.md'], /`FEEDBACK_TO` does not exist in this repository/);
-  const server = await read('../server/config.mjs'), client = await read('../public/app.js');
-  assert.ok(!/FEEDBACK_TO/.test(server + client + support), 'the claim above must stay true: nothing reads FEEDBACK_TO');
+  // the desk must name the address a copy goes to and how to tell whether the running release sends any
+  assert.match(docs['SUPPORT_DESK.md'], /`FEEDBACK_TO`/);
+  assert.match(docs['SUPPORT_DESK.md'], /Check the running release before you answer/);
 });

@@ -204,15 +204,18 @@ feature off. The real levers are:
 So: the app cannot be half-disabled. Severity 1 is a rollback decision, not a flag decision, and
 that is the honest state of this release.
 
-## Feedback notes from the app — not built yet
+## Feedback notes from the app
 
-**`FEEDBACK_TO` does not exist in this repository.** Nothing in `server/`, `public/` or
-`scripts/` reads it, there is no feedback form in the parent screens, and no mail is sent by the
-application at all — the only mail a parent ever receives from this system is the identity
-provider's own (email verification, the password-reset link `RECOVERY.md` step 2 relies on). Do not
-tell a parent that a note they typed in the app reached the desk; today it cannot have.
+The app's *Send feedback* panel sits under the sign-in screen and every parent screen, never on the
+kids' side. Each note is stored with the screen it came from, and a copy is emailed to `FEEDBACK_TO`
+when the running service is deployed with that address and an email provider configured.
 
-When it is built, this is the shape the desk expects, so the filters and labels above keep working:
+**Check the running release before you answer.** `curl https://YOURAPP/api/health` names the commit it
+serves. A release older than the feedback work sent nothing, so do not tell a parent their in-app note
+arrived unless the release carries it; the identity provider’s own mail (verification, password reset)
+is the only mail such a release ever sends.
+
+A copy has this shape, which the filters and labels above expect:
 
 | Field | Value |
 |---|---|
@@ -222,8 +225,8 @@ When it is built, this is the shape the desk expects, so the filters and labels 
 | Body | the screen the note was written on, the release commit (`/api/health` → `release`), the note id, then the parent's words |
 | Never in it | the child's nickname, the PIN, the phone number, the session cookie, any part of a secret |
 
-A note id makes the thread citable in an incident and in an audit row. Until the feature exists, a
-parent's own mail is the only channel, and the *First reply* text is where they learn the address.
+A note id makes the thread citable in an incident and in an audit row. Where the running release has no
+feedback panel, a parent's own mail is the only channel, and the *First reply* text is where they learn
 
 ## Refunds
 

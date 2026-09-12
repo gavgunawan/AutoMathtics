@@ -164,7 +164,8 @@ test('the support desk ships as three documents a tired person can follow: the i
   // every target, and the plain statement that the app cannot say them to a parent yet
   for (const target of ['same day, before anything else', 'one business day', 'two business days', 'three business days']) assert.ok(desk.includes(target), target);
   assert.match(desk, /not stated inside the app today/);
-  assert.match(desk, /`FEEDBACK_TO` does not exist in this repository/);
+  // the desk names where a copy of an in-app note goes, and how to tell whether the running release sends any
+  assert.match(desk, /Check the running release before you answer/);
   // the escalation ladder, the 72 hours, and the rollback this deployment actually has (block C pulls the tip, so it is the way forward, not back)
   for (const s of ['### Severity 1 — stop everything', '### Severity 2 — within the week', '### Severity 3 — the backlog', 'within 72 hours',
     'Traffic back to the last good revision', 'scripts/cloudshell/03-deploy.sh', 'PAYMENT_PROVIDER=fake', 'FAKE_PAYMENTS_ACK=no-real-money',
