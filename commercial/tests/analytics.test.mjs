@@ -5,12 +5,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { MemoryStore } from './support.mjs';
 import { cellFactory, median, mean, monthShift, monthRange, answeredIn, activityOf, households,
-  subscriptionCalendar, dailyActive, buildReport, collectSnapshot, auditRow, MIN_CELL } from '../server/analytics.mjs';
+  subscriptionCalendar, dailyActive, bandOf, timedRow, speedMatrix, EASY, HARD,
+  buildReport, collectSnapshot, auditRow, MIN_CELL } from '../server/analytics.mjs';
 
 const DAY = 86_400_000;
 const NOW = Date.parse('2026-09-12T04:00:00Z');
 const cell = cellFactory(MIN_CELL);
-const value = (c) => c.value;
+const round2 = (v) => Math.round(v * 100) / 100;
 
 // ---- a synthetic store: `n` families, each with children who answered questions on given local days
 let seq = 0;
@@ -22,11 +23,13 @@ function fam({ createdAt = NOW - 40 * DAY, timeZone = 'Asia/Singapore', kids = [
     progress: children.map((c) => ({ childId: c.id, history: c.history || [], wallet: c.wallet || { gc: 0, rp: 0, inventory: [], purchases: [], redemptions: [] }, stats: { sessions: 0, passes: 0 } })),
     ledgers: children.map((c) => ({ childId: c.id, rows: c.ledger || [] })), rewards, configUpdatedAt };
 }
-// one finished session row
-const row = ({ ts, track = 'engine', level = 1, papers = '21–25', correct = 25, total = 25, passed = true, qlog = null, mode = 'paper' }) => ({
+// one finished session row: `s` seconds spent per question out of an `a`-second allowance
+const row = ({ ts, track = 'engine', level = 1, papers = '21–25', total = 25, correct = total, passed = true, qlog = null, mode = 'paper', s = 12, a = 30 }) => ({
   ts, date: new Date(ts).toISOString().slice(0, 10), track, mode, level, levelId: 'ABCDEF'[level], papers,
-  correct, incorrect: total - correct, timeout: 0, total, passed, secs: 300,
-  qlog: qlog || Array.from({ length: total }, () => ({ t: 2, l: level, track, s: 12, a: 30, ok: 1 })) });
+  correct, incorrect: total - correct, timeout: 0, total, passed, secs: s * total,
+  qlog: qlog === null ? Array.from({ length: total }, (_, i) => ({ t: 2, l: level, track, s, a, ok: i < correct ? 1 : 0 })) : qlog });
+// `families` families of one child each, whose history is the rows `make` returns
+const cohort = (n, make, extra = {}) => Array.from({ length: n }, (_, i) => fam({ ...extra, kids: [{ age: 9, yearLevel: 3, start: 'year', history: make(i) }] }));
 
 test('the suppression rule is the only gate a number passes: fewer than min-cell families and it is not in the report at all', () => {
   const c = cellFactory(5);
@@ -104,10 +107,10 @@ test('the daily series counts distinct children and families per local day, with
   // the 7-day average spreads the window's children over seven days — 12 yesterday and the lonely one the
   // day before — and its basis is every family active in the window, so it may be printed although one of
   // its days on its own may not
-  assert.equal(on(1).avg7.value, round7(13 / 7));
+  assert.equal(on(1).avg7.value, round2(13 / 7));
   assert.equal(on(1).avg7.n, 7);
   // an untouched day inside the same window still averages over the window's families
-  assert.equal(on(0).avg7.value, round7(13 / 7));
+  assert.equal(on(0).avg7.value, round2(13 / 7));
   assert.equal(d.series.length, 31);
   assert.equal(d.totalFamilies.value, 7);
 });
@@ -223,4 +226,134 @@ test('one run writes one audit row, naming the operator and no family', () => {
   assert.equal(r.childId, null);
   assert.equal(r.expireAt, NOW + 400 * DAY);
   assert.deepEqual(Object.keys(r).sort(), ['action', 'at', 'by', 'childId', 'days', 'expireAt', 'families', 'familyId', 'minCell', 'uid']);
+});
+
+// ---------------------------------------------------------------- section 2 — the speed matrices
+test('a band is the sector and the papers the row records, in v3 and v2 spelling alike', () => {
+  const at = (papers, extra = {}) => bandOf({ level: 1, papers, ...extra });
+  assert.deepEqual(at('21–25', { mode: 'paper' }), { label: 'B 21–25', level: 1, levelId: 'B', kind: 'paper', from: 21, to: 25 });
+  assert.deepEqual(at('21-25', { mode: 'paper' }), { label: 'B 21-25', level: 1, levelId: 'B', kind: 'paper', from: 21, to: 25 }); // the v2 import writes a hyphen
+  assert.equal(at('practice 21–25', { mode: 'practice' }).kind, 'practice');
+  assert.deepEqual([at('CP T2', { mode: 'boss' }).kind, at('CP T2', { mode: 'boss' }).from], ['checkpoint', 21]);
+  assert.equal(at('SYSTEM SCAN', { mode: 'scan' }).kind, 'scan');
+  assert.equal(at('SCAN', {}).kind, 'scan');                       // a v2 scan row with no usable mode
+  assert.equal(at('PLACEMENT TEST', { mode: 'placement' }).kind, 'placement');
+  assert.equal(bandOf({ papers: '1–5' }).level, null);             // a row with no sector cannot be banded
+  assert.equal(bandOf(null).label, '?');
+});
+
+test('a session counts only when its per-question log carries the allowance, so v2-imported rows are skipped', () => {
+  assert.equal(timedRow(row({ ts: NOW })), true);
+  assert.equal(timedRow({ ...row({ ts: NOW }), qlog: [{ t: 2, s: 12, ok: 1 }] }), false);        // the v2 import's shape: seconds, no allowance
+  assert.equal(timedRow({ ...row({ ts: NOW }), qlog: [{ t: 2, s: 12, a: 0, ok: 1 }] }), false);
+  assert.equal(timedRow({ ...row({ ts: NOW }), qlog: [] }), false);
+  assert.equal(timedRow({ ...row({ ts: NOW }), quit: true }), false);                            // a session left is not a finished attempt
+  const mixed = row({ ts: NOW, total: 2 });
+  mixed.qlog[1] = { t: 2, s: 12, ok: 1 };
+  assert.equal(timedRow(mixed), false);                                                          // one question without an allowance and the session is out
+});
+
+test('a cell is the median seconds per question and the median share of the allowance over the sessions that passed with everything correct', () => {
+  // five families, each with one fast pass, one slow pass, one failure: the medians come from the passes
+  const families = cohort(5, () => [
+    row({ ts: NOW - DAY, level: 2, papers: '1–5', total: 5, s: 10, a: 40 }),
+    row({ ts: NOW - 2 * DAY, level: 2, papers: '1–5', total: 5, s: 20, a: 40 }),
+    row({ ts: NOW - 3 * DAY, level: 2, papers: '1–5', total: 5, s: 30, a: 40, correct: 3, passed: false }),
+  ]);
+  const m = speedMatrix({ now: NOW, days: 90, families }, 'engine', cell, { minCell: 5, by: 'year' });
+  const c = m.rows[0].cells.find((x) => x.column === '3');
+  assert.equal(m.rows[0].label, 'C 1–5');
+  assert.equal(c.sessions, 10);                        // ten passes: two from each of the five families
+  assert.equal(c.attempts, 15);                        // every finished, timed attempt
+  assert.equal(c.families, 5);
+  assert.equal(c.medianSeconds, 15);                   // the median over the sessions' 10 and 20 seconds per question
+  assert.equal(c.medianShare, 0.375);                  // (10/40 + 20/40) / 2
+  assert.equal(c.passRate, 0.667);                      // ten passes in fifteen finished attempts
+  assert.equal(c.flag, null);
+  // the columns are the year levels; with --by age they are the ages present
+  assert.deepEqual(m.columns, ['1', '2', '3', '4', '5', '6']);
+  assert.deepEqual(speedMatrix({ now: NOW, days: 90, families }, 'engine', cell, { minCell: 5, by: 'age' }).columns, ['9']);
+  assert.equal(m.rows[0].cells.find((x) => x.column === '1').empty, true);
+  // the Navigator matrix is the same definitions over Navigator rows only
+  assert.deepEqual(speedMatrix({ now: NOW, days: 90, families }, 'nav', cell, { minCell: 5, by: 'year' }).rows, []);
+});
+
+test('passed unusually easily: a band well inside its allowance and much faster than the neighbouring bands of the same sector', () => {
+  const band = (papers, s) => row({ ts: NOW - DAY, level: 2, papers, total: 5, s, a: 30 });
+  const families = cohort(5, () => [band('16–20', 20), band('16–20', 20), band('21–25', 9), band('21–25', 9), band('26–30', 20), band('26–30', 20)]);
+  const m = speedMatrix({ now: NOW, days: 90, families }, 'engine', cell, { minCell: 5, by: 'year' });
+  const cellAt = (label) => m.rows.find((r) => r.label === label).cells.find((x) => x.column === '3');
+  assert.equal(cellAt('C 21–25').flag, 'easy');
+  assert.equal(cellAt('C 16–20').flag, null);
+  assert.equal(cellAt('C 26–30').flag, null);
+  assert.equal(m.flags.easy.length, 1);
+  const flag = m.flags.easy[0];
+  assert.equal(flag.band, 'C 21–25');
+  assert.equal(flag.sector, 'C');
+  assert.equal(flag.column, '3');
+  assert.equal(flag.sessions, 10);
+  assert.equal(flag.medianShare, 0.3);
+  assert.equal(flag.neighbourMedianSeconds, 20);
+  assert.equal(flag.fasterBy, 0.55);
+  // nothing about a child, a family or a nickname is on the line
+  assert.deepEqual(Object.keys(flag).sort(), ['attempts', 'band', 'column', 'fasterBy', 'kind', 'medianSeconds', 'medianShare', 'neighbourMedianSeconds', 'passRate', 'reason', 'sector', 'sessions', 'track']);
+  // just short of 35 % faster than the neighbours is not a flag
+  const nearly = cohort(5, () => [band('16–20', 20), band('16–20', 20), band('21–25', 13.1), band('21–25', 13.1), band('26–30', 20), band('26–30', 20)]);
+  assert.deepEqual(speedMatrix({ now: NOW, days: 90, families: nearly }, 'engine', cell, { minCell: 5, by: 'year' }).flags.easy, []);
+  // fast, but not inside half the allowance: the share rule holds it back
+  const roomy = cohort(5, () => [band('16–20', 40), band('16–20', 40), band('21–25', 16), band('21–25', 16), band('26–30', 40), band('26–30', 40)]);
+  assert.deepEqual(speedMatrix({ now: NOW, days: 90, families: roomy }, 'engine', cell, { minCell: 5, by: 'year' }).flags.easy, []);
+});
+
+test('unusually hard: a band that eats its allowance, or that most attempts fail', () => {
+  const slow = cohort(5, () => [row({ ts: NOW - DAY, level: 3, papers: '1–5', total: 5, s: 28, a: 30 })]);
+  const hardShare = speedMatrix({ now: NOW, days: 90, families: slow }, 'engine', cell, { minCell: 5, by: 'year' });
+  assert.equal(hardShare.flags.hard.length, 1);
+  assert.equal(hardShare.flags.hard[0].band, 'D 1–5');
+  assert.match(hardShare.flags.hard[0].reason, /median share 0\.933 at or above 0\.9/);
+  assert.equal(hardShare.rows[0].cells.find((x) => x.column === '3').flag, 'hard');
+  // a band most attempts fail is hard even when the passes were quick
+  const failing = cohort(5, () => [
+    row({ ts: NOW - DAY, level: 4, papers: '1–5', total: 5, s: 10, a: 40 }),
+    row({ ts: NOW - 2 * DAY, level: 4, papers: '1–5', total: 5, s: 10, a: 40, correct: 2, passed: false }),
+    row({ ts: NOW - 3 * DAY, level: 4, papers: '1–5', total: 5, s: 10, a: 40, correct: 1, passed: false }),
+  ]);
+  const hardRate = speedMatrix({ now: NOW, days: 90, families: failing }, 'engine', cell, { minCell: 5, by: 'year' });
+  assert.equal(hardRate.flags.hard.length, 1);
+  assert.equal(hardRate.flags.hard[0].passRate, 0.333);   // five passes in fifteen attempts
+  assert.match(hardRate.flags.hard[0].reason, /pass rate 0\.333 below 0\.4/);
+  assert.deepEqual(hardRate.flags.easy, []);            // a hard band is never also an easy one
+});
+
+test('no flag and no number can come from fewer than the floor: four families, or four sessions, and the cell is a dash', () => {
+  const band = (papers, s) => row({ ts: NOW - DAY, level: 2, papers, total: 5, s, a: 30 });
+  const thin = cohort(4, () => [band('16–20', 20), band('21–25', 9), band('26–30', 20)]);
+  const m = speedMatrix({ now: NOW, days: 90, families: thin }, 'engine', cell, { minCell: 5, by: 'year' });
+  assert.deepEqual(m.flags, { easy: [], hard: [] });
+  const c = m.rows.find((r) => r.label === 'C 21–25').cells.find((x) => x.column === '3');
+  assert.deepEqual(c, { column: '3', suppressed: true });
+  // five families in the cell, but only four of them passed it: the cell may be printed, and the flag
+  // still may not — "n at least --min-cell" counts the passing sessions the medians came from
+  const failed = row({ ts: NOW - DAY, level: 2, papers: '21–25', total: 5, s: 9, a: 30, correct: 2, passed: false });
+  const few = cohort(5, (i) => [band('16–20', 20), i < 4 ? band('21–25', 9) : failed, band('26–30', 20)]);
+  const m2 = speedMatrix({ now: NOW, days: 90, families: few }, 'engine', cell, { minCell: 5, by: 'year' });
+  assert.deepEqual(m2.flags.easy, []);
+  const middle = m2.rows.find((r) => r.label === 'C 21–25').cells.find((x) => x.column === '3');
+  assert.equal(middle.suppressed, false);
+  assert.equal(middle.families, 5);
+  assert.equal(middle.sessions, 4);
+  assert.equal(middle.flag, null);
+  // a lower floor lets the same shape through, which is what --min-cell is for
+  const loose = cellFactory(4);
+  assert.equal(speedMatrix({ now: NOW, days: 90, families: thin }, 'engine', loose, { minCell: 4, by: 'year' }).flags.easy.length, 1);
+});
+
+test('the report carries both matrices, and the thresholds it used', () => {
+  const families = cohort(5, () => [row({ ts: NOW - DAY, level: 2, papers: '1–5', total: 5, s: 12, a: 30 }),
+    row({ ts: NOW - DAY, track: 'nav', level: 2, papers: '1–5', total: 3, s: 12, a: 30 })]);
+  const report = buildReport({ now: NOW, days: 90, families }, { minCell: 5, by: 'age' });
+  assert.equal(report.speed.engine.rows[0].cells.find((c) => c.column === '9').sessions, 5);
+  assert.equal(report.speed.nav.rows[0].cells.find((c) => c.column === '9').sessions, 5);
+  assert.deepEqual(report.speed.engine.columns, ['9']);
+  assert.deepEqual(report.speed.engine.thresholds, { easy: EASY, hard: HARD, minSessions: 5, minFamilies: 5 });
 });

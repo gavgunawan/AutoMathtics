@@ -18,7 +18,7 @@
 //      has to state it for a reader to understand the dashes;
 //   3. parent-entered reward names appear only in aggregate (section 3) and in the de-duplicated appendix,
 //      never beside anything else on the line.
-import { dayISO, normalizeProgress } from './progress.mjs';
+import { dayISO, normalizeProgress, LEVELS } from './progress.mjs';
 import { GRACE_DAYS } from './subscription.mjs';
 
 const DAY = 86_400_000;
@@ -221,6 +221,122 @@ export function dailyActive(snapshot, cell, days = DEFAULT_DAYS) {
   return { from, to, days, series, totalFamilies: cell(activeFamilies.size, activeFamilies.size) };
 }
 
+// ---------------------------------------------------------------- section 2 — the speed matrices
+// "Passed unusually easily" and "unusually hard", as the owner asked for them. Both are review flags on a
+// paper band, never on a child: the lists carry a sector, a band, a column and the medians, nothing else.
+export const EASY = Object.freeze({ shareBelow: 0.5, fasterThanNeighbours: 0.35 });
+export const HARD = Object.freeze({ shareAtLeast: 0.9, passRateBelow: 0.4 });
+const BAND_ORDER = Object.freeze(['paper', 'practice', 'checkpoint', 'scan', 'placement']);
+export const BAND_LABEL = Object.freeze({ paper: 'papers', practice: 'practice', checkpoint: 'check point', scan: 'system scan', placement: 'placement test' });
+
+/** The band a history row belongs to: its sector and the papers it recorded, e.g. `B 21–25`. */
+export function bandOf(row) {
+  const level = Number.isInteger(row?.level) ? row.level : null;
+  const levelId = LEVELS[level]?.id || '?';
+  const papers = typeof row?.papers === 'string' ? row.papers.trim() : '';
+  const kind = row?.mode === 'boss' ? 'checkpoint' : BAND_ORDER.includes(row?.mode) ? row.mode
+    : /^CP\b/i.test(papers) ? 'checkpoint' : /SCAN/i.test(papers) ? 'scan' : /PLACEMENT/i.test(papers) ? 'placement'
+      : /^practice\b/i.test(papers) ? 'practice' : 'paper';
+  const numbers = papers.match(/(\d+)\s*[–-]\s*(\d+)/);
+  const tier = Number(papers.match(/T(\d+)/i)?.[1]);
+  const from = numbers ? Number(numbers[1]) : (kind === 'checkpoint' && Number.isFinite(tier) ? tier * 20 - 19 : 0);
+  return { label: `${levelId} ${papers}`.trim(), level, levelId, kind, from, to: numbers ? Number(numbers[2]) : null };
+}
+/**
+ * A session counts towards a matrix only if its per-question log carries the allowance: the v2 import
+ * records seconds without one (server/migrate.mjs), and a share of the allowance cannot be computed from
+ * seconds alone, so those rows are skipped rather than guessed at.
+ */
+export const timedRow = (row) => !row?.quit && Array.isArray(row?.qlog) && row.qlog.length > 0
+  && row.qlog.every((q) => Number.isFinite(q?.a) && q.a > 0 && Number.isFinite(q?.s) && q.s >= 0);
+const columnOf = (child, by) => {
+  const v = by === 'age' ? child?.age : child?.yearLevel;
+  return Number.isInteger(v) ? String(v) : 'not given';
+};
+/**
+ * One track's matrix: the paper bands the history records down the side, year level (or age) across, and in
+ * each cell the median seconds per question over sessions that passed with every question correct, with the
+ * number of such sessions and the median share of the allowance those sessions used.
+ *
+ * The medians come from the passes; the pass rate uses every finished, timed attempt of the cell. A child's
+ * column is their currently recorded year level or age — the profile keeps one, not a history of them.
+ */
+export function speedMatrix(snapshot, track, cell, { minCell = MIN_CELL, by = 'year' } = {}) {
+  const acc = new Map();
+  const key = (band, column) => `${band.label} ${column}`;
+  for (const f of snapshot.families.filter((x) => !x.deleted)) {
+    const columns = new Map((f.children || []).map((c) => [c.id, columnOf(c, by)]));
+    for (const { childId, history } of f.progress || []) {
+      const column = columns.get(childId) || 'not given';
+      for (const row of history || []) {
+        if (row?.track !== track || !timedRow(row)) continue;
+        const band = bandOf(row);
+        if (band.level === null) continue;
+        const k = key(band, column);
+        if (!acc.has(k)) acc.set(k, { band, column, perQuestion: [], shares: [], attempts: 0, passes: 0, families: new Set(), children: new Set() });
+        const c = acc.get(k);
+        c.attempts++; c.families.add(f.id); c.children.add(`${f.id}:${childId}`);
+        if (row.passed !== true || row.correct !== row.total) continue;
+        const seconds = row.qlog.reduce((a, q) => a + q.s, 0), allowed = row.qlog.reduce((a, q) => a + q.a, 0);
+        c.passes++; c.perQuestion.push(seconds / row.qlog.length); c.shares.push(seconds / allowed);
+      }
+    }
+  }
+  // raw cells first: a flag has to be decided from cells that may themselves be printed
+  const raw = [...acc.values()].map((c) => ({ band: c.band, column: c.column, families: c.families.size,
+    sessions: c.passes, attempts: c.attempts, medianSeconds: round(median(c.perQuestion), 2),
+    medianShare: round(median(c.shares), 3), passRate: c.attempts ? round(c.passes / c.attempts, 3) : null }));
+  const publishable = (c) => c && c.families >= minCell && c.sessions >= minCell && Number.isFinite(c.medianSeconds);
+  const bands = [...new Map(raw.map((c) => [c.band.label, c.band])).values()]
+    .sort((a, b) => a.level - b.level || BAND_ORDER.indexOf(a.kind) - BAND_ORDER.indexOf(b.kind) || a.from - b.from || a.label.localeCompare(b.label));
+  const columnKeys = columnsFor(raw, by);
+  const at = (label, column) => raw.find((c) => c.band.label === label && c.column === column) || null;
+  // the neighbouring bands of the same sector and the same kind, in band order: a paper band is compared
+  // with paper bands, never with a check point
+  const neighbours = (band, column) => {
+    const family = bands.filter((b) => b.level === band.level && b.kind === band.kind);
+    const i = family.findIndex((b) => b.label === band.label);
+    return [family[i - 1], family[i + 1]].filter(Boolean).map((b) => at(b.label, column)).filter(publishable);
+  };
+  const flags = { easy: [], hard: [] };
+  for (const c of raw) {
+    if (!publishable(c)) continue;
+    const near = neighbours(c.band, c.column), reference = mean(near.map((n) => n.medianSeconds));
+    const faster = Number.isFinite(reference) && reference > 0 ? round(1 - c.medianSeconds / reference, 3) : null;
+    const common = { track, sector: c.band.levelId, band: c.band.label, kind: c.band.kind, column: c.column,
+      sessions: c.sessions, attempts: c.attempts, medianSeconds: c.medianSeconds, medianShare: c.medianShare, passRate: c.passRate };
+    if (c.medianShare !== null && c.medianShare < EASY.shareBelow && faster !== null && faster >= EASY.fasterThanNeighbours) {
+      c.flag = 'easy';
+      flags.easy.push({ ...common, neighbourMedianSeconds: round(reference, 2), fasterBy: faster,
+        reason: `median share ${c.medianShare} below ${EASY.shareBelow} and ${Math.round(faster * 100)}% faster than the neighbouring bands` });
+    } else if ((c.medianShare !== null && c.medianShare >= HARD.shareAtLeast) || (c.passRate !== null && c.passRate < HARD.passRateBelow)) {
+      c.flag = 'hard';
+      flags.hard.push({ ...common, neighbourMedianSeconds: round(reference, 2),
+        reason: c.medianShare !== null && c.medianShare >= HARD.shareAtLeast
+          ? `median share ${c.medianShare} at or above ${HARD.shareAtLeast}` : `pass rate ${c.passRate} below ${HARD.passRateBelow}` });
+    }
+  }
+  const order = (a, b) => a.sector.localeCompare(b.sector) || a.band.localeCompare(b.band) || a.column.localeCompare(b.column);
+  flags.easy.sort(order); flags.hard.sort(order);
+  return { track, by, columns: columnKeys,
+    rows: bands.map((band) => ({ ...band, cells: columnKeys.map((column) => matrixCell(at(band.label, column), column, cell)) })),
+    flags, thresholds: { easy: EASY, hard: HARD, minSessions: minCell, minFamilies: minCell } };
+}
+function columnsFor(raw, by) {
+  const present = new Set(raw.map((c) => c.column));
+  const numbers = by === 'age' ? [...present].filter((k) => k !== 'not given').sort((a, b) => Number(a) - Number(b))
+    : ['1', '2', '3', '4', '5', '6'];
+  return [...numbers, ...(present.has('not given') ? ['not given'] : [])];
+}
+/** Every number of a cell lives or dies together, and the labels are not numbers. */
+function matrixCell(c, column, cell) {
+  if (!c) return { column, empty: true, suppressed: false };
+  const sessions = cell(c.sessions, c.families);
+  if (sessions.suppressed) return { column, suppressed: true };
+  return { column, suppressed: false, sessions: c.sessions, attempts: c.attempts, families: c.families,
+    medianSeconds: c.medianSeconds, medianShare: c.medianShare, passRate: c.passRate, flag: c.flag || null };
+}
+
 // ---------------------------------------------------------------- reading the store (the only I/O)
 /**
  * One read-only pass for the whole report. Walks families in pages, and per family reads its children's
@@ -277,6 +393,7 @@ export function buildReport(snapshot, { minCell = MIN_CELL, by = 'year' } = {}) 
       children: live.reduce((a, f) => a + (f.children || []).length, 0),
       suppressedBelow: minCell, dayWindow: snapshot.days },
     households: households(snapshot, cell),
+    speed: { engine: speedMatrix(snapshot, 'engine', cell, { minCell, by: column }), nav: speedMatrix(snapshot, 'nav', cell, { minCell, by: column }) },
   };
 }
 /** The audit row one run writes — built here so a test can check it names the operator and no family. */
