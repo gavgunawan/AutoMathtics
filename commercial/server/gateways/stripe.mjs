@@ -56,7 +56,7 @@ export const bestLine = (lines) => {
   const positive = priced.filter((l) => !Number.isSafeInteger(l.amount) || l.amount > 0);
   return (positive.length ? positive : priced).sort((a, b) => (b.period?.end || 0) - (a.period?.end || 0))[0];
 };
-const NONE = Object.freeze({ price: null, periodEnd: null, familyId: null, checkoutId: null, amountCents: null, full: null, ref: null, subscriptionRef: null });
+const NONE = Object.freeze({ price: null, periodEnd: null, familyId: null, checkoutId: null, amountCents: null, full: null, ref: null, subscriptionRef: null, resumesAt: null });
 export function signStripe(secret, rawBody, atMs) { const t = Math.floor(atMs / 1000); return `t=${t},v1=${createHmac('sha256', secret).update(`${t}.`).update(rawBody).digest('hex')}`; }
 
 export class StripeGateway {
@@ -158,7 +158,9 @@ export class StripeGateway {
   /** Stripe's subscription in the shape the reconciliation compares (RECONCILIATION.md); nothing secret in it. */
   describe(sub) {
     const price = sub.items?.data?.[0]?.price?.id || null;
-    return { ref: sub.id, status: sub.status, live: LIVE.has(sub.status), ended: ENDED.has(sub.status), price, plan: this.planFor(price), periodEnd: periodEndOf(sub), cancelAtPeriodEnd: sub.cancel_at_period_end === true, canceledAt: sub.canceled_at ? sub.canceled_at * 1000 : null, checkoutId: sub.metadata?.checkoutId || null }; // checkoutId: the checkout of ours that made it (createCheckout stamps it), null for one the dashboard made
+    const p = sub.pause_collection || null;
+    return { ref: sub.id, status: sub.status, live: LIVE.has(sub.status), ended: ENDED.has(sub.status), price, plan: this.planFor(price), periodEnd: periodEndOf(sub), cancelAtPeriodEnd: sub.cancel_at_period_end === true, canceledAt: sub.canceled_at ? sub.canceled_at * 1000 : null,
+      paused: !!p, pauseBehavior: p?.behavior || null, pauseResumesAt: Number.isSafeInteger(p?.resumes_at) ? p.resumes_at * 1000 : null, checkoutId: sub.metadata?.checkoutId || null }; // checkoutId: the checkout of ours that made it (createCheckout stamps it), null for one the dashboard made
   }
   /**
    * Move the customer's live subscription to the new price; the prorated difference is invoiced now.
@@ -182,6 +184,24 @@ export class StripeGateway {
     const sub = await this.liveSubscription(customerRef, { customerId, subscriptionRef });
     const updated = await this.api('POST', `/v1/subscriptions/${sub.id}`, { items: [{ id: sub.items.data[0].id, price }], proration_behavior: 'none', metadata: { lastChange: idempotencyKey } }, idempotencyKey);
     return { providerOperationRef: updated.id, effectiveAt: periodEndOf(updated), simulated: false };
+  }
+  /**
+   * Leaving (12 Sep 2026): pause collection until `resumesAt`, with `behavior: 'void'` — Stripe raises no invoice at all while
+   * the pause lasts (a draft would otherwise be collected later), so a pause can never charge twice and never charges for a
+   * month nobody had. The subscription's status stays `active`: what says it is paused is `pause_collection`, which the
+   * reconciliation compares (describe) and `customer.subscription.updated` echoes back.
+   */
+  async pauseCollection({ idempotencyKey, customerRef, customerId = null, subscriptionRef = null, resumesAt = null }) {
+    const sub = await this.liveSubscription(customerRef, { customerId, subscriptionRef });
+    const updated = await this.api('POST', `/v1/subscriptions/${sub.id}`, { pause_collection: { behavior: 'void', ...(Number.isSafeInteger(resumesAt) ? { resumes_at: Math.floor(resumesAt / 1000) } : {}) }, metadata: { lastChange: idempotencyKey } }, idempotencyKey);
+    const p = updated.pause_collection || null;
+    return { providerOperationRef: updated.id, paused: !!p, behavior: p?.behavior || null, resumesAt: Number.isSafeInteger(p?.resumes_at) ? p.resumes_at * 1000 : null, simulated: false };
+  }
+  /** End a pause: `pause_collection` unset (the empty value Stripe reads as "remove"), so the next invoice is raised as usual. */
+  async resumeCollection({ idempotencyKey, customerRef, customerId = null, subscriptionRef = null }) {
+    const sub = await this.liveSubscription(customerRef, { customerId, subscriptionRef });
+    const updated = await this.api('POST', `/v1/subscriptions/${sub.id}`, { pause_collection: '', metadata: { lastChange: idempotencyKey } }, idempotencyKey);
+    return { providerOperationRef: updated.id, paused: !!updated.pause_collection, resumesAt: null, simulated: false };
   }
   /** The parent's cancel-at-period-end, or its undo, on the provider's subscription. */
   async setCancelAtPeriodEnd({ idempotencyKey, customerRef, customerId = null, subscriptionRef = null, cancel }) {
@@ -261,6 +281,15 @@ export class StripeGateway {
       return { ...base, type: ev.type, customer, data: { ...NONE, price, periodEnd, familyId: details?.metadata?.familyId || o.metadata?.familyId || null, ref: typeof o.id === 'string' ? o.id : null, subscriptionRef: subId } };
     }
     if (ev.type === 'customer.subscription.deleted') return { ...base, type: 'subscription.deleted', customer, data: { ...NONE, familyId: o.metadata?.familyId || null, subscriptionRef: typeof o.id === 'string' ? o.id : null } };
+    if (ev.type === 'customer.subscription.updated') {
+      // Only one kind of update is mapped: collection paused or resumed (`pause_collection`), and only when the event says that
+      // is what changed (`previous_attributes` names it) — so an unrelated update is recorded and ignored, as every
+      // `customer.subscription.updated` was before, and a webhook still cannot change a plan or a seat count (PAYMENTS.md).
+      if (!Object.hasOwn(ev.data.previous_attributes || {}, 'pause_collection')) return passthrough(ev.type);
+      const p = o.pause_collection || null, subscriptionRef = typeof o.id === 'string' ? o.id : null;
+      return p ? { ...base, type: 'subscription.paused', customer, data: { ...NONE, familyId: o.metadata?.familyId || null, subscriptionRef, resumesAt: Number.isSafeInteger(p.resumes_at) ? p.resumes_at * 1000 : null, ref: p.behavior || null } }
+        : { ...base, type: 'subscription.resumed', customer, data: { ...NONE, familyId: o.metadata?.familyId || null, subscriptionRef } };
+    }
     // refunds and disputes hang off a charge: the charge names the customer (a refund object carries none) and says whether it is now refunded in full
     const chargeOf = async () => {
       const chargeId = typeof o.charge === 'string' ? o.charge : o.charge?.id; if (!chargeId || typeof o.id !== 'string') fail(400, 'INVALID_REQUEST');

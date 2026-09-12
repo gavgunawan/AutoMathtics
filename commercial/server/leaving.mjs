@@ -10,7 +10,9 @@
 // The id is the flow's own operation id, so a retried tap is one record. It holds no name, no address and no child: the audit
 // row beside it carries ids only. Kept 400 days by TTL, like the audit trail and the feedback notes (PRIVACY.md).
 import { fail, object, text } from './security.mjs';
-import { PLANS } from './subscription.mjs';
+import { PLANS, PAUSE_MONTHS, monthsAfter } from './subscription.mjs';
+
+export { PAUSE_MONTHS, monthsAfter }; // the pause's own facts live with the state machine; the rules and the report read them here
 
 const DAY = 86_400_000;
 /** Why a parent is leaving. One is required; the words the parent reads live in public/app.js. */
@@ -23,7 +25,6 @@ export const OFFER_WINDOW_MS = 90 * DAY;   // never more than one set of offers 
 export const OFFERS_MAX = 2;               // at most two, so the page is a choice and not a maze
 export const FREE_TEXT_MAX = 500;
 export const LEAVING_TTL_MS = 400 * DAY;
-export const PAUSE_MONTHS = Object.freeze([1, 2, 3]);
 export const EMAIL_CADENCES = Object.freeze(['weekly', 'monthly', 'off']);
 
 // ---- months
@@ -42,15 +43,6 @@ export function monthsBefore(month, n) {
   const r = monthRange(month); if (!r) return [];
   const out = []; for (let i = 1; i <= n; i++) { const d = new Date(r.start); out.push(monthKey(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - i, 1))); }
   return out;
-}
-/**
- * `n` calendar months after an instant, in UTC, clamped to the end of the month: 31 January plus one month is 28 February
- * (29 in a leap year), never 3 March. A pause's `resumesAt` is this, so "two months" means what a parent means by it.
- */
-export function monthsAfter(ms, n) {
-  const d = new Date(ms), day = d.getUTCDate(), target = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + n, 1);
-  const t = new Date(target), last = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() + 1, 0)).getUTCDate();
-  return Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), Math.min(day, last), d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds(), d.getUTCMilliseconds());
 }
 /** The family's creation month, for the cohort split in the monthly report; null when the family has no creation time. */
 export const cohortOf = (family) => (Number.isSafeInteger(family?.createdAt) ? monthKey(family.createdAt) : null);

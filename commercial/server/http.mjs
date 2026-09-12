@@ -308,6 +308,9 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
       if (billing && path === '/api/billing/trial') return json(200, await billing.startTrial(ctx, data));
       if (billing && path === '/api/billing/cancel') return json(200, await (payments ? payments.cancel(ctx, data) : billing.cancel(ctx, data))); // Stage 4.2: the provider hears it first
       if (billing && path === '/api/billing/seats') return json(200, await billing.seats(ctx, data));
+      // Leaving (12 Sep 2026): pause and resume. The provider hears each first (payments.mjs); without a gateway the machine alone records it.
+      if (billing && path === '/api/billing/pause') return json(200, await (payments ? payments.pause(ctx, data) : billing.pause(ctx, data)));
+      if (billing && path === '/api/billing/resume') return json(200, await (payments ? payments.resume(ctx, data) : billing.resume(ctx, data)));
       if (payments && path === '/api/billing/checkout') return json(200, await payments.checkout(ctx, data));
       if (payments && path === '/api/billing/plan') return json(200, await payments.changePlan(ctx, data));
       if (support && path === '/api/family/deletion') return json(200, await support.requestDeletion(ctx, data));

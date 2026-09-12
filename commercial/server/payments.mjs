@@ -16,7 +16,7 @@
 // webhook never touches a child wallet.
 import { randomUUID, createHmac } from 'node:crypto';
 import { Fault, fail, equal, object, text, uuid, sha256 } from './security.mjs';
-import { PLANS, deriveState, assignSeats, transition } from './subscription.mjs';
+import { PLANS, PAUSE_MONTHS, deriveState, assignSeats, transition } from './subscription.mjs';
 
 const MINUTE = 60_000, DAY = 86_400_000;
 export const SIGNATURE_TOLERANCE_MS = 5 * MINUTE;
@@ -46,6 +46,10 @@ export const PROVIDER_EVENTS = Object.freeze({
   'invoice.paid': 'payment.succeeded',
   'invoice.payment_failed': 'payment.failed',
   'subscription.deleted': 'terminate',
+  // Leaving (12 Sep 2026): the provider's echo that collection is paused or resumed (Stripe: customer.subscription.updated
+  // carrying pause_collection). It moves no plan and no seat: only the pause fact, and the provider is its authority.
+  'subscription.paused': 'pause.start',
+  'subscription.resumed': 'pause.end',
   'charge.refunded': 'refund', // the fake provider's refund fixture: one event per refund
   'refund.created': 'refund', // a real provider's per-refund object (never the charge's running total)
   'dispute.opened': 'refund', // a card dispute takes the money back the moment it is opened: access ends then (the owner's policy)
@@ -84,16 +88,17 @@ export function normalizeEvent(body, now) {
   // `seq` is the adapter's ordering key within one timestamp (providers expose seconds); a real
   // adapter must supply a total order — see PAYMENTS.md → Ordering.
   if (body.seq !== undefined && (!Number.isSafeInteger(body.seq) || body.seq < 0)) fail(400, 'INVALID_REQUEST');
-  const d = object(body.data ?? {}, ['price', 'periodEnd', 'familyId', 'checkoutId', 'amountCents', 'full', 'ref', 'subscriptionRef']); // no plan, no seats: those are the server's to decide
+  const d = object(body.data ?? {}, ['price', 'periodEnd', 'familyId', 'checkoutId', 'amountCents', 'full', 'ref', 'subscriptionRef', 'resumesAt']); // no plan, no seats: those are the server's to decide
   if (d.ref !== undefined) ref(d.ref); // the provider's own id of the object (a refund, an invoice): dedupe evidence
   if (d.subscriptionRef !== undefined) ref(d.subscriptionRef); // the provider's subscription the event is about
   if (d.price !== undefined) ref(d.price);
   if (d.periodEnd !== undefined && !Number.isSafeInteger(d.periodEnd)) fail(400, 'INVALID_REQUEST');
+  if (d.resumesAt !== undefined && d.resumesAt !== null && !Number.isSafeInteger(d.resumesAt)) fail(400, 'INVALID_REQUEST'); // when collection resumes, as the provider states it
   if (d.familyId !== undefined) text(d.familyId, 1, 64);
   if (d.checkoutId !== undefined) ref(d.checkoutId);
   if (d.amountCents !== undefined && (!Number.isSafeInteger(d.amountCents) || d.amountCents < 0)) fail(400, 'INVALID_REQUEST');
   if (d.full !== undefined && typeof d.full !== 'boolean') fail(400, 'INVALID_REQUEST');
-  return { id, type, at: body.at, seq: body.seq ?? null, customer, data: { price: d.price ?? null, periodEnd: d.periodEnd ?? null, familyId: d.familyId ?? null, checkoutId: d.checkoutId ?? null, amountCents: d.amountCents ?? null, full: d.full ?? null, ref: d.ref ?? null, subscriptionRef: d.subscriptionRef ?? null } };
+  return { id, type, at: body.at, seq: body.seq ?? null, customer, data: { price: d.price ?? null, periodEnd: d.periodEnd ?? null, familyId: d.familyId ?? null, checkoutId: d.checkoutId ?? null, amountCents: d.amountCents ?? null, full: d.full ?? null, ref: d.ref ?? null, subscriptionRef: d.subscriptionRef ?? null, resumesAt: d.resumesAt ?? null } };
 }
 
 /** The zero-cost gateway: a checkout is a record, a webhook is a signed fixture. */
@@ -120,6 +125,9 @@ export class FakeGateway {
   // Stage 4.2 provider effects, simulated: recorded on `calls`, nothing charged, no state held (inspect reports none).
   record(...call) { (this.calls ||= []).push(call); }
   async schedulePlan({ idempotencyKey, customerRef, to }) { this.record('schedulePlan', customerRef, to); return { providerOperationRef: `fake_op_${idempotencyKey}`, effectiveAt: null, simulated: true }; }
+  // Leaving (12 Sep 2026): collection paused with behaviour 'void' — no invoice is raised while it lasts, so a pause can never charge twice.
+  async pauseCollection({ idempotencyKey, customerRef, resumesAt = null }) { this.record('pauseCollection', customerRef, resumesAt); return { providerOperationRef: `fake_op_${idempotencyKey}`, paused: true, behavior: 'void', resumesAt: Number.isSafeInteger(resumesAt) ? resumesAt : null, simulated: true }; }
+  async resumeCollection({ idempotencyKey, customerRef }) { this.record('resumeCollection', customerRef); return { providerOperationRef: `fake_op_${idempotencyKey}`, paused: false, resumesAt: null, simulated: true }; }
   async setCancelAtPeriodEnd({ idempotencyKey, customerRef, cancel }) { this.record('setCancelAtPeriodEnd', customerRef, cancel); return { providerOperationRef: `fake_op_${idempotencyKey}`, cancelAtPeriodEnd: cancel === true, simulated: true }; }
   async cancelSubscription({ idempotencyKey, customerRef }) { this.record('cancelSubscription', customerRef); return { cancelled: true, providerOperationRef: `fake_op_${idempotencyKey}`, simulated: true }; }
   async inspect(customerRef) { this.record('inspect', customerRef); return { provider: this.name, customer: { id: customerRef }, subscription: null, simulated: true }; }
@@ -288,13 +296,63 @@ export class Payments {
       if (await tx.get(`families/${s.familyId}/billing/${eventId}`)) return { replay: true }; // commit() answers a replay (or a conflict) itself
       transition(sub, { type: undo ? 'cancel.undo' : 'cancel.request' }, now); // refused here, the provider is never asked
       const gw = Object.hasOwn(this.gateways, sub.provider || '') ? this.gateways[sub.provider] : null, customerRef = family.billing?.[sub.provider] || null;
-      return { provider: gw && typeof gw.setCancelAtPeriodEnd === 'function' && sub.plan !== 'trial' && customerRef ? sub.provider : null, customerRef, customerId: family.providerCustomer?.[sub.provider] || null, subscriptionRef: sub.providerSubscriptionRef || null, familyId: s.familyId };
+      // A paused subscription has no period left to end: its cancellation is an ending now, at the provider too, so no invoice
+      // can ever be raised for it again (the machine ends it in the same way — subscription.mjs cancel.request).
+      const paused = !undo && deriveState(sub, now) === 'paused';
+      const able = gw && sub.plan !== 'trial' && !!customerRef && typeof gw[paused ? 'cancelSubscription' : 'setCancelAtPeriodEnd'] === 'function';
+      return { provider: able ? sub.provider : null, paused, customerRef, customerId: family.providerCustomer?.[sub.provider] || null, subscriptionRef: sub.providerSubscriptionRef || null, familyId: s.familyId };
     }, { readOnly: true });
     if (prepared.provider) {
-      try { await this.gateways[prepared.provider].setCancelAtPeriodEnd({ idempotencyKey: eventId, customerRef: prepared.customerRef, customerId: prepared.customerId, subscriptionRef: prepared.subscriptionRef, cancel: !undo }); }
+      const gw = this.gateways[prepared.provider], args = { idempotencyKey: eventId, customerRef: prepared.customerRef, customerId: prepared.customerId, subscriptionRef: prepared.subscriptionRef };
+      try { await (prepared.paused ? gw.cancelSubscription(args) : gw.setCancelAtPeriodEnd({ ...args, cancel: !undo })); }
       catch (error) { if (error instanceof Fault && PROVIDER_REFUSALS.has(error.code)) await this.refuse(prepared.familyId, error.code); throw error; }
     }
     return this.billing.cancel(ctx, body);
+  }
+  /**
+   * Parent action (the leaving flow): pause collection for 1, 2 or 3 months instead of leaving. The provider hears it first, so
+   * its next invoice is never raised — a pause that the record held but the provider did not would charge for a month the family
+   * was told it would not be charged for. The machine must accept the transition before the provider is asked; a replayed
+   * operation tells the provider nothing; a provider failure changes nothing here, and the parent's retry under the same
+   * operation id reaches the provider under the same idempotency key, so nothing is ever paused twice. A crash between the
+   * provider and the record leaves the provider paused and the record not: the parent's retry finishes it, and so does the
+   * provider's own echo (customer.subscription.updated → pause.start), which is also what reconciles a late or out-of-order one.
+   */
+  async pause(ctx, body) {
+    object(body, ['months', 'operationId']); const eventId = this.billing.eventId(body);
+    if (!PAUSE_MONTHS.includes(body.months)) fail(400, 'INVALID_MONTHS');
+    const prepared = await this.store.transaction(async (tx) => {
+      const { s, family } = await this.billing.parent(tx, ctx, true), now = this.now();
+      const sub = family.subscription; if (!sub) fail(409, 'NO_SUBSCRIPTION');
+      if (await tx.get(`families/${s.familyId}/billing/${eventId}`)) return { replay: true }; // commit() answers a replay (or a conflict) itself
+      const next = transition(sub, { type: 'pause.start', months: body.months, by: 'parent' }, now); // refused here, the provider is never asked
+      const gw = Object.hasOwn(this.gateways, sub.provider || '') ? this.gateways[sub.provider] : null, customerRef = family.billing?.[sub.provider] || null;
+      return { provider: gw && typeof gw.pauseCollection === 'function' && sub.plan !== 'trial' && customerRef ? sub.provider : null, customerRef, customerId: family.providerCustomer?.[sub.provider] || null,
+        subscriptionRef: sub.providerSubscriptionRef || null, familyId: s.familyId, resumesAt: next.pause.resumesAt };
+    }, { readOnly: true });
+    if (prepared.provider) {
+      try { await this.gateways[prepared.provider].pauseCollection({ idempotencyKey: eventId, customerRef: prepared.customerRef, customerId: prepared.customerId, subscriptionRef: prepared.subscriptionRef, resumesAt: prepared.resumesAt }); }
+      catch (error) { if (error instanceof Fault && PROVIDER_REFUSALS.has(error.code)) await this.refuse(prepared.familyId, error.code); throw error; }
+    }
+    return this.billing.pause(ctx, body);
+  }
+  /** Parent action: end the pause early. The provider first again, so the invoice it raises next is the one that brings the family back. */
+  async resume(ctx, body) {
+    object(body, ['operationId']); const eventId = this.billing.eventId(body);
+    const prepared = await this.store.transaction(async (tx) => {
+      const { s, family } = await this.billing.parent(tx, ctx, true);
+      const sub = family.subscription; if (!sub) fail(409, 'NO_SUBSCRIPTION');
+      if (await tx.get(`families/${s.familyId}/billing/${eventId}`)) return { replay: true };
+      if (!sub.pause) fail(409, 'NOT_PAUSED');
+      const gw = Object.hasOwn(this.gateways, sub.provider || '') ? this.gateways[sub.provider] : null, customerRef = family.billing?.[sub.provider] || null;
+      return { provider: gw && typeof gw.resumeCollection === 'function' && sub.plan !== 'trial' && customerRef ? sub.provider : null, customerRef, customerId: family.providerCustomer?.[sub.provider] || null,
+        subscriptionRef: sub.providerSubscriptionRef || null, familyId: s.familyId };
+    }, { readOnly: true });
+    if (prepared.provider) {
+      try { await this.gateways[prepared.provider].resumeCollection({ idempotencyKey: eventId, customerRef: prepared.customerRef, customerId: prepared.customerId, subscriptionRef: prepared.subscriptionRef }); }
+      catch (error) { if (error instanceof Fault && PROVIDER_REFUSALS.has(error.code)) await this.refuse(prepared.familyId, error.code); throw error; }
+    }
+    return this.billing.resume(ctx, body);
   }
   /**
    * A deterministic refusal on the provider's truth — two live subscriptions, one the family does not know, a checkout completing,
@@ -625,6 +683,8 @@ export class Payments {
             ? { id: derivedEventId(`${gw.name}:${ev.id}`), type: 'plan.change', plan: awaiting.toPlan, provider: gw.name, providerRef: ev.customer, proration: awaiting.proration || null, ...(awaiting.seatChildIds ? { seatChildIds: [...new Set([...awaiting.seatChildIds, ...(family.activeChildIds || [])])] } : {}) }
             : { id: derivedEventId(`${gw.name}:${ev.id}`), type: internalType, provider: gw.name, providerRef: ev.customer, authorized: ev.type === 'checkout.completed',
               ...(plan ? { plan } : {}), ...(ev.data.periodEnd ? { periodEnd: ev.data.periodEnd } : {}), ...(ev.data.subscriptionRef ? { subscriptionRef: ev.data.subscriptionRef } : {}),
+              // the provider is the authority on a pause: `by: 'provider'` lets the machine take its word for it and for when collection resumes
+              ...(internalType === 'pause.start' || internalType === 'pause.end' ? { by: 'provider', ...(Number.isSafeInteger(ev.data.resumesAt) ? { resumesAt: ev.data.resumesAt } : {}) } : {}),
               ...(internalType === 'refund' ? { amountCents: ev.data.amountCents ?? undefined, full: ev.data.full === true } : {}) };
           try {
             let done = ev.type === 'checkout.completed' && family.checkoutIntent?.[gw.name] === checkout.checkoutId ? { ...family, checkoutIntent: { ...family.checkoutIntent, [gw.name]: null } } : family;

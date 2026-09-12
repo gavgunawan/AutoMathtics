@@ -21,6 +21,9 @@ import { prefsOf, prefsPath } from './email.mjs';
 
 const DAY = 86_400_000, AUDIT_RETENTION_MS = 400 * DAY;
 export const DELETION_GRACE_MS = 14 * DAY;
+// How long after a pause's resume date the sweep waits before naming it: the provider raises its first invoice then, and a
+// payment takes a few days to fail through dunning. Sooner would name every family in the week its pause ends.
+export const GRACE_AFTER_PAUSE_MS = 7 * DAY;
 export const INTENT_OUTCOMES = Object.freeze(['no_provider_change', 'provider_reverted', 'applied_by_operator', 'refunded']);
 /** What deletion keeps, and why. */
 export const RETENTION = Object.freeze({
@@ -387,6 +390,13 @@ export class Support {
       const state = deriveState(sub, now);
       if (sub.periodEnd && sub.periodEnd > now + 400 * DAY) add('SUBSCRIPTION_PERIOD_ABSURD', id, new Date(sub.periodEnd).toISOString());
       if (['active', 'grace', 'past_due'].includes(state) && sub.plan !== 'trial' && sub.provider !== 'manual' && !f.billing?.[sub.provider]) add('PAID_WITHOUT_CUSTOMER', id, `${state} on ${sub.plan} via ${sub.provider}, no customer reference`);
+      // Leaving (12 Sep 2026): a paused family is reported, never counted as churn. A pause the provider never echoed, or one
+      // whose resume date has passed with no invoice since, is named: the family is waiting for money that is not coming.
+      if (sub.pause) {
+        counts.paused = (counts.paused || 0) + 1;
+        if (sub.pause.echoed !== true && sub.pause.pausedAt < now - DAY) add('PAUSE_NOT_ECHOED', id, `paused ${new Date(sub.pause.pausedAt).toISOString()} and the provider has never echoed it: reconcile-provider`);
+        if (Number.isSafeInteger(sub.pause.resumesAt) && sub.pause.resumesAt < now - GRACE_AFTER_PAUSE_MS) add('PAUSE_OVERDUE', id, `collection should have resumed ${new Date(sub.pause.resumesAt).toISOString()} and no invoice has been paid since: reconcile-provider`);
+      }
     }
     for (const [, i] of await this.store.query('billingChangeIntents', 'familyId', id, 100)) {
       if (['creating', 'awaiting_payment', 'stale', 'superseded', 'frozen_by_deletion'].includes(i.status)) counts.openIntents++;
@@ -423,8 +433,11 @@ export class Support {
     uuid(familyId); this.operator(operator);
     const family = await this.store.get(`families/${familyId}`); if (!family) fail(404, 'FAMILY_NOT_FOUND');
     const now = this.now(), sub = family.subscription || null, state = sub ? deriveState(sub, now) : 'none', gone = family.deleted === true || family.deletion?.status === 'executing';
-    const local = { state, plan: sub?.plan || null, scheduledPlan: sub?.scheduled?.plan || null, periodEnd: sub?.periodEnd || null, cancelAtPeriodEnd: !!sub?.cancelAtPeriodEnd, provider: sub?.provider || null, providerRef: sub?.providerRef || null, version: sub?.version ?? null };
-    const wantsProvider = !!sub && sub.plan !== 'trial' && ['active', 'grace', 'past_due'].includes(state) && !gone; // the family's record says a provider subscription should be live
+    const local = { state, plan: sub?.plan || null, scheduledPlan: sub?.scheduled?.plan || null, periodEnd: sub?.periodEnd || null, cancelAtPeriodEnd: !!sub?.cancelAtPeriodEnd, provider: sub?.provider || null, providerRef: sub?.providerRef || null, version: sub?.version ?? null,
+      paused: !!sub?.pause, pauseResumesAt: sub?.pause?.resumesAt ?? null, pauseEchoed: sub?.pause?.echoed === true };
+    // A paused subscription is still live at the provider — collection is paused, the subscription is not — so the record still
+    // expects one; `paused` is the state the family is in once the paid period has run out (deriveState).
+    const wantsProvider = !!sub && sub.plan !== 'trial' && ['active', 'grace', 'past_due', 'paused'].includes(state) && !gone; // the family's record says a provider subscription should be live
     const providers = [];
     for (const [provider, ref] of Object.entries(family.billing || {})) {
       const st = this.payments ? await this.payments.providerState(provider, ref, family.providerCustomer?.[provider] || null) : { provider, available: false };
@@ -442,6 +455,12 @@ export class Support {
         else if (ps.plan !== local.plan && ps.plan !== local.scheduledPlan) add('PLAN_MISMATCH', `provider ${ps.plan}; family ${local.plan}${local.scheduledPlan ? ` (scheduled ${local.scheduledPlan})` : ''}`);
         if (ps.periodEnd && local.periodEnd && Math.abs(ps.periodEnd - local.periodEnd) > 60_000) add('PERIOD_END_MISMATCH', `provider ${new Date(ps.periodEnd).toISOString()}; family ${new Date(local.periodEnd).toISOString()}`);
         if (ps.cancelAtPeriodEnd !== local.cancelAtPeriodEnd) add('CANCEL_FLAG_MISMATCH', `provider cancel at period end ${ps.cancelAtPeriodEnd}; family ${local.cancelAtPeriodEnd}`);
+        // The provider is the authority on a pause: paused there and not here would charge nothing and grant access; paused here
+        // and not there would charge a family that was told it would not be charged. Either way the operator resolves it.
+        if (ps.paused === true && !local.paused) add('PAUSE_MISMATCH', `the provider has collection paused on ${ps.ref}${ps.pauseResumesAt ? ` until ${new Date(ps.pauseResumesAt).toISOString()}` : ' with no resume date'}; the family's record is not paused`);
+        else if (ps.paused === false && local.paused) add('PAUSE_MISMATCH', `the family is paused${local.pauseResumesAt ? ` until ${new Date(local.pauseResumesAt).toISOString()}` : ''}; the provider is collecting as usual on ${ps.ref}`);
+        else if (ps.paused === true && local.paused && ps.pauseResumesAt !== local.pauseResumesAt) add('PAUSE_RESUME_MISMATCH', `provider ${ps.pauseResumesAt ? new Date(ps.pauseResumesAt).toISOString() : 'no resume date'}; family ${local.pauseResumesAt ? new Date(local.pauseResumesAt).toISOString() : 'no resume date'}`);
+        if (ps.paused === true && ps.pauseBehavior && ps.pauseBehavior !== 'void') add('PAUSE_BEHAVIOUR', `the provider's pause is "${ps.pauseBehavior}", not "void": an invoice raised now would be collected later`);
       }
       providers.push({ provider, ref, available: st.available, simulated: st.simulated === true, error: st.error || null, customer: st.customer || null, customerDeleted: st.customerDeleted === true, subscription: ps, liveCount: st.liveCount ?? null, findings });
     }
