@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { fail, object, uuid } from './security.mjs';
+import { Fault, fail, object, uuid } from './security.mjs';
 import { TRACKS, LEVELS, GC_PASS, RP_PASS, PAPERS_PER_LEVEL, PAPERS_PER_SESSION, normalizeProgress, trk, withTrk, trackDone, bossDue, settleJumps, nextRun, buildQuestions, buildScanQuestions, buildPlacementQuestions, placementFromResults, grade, answerText, bonusesFor, dayISO, weekISO, scanState } from './progress.mjs';
 import { applyGameDerived, heatmap } from './game.mjs';
 import { entry, post } from './ledger.mjs';
@@ -9,6 +9,10 @@ const MINUTE = 60_000, HOUR = 60 * MINUTE;
 const SESSION_LIFE = 2 * HOUR;
 const GRACE_MS = 5_000;
 const HISTORY_MAX = 60, PASS_DAYS_MAX = 400;
+// What one child may start in an hour. It guards against a script asking for papers in a loop, not against a keen child:
+// a start a minute is far past any real session and far under a hammering one. It was twenty, which both children reached
+// in one afternoon of ordinary use, and the refusal read as a dead button (the owner's report of 12 Sep 2026).
+const STARTS_PER_HOUR = 60;
 export const DEFAULT_TIME_ZONE = 'Asia/Singapore';
 
 /** Secure learning loop. Browser input is limited to route intent and answer text; the server owns
@@ -50,7 +54,9 @@ export class Learning {
       let { p, prog: original, s, family } = await this.child(tx, ctx); const active = original.activeSession ? await tx.get(p.session(original.activeSession)) : null;
       if (active && active.status === 'active' && this.now() < active.createdAt + SESSION_LIFE)
         return { session: this.publicSession(active), question: this.publicQuestion(active, active.index), resumed: true };
-      const commitRate = await this.foundation.rateIn(tx, `learning-start:${s.familyId}:${s.childId}`, 20, HOUR);
+      // its own code, so the child reads about papers and a break rather than the sign-in screen's "too many attempts"
+      const commitRate = await this.foundation.rateIn(tx, `learning-start:${s.familyId}:${s.childId}`, STARTS_PER_HOUR, HOUR)
+        .catch((e) => { if (e instanceof Fault && e.code === 'TOO_MANY_ATTEMPTS') fail(429, 'TOO_MANY_PAPERS'); throw e; });
       if (active && active.status === 'active' && active.mode === 'placement') { // a placement test abandoned past its two hours settles like a quit
         const now = this.now(), settled = this.settlePlacement(original, active, now, family.timeZone || DEFAULT_TIME_ZONE);
         tx.set(p.session(active.id), { ...active, status: 'expired', finishedAt: now });

@@ -181,16 +181,18 @@ test('Stage 2 hardening: answer grammar rejects leading zeroes, negative zero an
   assert.equal((await f.store.get(sessionKey)).index, sess.index);
 });
 
-test('Stage 2 hardening: creating more than 20 abandoned learning sessions in an hour is denied, while resume is free', async () => {
+// Sixty an hour, raised from twenty on 12 Sep 2026: a start a minute is past any real session and under a hammering one,
+// and twenty was reached by two children in one afternoon. Its own code, so a child reads about papers, not sign-in attempts.
+test('Stage 2 hardening: creating more than sixty abandoned learning sessions in an hour is denied, while resume is free', async () => {
   const f = fixture(), k = await f.childSession(), { childCtx } = k;
   await grantEntitlement(f.store, { familyId: k.p.familyId, seatLimit: 1, accessUntil: f.now() + 2 * 60 * 60_000, reason: 'start-throttle test', actor: 'test' }, f.now());
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < 60; i++) {
     const started = await f.learning.start(childCtx, { track: 'engine' });
     const resumed = await f.learning.start(childCtx, { track: 'nav' });
     assert.equal(resumed.resumed, true); assert.equal(resumed.session.id, started.session.id);
     await f.learning.quit(childCtx, { sessionId: started.session.id });
   }
-  await assert.rejects(f.learning.start(childCtx, { track: 'engine' }), rejected('TOO_MANY_ATTEMPTS'));
+  await assert.rejects(f.learning.start(childCtx, { track: 'engine' }), rejected('TOO_MANY_PAPERS'));
   f.advance(60 * 60_000 + 1);
   assert.equal((await f.learning.start(childCtx, { track: 'engine' })).resumed, false);
 });
