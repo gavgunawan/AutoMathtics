@@ -28,6 +28,7 @@ export const INTENT_OUTCOMES = Object.freeze(['no_provider_change', 'provider_re
 /** What deletion keeps, and why. */
 export const RETENTION = Object.freeze({
   'families/{f}/billing/*': 'financial record of every subscription event',
+  'families/{f}/leaving/*': 'why a family left: the reason, the offers shown and taken, the action, the plan, the seats and the creation month, with the parent\'s own words removed at deletion; names nobody and expires by TTL 400 days after each record',
   'billingEvents/*': 'provider event inbox: idempotency and dispute evidence',
   'billingCustomers/*': 'provider customer reference → family: needed to read the records above',
   'checkouts/*': 'checkout intents: idempotency evidence for hosted sessions that may have been paid',
@@ -98,10 +99,12 @@ export class Support {
       if (page.length < this.auditPage) break; after = page.at(-1)[0];
     }
     feedback.sort((a, b) => a.at - b.at);
+    // Leaving (12 Sep 2026): every cancel-or-pause flow this family went through, oldest first, the parent's own words included
+    const leaving = (await tx.entries(`families/${f}/leaving`, 100)).map(([, r]) => r).sort((a, b) => a.at - b.at);
     const trail = await this.familyAudit(tx, f), audit = trail.rows.map((a) => ({ action: a.action, at: a.at, childId: a.childId || null })); // every row of this family's, in pages (fourth round)
     return { exportedAt: this.now(), exportedBy: uid,
       family: { id: f, label: family.label, createdAt: family.createdAt, timeZone: family.timeZone || null, activeChildIds: family.activeChildIds || [], deletion: family.deletion || null },
-      entitlement: effectiveEntitlement(family, this.now()), subscription: family.subscription || null, billing, gameConfig: config || null, children, emailPrefs, feedback, audit, auditTruncated: trail.truncated };
+      entitlement: effectiveEntitlement(family, this.now()), subscription: family.subscription || null, billing, gameConfig: config || null, children, emailPrefs, feedback, leaving, audit, auditTruncated: trail.truncated };
   }
   /** The rows of one collection with `field` equal to `value`, read in pages under the reader given (a transaction or the store); `truncated` only past the cap — and then the rows kept are the first by document id, not by time (the cap is years of use; SUPPORT.md). Never a whole collection: one family's rows cost one family's reads (fifth round). */
   async pagedBy(reader, collection, field, value) {
@@ -643,11 +646,15 @@ export class Support {
       const now = this.now(), col = (c) => tx.entries(`families/${familyId}/${c}`);
       const mem = await col('members'), childDocs = await col('children'), creds = await col('credentials'), attempts = await col('pinAttempts'), receipts = await col('operations');
       const config = await tx.get(`families/${familyId}/game/config`);
+      // Leaving (12 Sep 2026): why the family left is kept — the reason, the offers and the action name nobody and are the churn
+      // record the owner's monthly report reads — but the parent's own words go with the rest of their writing.
+      const leaving = await tx.entries(`families/${familyId}/leaving`, 100);
       const parents = []; for (const [uid] of mem) parents.push([uid, await tx.get(`parents/${uid}`)]);
       for (const [name, rows] of [['children', childDocs], ['credentials', creds], ['pinAttempts', attempts], ['operations', receipts], ['members', mem]]) for (const [id] of rows) tx.delete(`families/${familyId}/${name}/${id}`);
+      for (const [id, rec] of leaving) if (rec.freeText !== null) tx.set(`families/${familyId}/leaving/${id}`, { ...rec, freeText: null, redactedAt: now });
       if (config) tx.delete(`families/${familyId}/game/config`);
       for (const [uid, p] of parents) if (p) tx.set(`parents/${uid}`, { deleted: true, deletedAt: now, familyId: null, reauthAfter: Math.max(p.reauthAfter || 0, Math.floor(now / 1000)), phoneKey: p.phoneKey || null, createdAt: p.createdAt || null }); // seconds, like login()
-      const counts = { ...(current.deletion.counts || {}), children: childDocs.length };
+      const counts = { ...(current.deletion.counts || {}), children: childDocs.length, leavingRedacted: leaving.filter(([, r]) => r.freeText !== null).length };
       const deletion = { ...current.deletion, status: 'done', phase: 'done', executedAt: now, counts };
       tx.set(`families/${familyId}`, { id: familyId, deleted: true, deletedAt: now, deletedBy: current.deletion.executedBy || operator, createdAt: current.createdAt || null, phoneKey: current.phoneKey || null, billing: current.billing || null, providerCustomer: current.providerCustomer || null,
         subscription: current.subscription || null, childIds: [], activeChildIds: [], deletion, retention: Object.keys(RETENTION) });

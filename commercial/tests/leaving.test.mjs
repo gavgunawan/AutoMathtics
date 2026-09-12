@@ -4,6 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { fixture, rejected, webhookSecret } from './support.mjs';
+import { readFile } from 'node:fs/promises';
 import { signWebhook } from '../server/payments.mjs';
 import { LEAVING_REASONS, LEAVING_ACTIONS, OFFER_KINDS, OFFER_WINDOW_MS, OFFERS_MAX, FREE_TEXT_MAX, LEAVING_TTL_MS, PAUSE_MONTHS, EMAIL_CADENCES,
   monthKey, monthRange, monthsBefore, monthsAfter, cohortOf, smallerPlan, fewestSeatsPlan, offersFor, offerAllowed,
@@ -216,4 +217,38 @@ test('a submitted flow is one record and one action however many times the tap i
   await assert.rejects(f.leaving.submit(a.ctx, { reason: 'not_using', action: 'keep', operationId: randomUUID() }), rejected('REAUTHENTICATE'), 'the flow can change money: a fresh sign-in');
   const looking = await f.leaving.offers(a.ctx, { reason: 'not_using' });
   assert.equal(looking.reason, 'not_using', 'but looking at the page needs only the session');
+});
+
+// ---- the paper trail: what the export shows, what a deletion keeps, and what the owner's documents say
+test('the family export carries every flow with the parent\'s own words; a deletion takes the words and keeps the rest', async () => {
+  const f = fixture(), a = await subscribed(f, 'parentA', 'family');
+  await f.leaving.submit(a.ctx, { reason: 'taking_a_break', action: 'pause', months: 1, offerAccepted: 'pause', freeText: 'back after the holidays', operationId: randomUUID() });
+  const x = await f.support.exportFamily(a.ctx);
+  assert.equal(x.leaving.length, 1);
+  assert.deepEqual([x.leaving[0].reason, x.leaving[0].action, x.leaving[0].freeText, x.leaving[0].offersShown], ['taking_a_break', 'pause', 'back after the holidays', ['pause']]);
+  assert.ok(!JSON.stringify(x.leaving).includes('@'), 'no address in the record');
+  await f.support.requestDeletion(a.ctx, { operationId: randomUUID() });
+  f.advance(15 * MS_DAY);
+  const record = await f.support.executeDeletion(a.familyId, { operator: 'ops@example.test' });
+  assert.equal(record.counts.leavingRedacted, 1);
+  const [kept] = await rows(f, a.familyId);
+  assert.deepEqual([kept.reason, kept.action, kept.plan, kept.seats, kept.cohort, kept.freeText], ['taking_a_break', 'pause', 'family', 4, kept.cohort, null], 'the words go, the churn record stays');
+  assert.equal(kept.redactedAt, f.now());
+  assert.match(record.retained['families/{f}/leaving/*'], /own words removed at deletion/);
+  assert.ok(Number.isSafeInteger(kept.expireAt), 'and it still expires by TTL');
+});
+
+test('the owner\'s documents say what the record holds, how a pause behaves, and when the monthly report goes', async () => {
+  const read = async (p) => readFile(new URL(p, import.meta.url), 'utf8');
+  const privacy = await read('../PRIVACY.md'), payments = await read('../PAYMENTS.md'), acceptance = await read('../ACCEPTANCE.md'), deploy = await read('../DEPLOY_V3.md'), recon = await read('../RECONCILIATION.md'), subs = await read('../SUBSCRIPTIONS.md');
+  for (const s of ['`families/{f}/leaving/{id}`', '500 characters', '400 days', 'Cancel or pause', 'monthly leaving report', '90 days']) assert.ok(privacy.includes(s), `PRIVACY: ${s}`);
+  for (const s of ['## Paused', 'pause_collection', "behaviour `void`", 'CANCEL_SCHEDULED', 'PAUSE_MISMATCH', 'pauseCollection({ idempotencyKey, customerRef, resumesAt })']) assert.ok(payments.includes(s), `PAYMENTS: ${s}`);
+  assert.match(payments, /no churn count can mistake it for a family that left/);
+  for (let i = 1; i <= 9; i++) assert.ok(acceptance.includes(`\n| L${i} | `), `L${i}`);
+  for (const i of [9, 10]) assert.ok(acceptance.includes(`\n| E${i} | `), `E${i}`);
+  for (const s of ['monthly_not_due', 'OWNER_EMAIL', 'reports/leaving:{YYYY-MM}', 'MONTH_NOT_COMPLETE', 'scripts/report.mjs,leaving', 'no_owner_address']) assert.ok(deploy.includes(s), `DEPLOY_V3: ${s}`);
+  assert.match(deploy, /first Monday of the\s+month/);
+  assert.match(deploy, /for GROUP in [^;]*\bleaving\b/, 'DEPLOY_V3: the leaving records expire by TTL');
+  for (const s of ['PAUSE_NOT_ECHOED', 'PAUSE_OVERDUE', 'PAUSE_MISMATCH', 'PAUSE_BEHAVIOUR']) assert.ok(recon.includes(s), `RECONCILIATION: ${s}`);
+  for (const s of ['paused', '/api/billing/pause', '/api/leaving', 'pause.start']) assert.ok(subs.includes(s), `SUBSCRIPTIONS: ${s}`);
 });

@@ -178,7 +178,7 @@ The server stamps short-lived records with an `expireAt` timestamp; Firestore de
 if a TTL policy names that field for the collection group. Run once, after the database exists:
 
 ```bash
-for GROUP in sessions rateLimits pinAttempts operations audit recoveries sweeps reports outbox feedback feedbackDays; do
+for GROUP in sessions rateLimits pinAttempts operations audit recoveries sweeps reports outbox feedback feedbackDays leaving; do
   gcloud firestore fields ttls update expireAt --collection-group="$GROUP" \
     --enable-ttl --project "$PROJECT_ID"
 done
@@ -192,7 +192,8 @@ retention policy in `PAYMENTS.md`, never by TTL (S3.4-G).
 account. `reports` (the weekly email's claim and outcome, 400 days) and `outbox` (the fake mail provider's copies, 14 days) do
 expire; on a project set up before email-v1, block G requests those two policies (section 5b). `feedback` (the notes from
 *Send feedback*, 400 days) and `feedbackDays` (their daily counts, 8 days) expire the same way; on a project set up before
-them, rerun block B, which requests only the policies not yet listed (section 5c).
+them, rerun block B, which requests only the policies not yet listed (section 5c). `leaving` (why a family cancelled or paused,
+400 days after each record) expires too, and block G requests it as well.
 
 Learning sessions live under `families/*/learning/*/sessions`, whose collection group is
 `sessions` as well, so the first line covers them. Deletion runs within about 24 hours of the
@@ -452,6 +453,23 @@ FAMILY_UUID` prints one family's email with inert links. A past week's email goe
 once they have expired (14 days after the week), with a line that says so and points to the app; a week whose stop-the-report
 link would be dead (a year after it) is refused (`WEEK_TOO_OLD`), since no email may carry a dead link. The arguments are strict: an unknown word, a repeated option or an option without its value exits 64 with the
 usage, so a slip can never widen a run to every family.
+
+**Weekly, monthly or off (the leaving flow, 12 Sep 2026).** A parent may have the progress report weekly, once a month, or not at
+all (`emailPrefs.cadence`; off is the old *progress* switch). A monthly family gets one email on the **first Monday of the
+month**, covering the four complete weeks before it — the same report over a longer span, with the same buttons and the same
+claim — so the job skips it on every other Monday with the log reason `monthly_not_due`. The week that sends is the one whose
+following Monday falls on the 1st to the 7th, which follows from the week alone, so `--week` decides what the scheduled run
+decided.
+
+**The monthly leaving report.** On that same first Monday the job also emails the owner one plain report of the month just ended:
+how many families cancelled, paused, downgraded or asked for fewer emails, each as a share of the families active when the month
+began, the reasons ranked, the offers shown against the offers taken, the plan, seat and cohort mixes, and the three months
+before for the trend. It goes to `FEEDBACK_TO`, or to `OWNER_EMAIL` when that is not set; with neither it is skipped with the log
+line `no_owner_address`, never guessed at — pass `OWNER_EMAIL=…` when running block G to set it. `reports/leaving:{YYYY-MM}` is
+its claim, so overlapping or repeated runs send one email a month; a month in which nothing happened writes a log line and sends
+nothing; a month still running is refused (`MONTH_NOT_COMPLETE`). Months are UTC. By hand:
+`gcloud run jobs execute automathtics-v3-report --region asia-southeast1 --args scripts/report.mjs,leaving,--month,2026-08 --wait`
+(add `,--dry-run` to decide it and send nothing). It signs no buttons, so it needs neither `SESSION_SECRET` nor `APP_ORIGIN`.
 
 ## 5c. Feedback
 

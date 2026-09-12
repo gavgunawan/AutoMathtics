@@ -79,6 +79,22 @@ account owner's own address receives mail (`DEPLOY_V3.md` → Email).
 | E6 | Use the mail app's own *Unsubscribe* beside the sender (Gmail, Apple Mail); on another account tap *Stop weekly reports* in the footer | the one-click unsubscribe turns the report off without opening anything; the footer link opens the app's panel and turns it off on Confirm; Mission Control shows it off; no report next Monday |
 | E7 | A week with the weekly report switched off; a week in which no child answered a question | no email; the job's log says `progress_off` or `no_play` |
 | E8 | Before Monday, change the parent's sign-in email to one not yet verified (or disable the account in the console) | no email, the log says `no_verified_address`; nothing goes to an unverified address |
+| E9 | In Mission Control tick *Send it monthly instead* and save; run the job for a week that is not a month's first Monday, then for one that is (`--week 2026-W36`) | the first run skips the family with `monthly_not_due` and sends nothing; the second sends one email headed *MONTHLY REPORT · Your family's four weeks*, covering four weeks of play, with *Stop monthly reports* in the footer and the same buttons as a weekly one |
+| E10 | Tap the footer's *Stop weekly reports* in an email on a weekly account | the panel offers *Send it monthly instead* first and *No, stop the report* second; monthly sets the cadence and keeps the report, and Mission Control agrees. The mail app's own one-click unsubscribe still turns it off outright |
+
+## Leaving (cancel or pause)
+
+| # | Do | Expect |
+|---|---|---|
+| L1 | In Mission Control tap *Cancel or pause* on a subscribed family | the page names what will and will not change (the children keep everything; the plan and the date it is paid to), seven reasons and an optional box of up to 500 characters; *Continue* without a reason is refused and sends nothing; *Back* records nothing |
+| L2 | Choose *It costs too much* on the Big family plan with one child seated, then *Switch to the smaller Family plan at renewal* | both the smaller plan and *Fewer seats at renewal* are offered; the choice is scheduled for the next renewal, nobody loses a seat before then, and `scripts/support.mjs family` shows the leaving record with the reason, the offers shown and the one taken |
+| L3 | Choose *We are taking a break* and *Pause for 2 months* | the grid stays open to the end of the period already paid for, then closes; Mission Control says when collection starts again and offers *Start my subscription again now*; in Stripe the subscription carries `pause_collection` with behaviour `void` and that resume date, and **no invoice is raised** while it lasts; `reconcile-provider` matches |
+| L4 | On the paused family, wait past the period end (or set a near resume date on staging), then look at the grid and at `scripts/support.mjs sweep` | the children cannot enter (the subscription is inactive) while every profile and all progress is kept; the sweep counts the family as paused and raises no finding; nothing anywhere calls it cancelled or expired |
+| L5 | *Start my subscription again now*, then pay the next invoice in Stripe's test mode | the pause clears at Stripe and in the app at once; the paid invoice makes the family active again, and the amount is one month's, never two |
+| L6 | Choose *Technical problems* | nothing can be cancelled on that screen: the feedback panel opens with the reason already typed in, *Send* files it (`report.mjs feedback --days 1` shows it), and only *I still want to cancel* brings the cancel button back |
+| L7 | Choose any reason and *Cancel my subscription* | a confirmation screen first — one tap on the button sends nothing — with *Back* before *Yes*; after *Yes* the flag moves at Stripe, access runs to the period end, and *Keep my subscription* is offered again |
+| L8 | Go through the flow twice in the same week | the second time no alternative is offered ("We offered you alternatives not long ago"): at most one set per family per 90 days, and the record says none was shown |
+| L9 | After a month with at least one of the above, run `--args scripts/report.mjs,leaving,--month,YYYY-MM` | one plain email to the owner with the volumes and their shares, the reasons ranked, offers shown against taken, the plan, seat and cohort mixes and the three-month trend; running it again sends nothing (`already`); a month with nothing in it sends nothing at all |
 
 ## Failure states
 

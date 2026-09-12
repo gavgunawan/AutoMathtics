@@ -98,6 +98,7 @@ provider ──POST /api/webhooks/{provider}, X-Webhook-Signature──▶ verif
 | `invoice.paid` | `payment.succeeded` | `price` → plan, `periodEnd` |
 | `invoice.payment_failed` | `payment.failed` | — |
 | `subscription.deleted` | `terminate` | — |
+| `subscription.paused` / `subscription.resumed` | `pause.start` / `pause.end` | `resumesAt` (the provider's own date). Stripe's `customer.subscription.updated`, and **only** when its `previous_attributes` say `pause_collection` is what changed; every other update is still recorded and ignored |
 | `charge.refunded` | `refund` | `amountCents`, `full` (a full refund ends access now) — the fake provider's one-event-per-refund fixture |
 | `refund.created` | `refund` | a real provider's per-refund object: `amountCents`, `full`, `ref` (its id; a second delivery of the same refund is `DUPLICATE_REFUND`) |
 | `subscription.updated` (and anything else) | — | recorded, ignored until 3.4 |
@@ -248,6 +249,37 @@ hand the provider the same key, so a provider that honours idempotency keys retu
 hosted session. A `checkout.completed` for an intent still `creating` (the provider did open the
 session; the server crashed before recording it) completes it.
 
+## Paused (the leaving flow, 12 Sep 2026)
+
+A parent who is thinking of leaving may pause instead (`SUBSCRIPTIONS.md` → the flow). `POST /api/billing/pause
+{ months: 1|2|3, operationId }` and `POST /api/billing/resume { operationId }`, parent session, fresh sign-in.
+
+- **The provider hears it first**, as a cancellation does: `pauseCollection({ idempotencyKey, customerRef, customerId,
+  subscriptionRef, resumesAt })` with Stripe's `pause_collection`, **behaviour `void`** — no invoice is raised at all while the
+  pause lasts, so a paused month can never be collected later and a pause can never charge twice. `resumeCollection` unsets it.
+  The machine must accept the transition before the provider is asked; a replayed operation tells the provider nothing; a
+  provider failure changes nothing locally. A crash between the two leaves the provider paused and the record not: the parent's
+  retry under the same operation id reaches the provider under the same idempotency key and finishes it, and so does the
+  provider's own echo.
+- **The fact, and the state.** `subscription.pause = { months, pausedAt, resumesAt, by: 'parent' | 'provider', echoed }`.
+  `deriveState` honours the period already paid for — the family is `active` until `periodEnd`, pause or no pause — and is
+  `paused` from then on: **inactive**, with no grace and no dunning, so no churn count can mistake it for a family that left and
+  no unpaid month becomes access. `entitlementFor` carries the pause so Mission Control can say when collection starts again.
+  It is `active` again when an invoice is paid: `payment.succeeded` clears the pause, whenever it arrives.
+- **Only from `active`**, on a paid plan, with no cancellation already asked for (`CANCEL_SCHEDULED`): a pause must never grant an
+  unpaid month, and must never quietly undo a cancellation. A trial has no collection to pause.
+- **The provider is the authority.** Its echo (`by: 'provider'`) sets or clears the fact whatever this record thought, and its
+  `resumesAt` wins; it may arrive for a family this record has not paused (a dashboard pause), and it is what reconciles a pause
+  whose commit was lost. An echo older than the last applied event is `STALE_EVENT` and rolls nothing back; `pause.end` is
+  idempotent, so the provider's echo of a resume this server already made is applied and changes nothing.
+- **Cancelling a paused subscription ends it now**, here and at the provider (`cancelSubscription`, not the period-end flag):
+  there is no period left to end, nothing is being collected, and ending it takes no access away.
+- **Reconciliation.** `describe` reports `paused`, `pauseBehavior` and `pauseResumesAt`; `reconcile-provider` compares them both
+  ways (`PAUSE_MISMATCH`, `PAUSE_RESUME_MISMATCH`, `PAUSE_BEHAVIOUR` for a pause that is not `void`), and the nightly sweep counts
+  paused families and names a pause the provider never echoed (`PAUSE_NOT_ECHOED`) or one whose resume date passed a week ago with
+  no invoice since (`PAUSE_OVERDUE`).
+- A pause changes no plan and no seat, and no webhook can: `subscription.paused` / `subscription.resumed` carry nothing else.
+
 ## Checkout eligibility and the one live checkout (S3.3/3.4-E)
 
 A family may start a checkout with no subscription, on a trial, or when cancelled, expired or
@@ -370,7 +402,13 @@ fake provider simulates all four, records the calls and holds no state):
    subscription now, before `terminate` is recorded; the outcome sits on
    `deletions/{f}.providerCancellation`, and a fault there is a report finding, never a stopped deletion;
 7. `inspect(customerRef)` — the provider's customer and subscription (status, price, period end,
-   cancel flag) for `scripts/support.mjs reconcile-provider` (RECONCILIATION.md). Read-only.
+   cancel flag, and whether collection is paused and until when) for `scripts/support.mjs reconcile-provider`
+   (RECONCILIATION.md). Read-only;
+8. `pauseCollection({ idempotencyKey, customerRef, resumesAt })` and `resumeCollection({ idempotencyKey, customerRef })` — the
+   parent's pause and its end reach the provider **before** the machine records them, keyed by the operation id, and the pause
+   must raise no invoice at all while it lasts (Stripe: `pause_collection` with behaviour `void`), never one collected later.
+   The adapter must also map the provider's own notice of a pause set or cleared to `subscription.paused` / `subscription.resumed`
+   with the provider's `resumesAt`, and to nothing else: that echo is the authority on the paused state (see **Paused** above).
 
 
 
@@ -382,5 +420,7 @@ fake provider simulates all four, records the calls and holds no state):
 - `families/{f}.checkoutIntent.{provider}` / `families/{f}.billingIntent` — the one live checkout, the one
   in-flight plan change.
 - `families/{f}.billing.{provider}` — the family's reference (display only in the browser).
+- `families/{f}/leaving/{operationId}` — why a family cancelled or paused, and what was offered (the leaving flow); it holds no
+  money and no provider reference, and expires by TTL after 400 days (`PRIVACY.md`).
 
 All deny-all to browsers, like everything else.
