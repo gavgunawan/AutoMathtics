@@ -664,4 +664,7 @@ input.pace-range:focus-visible{outline:2px solid var(--accent);outline-offset:3p
 .join-words b{color:var(--cyan)}
 .join-offer{margin:18px 0 0;padding:12px 14px;border:1.5px solid var(--gold);border-radius:12px;font:600 13px/1.6 var(--ui);color:var(--gold);text-align:left}
 .field.check{flex-direction:row;align-items:flex-start;gap:9px}
-.field.check span{font:500 12px/1.5 var(--ui);color:var(--dim)}
+/* a sentence, not a field label: the capitals and letter-spacing every other .field span wears make it unreadable */
+.field.check span{font:500 12px/1.55 var(--ui);color:var(--dim);text-transform:none;letter-spacing:0}
+/* /join is nobody's Mission Control: the parents' masthead and the build footer belong to people who are already inside */
+html[data-mode=join] .masthead,html[data-mode=join] footer{display:none}

@@ -23,6 +23,7 @@ test('before the doors open, /join explains the grid and asks for an address alo
   const fields = h.nodes('INPUT');
   assert.deepEqual(fields.map((i) => i.type), ['email', 'checkbox'], 'an address and a permission; nothing else is asked for');
   assert.equal(h.nodes('BUTTON').filter((b) => b.textContent.includes('Start the free trial')).length, 0, 'the trial cannot be started early');
+  assert.equal(h.html.attrs['data-mode'], 'join', 'not dressed as a parent screen: no Mission Control masthead over a stranger’s first page');
 });
 
 test('the address goes to the waiting list with its permission and the tag the post\'s link carried, and the page says what happens next', async (t) => {
