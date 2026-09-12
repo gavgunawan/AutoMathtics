@@ -56,6 +56,14 @@ test('the parent screens wear the game\'s own faces, served from this origin: /f
   for (const face of ['Orbitron', 'Rajdhani', 'JetBrains Mono']) assert.ok(css.includes(`font-family:"${face}"`), face);
   assert.match(css, /--cyan:#35E0FF/); assert.match(css, /--magenta:#FF2DA8/); assert.match(html, /MISSION CONTROL/); assert.match(html, /rel="preload" href="\/fonts\/Rajdhani-500\.woff2" as="font"/);
 });
+test('the kids grid keeps the v2 arcade presentation hooks without touching application authority', async () => {
+  const css = await read('../public/styles.css');
+  for (const marker of ['v2 parity polish', '.game-hero', '.allowance .count', '.track{', '.question{', '.answer-form', '.shop-row', '.rocket-card', '@media(prefers-reduced-motion:reduce)']) {
+    assert.ok(css.includes(marker), `missing presentation hook: ${marker}`);
+  }
+  assert.match(css, /font-family:var\(--display\)/, 'the game display face remains the question/mission emphasis');
+  assert.match(css, /body:before[\s\S]*gridDrift/, 'the grid motion is present');
+});
 test('the image and the pipeline: the base image is pinned by digest, the shell scripts stay out of the image, the lockfile is installed with npm ci, audited in CI, and refused by the deploy helper when it differs from the commit', async () => {
   const docker = await read('../Dockerfile');
   assert.match(docker, /^FROM node:22-bookworm-slim@sha256:[0-9a-f]{64}$/m, 'a tag moves under you; a digest is the image that was built in CI');
