@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { MemoryStore } from './support.mjs';
 import { cellFactory, median, mean, monthShift, monthRange, answeredIn, activityOf, households,
   subscriptionCalendar, dailyActive, bandOf, timedRow, speedMatrix, EASY, HARD,
-  rewardCategory, normalizeName, costBand, rewardInsights, shopInsights,
+  rewardCategory, normalizeName, costBand, rewardInsights, shopInsights, renderHtml,
   buildReport, collectSnapshot, auditRow, MIN_CELL } from '../server/analytics.mjs';
 
 const DAY = 86_400_000;
@@ -586,4 +586,102 @@ test('the report carries both section 3 halves', () => {
   const report = buildReport({ now: NOW, days: 90, families }, { minCell: 5 });
   assert.equal(report.rewards.categories.find((c) => c.key === 'screen_time').rewards.value, 5);
   assert.equal(report.shop.currencies.gc.spendingPercent.value, 60);
+});
+
+// ---------------------------------------------------------------- the page itself
+// A synthetic store with several families, collected and rendered exactly as scripts/dashboard.mjs does it.
+async function syntheticStore({ count = 6 } = {}) {
+  const store = new MemoryStore(), ids = [];
+  for (let i = 0; i < count; i++) {
+    const familyId = `${String(i + 1).repeat(8)}-aaaa-4aaa-8aaa-aaaaaaaaaaaa`.slice(0, 36);
+    const childId = `${String(i + 1).repeat(8)}-bbbb-4bbb-8bbb-bbbbbbbbbbbb`.slice(0, 36);
+    ids.push(familyId, childId);
+    await store.put(`families/${familyId}`, { id: familyId, label: `Keluarga Rahasia ${i}`, createdAt: NOW - (30 + i) * DAY,
+      timeZone: i % 2 ? 'Asia/Jakarta' : 'Asia/Singapore', childIds: [childId], activeChildIds: [childId],
+      entitlement: { status: 'active', seatLimit: 2, accessUntil: NOW + 30 * DAY, version: 1, source: 'manual' } });
+    await store.put(`families/${familyId}/children/${childId}`, { id: childId, nickname: `Kelinci${i}`, icon: 'fox', status: 'active',
+      createdAt: NOW - 30 * DAY, demographics: { age: 8 + (i % 3), yearLevel: 3, recordedAt: NOW }, start: { option: 'test', yearLevel: 3, chosenAt: NOW } });
+    await store.put(`families/${familyId}/learning/${childId}`, { engine: { level: 2, paper: 26, bossCleared: 1 }, nav: { level: 1, paper: 6, bossCleared: 0 },
+      wallet: { gc: 200, rp: 800, inventory: ['ring_pulse'], purchases: [], ledgerSeq: 3, ledgerLast: 'row-3',
+        redemptions: [redemption('r1', 'Uang jajan', 300, 'approved', NOW - 6 * DAY)] },
+      stats: { sessions: 3, passes: 3 },
+      history: [row({ ts: NOW - DAY, level: 2, papers: '21–25', total: 5, s: 9, a: 30 }),
+        row({ ts: NOW - 2 * DAY, level: 2, papers: '16–20', total: 5, s: 20, a: 30 }),
+        row({ ts: NOW - 3 * DAY, level: 2, papers: '26–30', total: 5, s: 20, a: 30 }),
+        row({ ts: NOW - 4 * DAY, track: 'nav', level: 1, papers: '1–5', total: 3, s: 28, a: 30 })] });
+    for (const r of shopper()) await store.put(`families/${familyId}/learning/${childId}/ledger/${r.id}`, r);
+    await store.put(`families/${familyId}/game/config`, { rewards: [reward('r1', 'Uang jajan', 300), reward('r2', 'Nonton film', 500)],
+      rocket: null, rocketHistory: [], updatedAt: NOW - 9 * DAY });
+  }
+  return { store, ids };
+}
+
+test('smoke: the page renders from a synthetic multi-family store, and carries no id, no nickname and no label', async () => {
+  const { store, ids } = await syntheticStore({ count: 6 });
+  const snapshot = await collectSnapshot(store, { now: NOW, days: 90 });
+  const report = buildReport(snapshot, { minCell: 5, by: 'year' });
+  const html = renderHtml(report);
+  // it is a whole, self-contained document
+  assert.match(html, /^<!doctype html>/);
+  assert.match(html, /<style>/);
+  assert.match(html, /<svg viewBox=/);
+  assert.equal(html.includes('</html>'), true);
+  // no script, no external request of any kind: it opens offline
+  assert.equal(/<script/i.test(html), false);
+  assert.equal(/<link\b/i.test(html), false);
+  assert.equal(/https?:\/\//.test(html), false);
+  assert.equal(/src\s*=|@import|url\(/i.test(html), false);
+  // nothing identifying, in the page or in the JSON beside it
+  const json = JSON.stringify(report);
+  for (const text of [html, json]) {
+    assert.equal(/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i.test(text), false);
+    assert.equal(/Kelinci/.test(text), false);
+    assert.equal(/Keluarga/.test(text), false);
+    for (const id of ids) assert.equal(text.includes(id), false);
+  }
+  // the page says what it is, top and bottom, and explains the dashes
+  assert.equal(html.split('operator only — aggregated family data').length - 1, 2);
+  assert.match(html, /computed from fewer than 5 families/);
+  assert.match(html, /6 live families/);
+  // the numbers a six-family cohort may carry are there
+  assert.match(html, /Asia\/Jakarta/);
+  assert.match(html, /Pulse ring/);
+  assert.equal(report.households.total.value, 6);
+  assert.equal(report.shop.items.find((i) => i.id === 'ring_pulse').purchases.value, 6);
+  // the Engine band that was much faster than its neighbours is flagged, on the page and in the report
+  assert.equal(report.speed.engine.flags.easy.length, 1);
+  assert.equal(report.speed.engine.flags.easy[0].band, 'C 21–25');
+  assert.match(html, /passed unusually easily/);
+  assert.equal(report.speed.nav.flags.hard.length, 1);      // the Navigator band that ate its allowance
+  // a parent-entered reward name reaches the appendix and nowhere else on a line with anything
+  assert.match(html, /<li>Uang jajan<\/li>/);
+  assert.deepEqual(report.rewards.names, ['Nonton film', 'Uang jajan']);
+});
+
+test('smoke: a parent-entered name that is HTML cannot become HTML in the page', async () => {
+  const { store } = await syntheticStore({ count: 5 });
+  const familyId = '11111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  await store.put(`families/${familyId}/game/config`, { rewards: [reward('r9', '<img src=x onerror=alert(1)> & "quoted"', 400)], rocket: null, rocketHistory: [], updatedAt: NOW - 9 * DAY });
+  const html = renderHtml(buildReport(await collectSnapshot(store, { now: NOW, days: 90 }), { minCell: 5 }));
+  assert.equal(html.includes('<img src=x'), false);
+  assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt; &amp; &quot;quoted&quot;/);
+  assert.equal(/<script|<img/i.test(html), false); // it is text on the page, not markup
+});
+
+test('smoke: an empty project still renders a page that explains itself', () => {
+  const html = renderHtml(buildReport({ now: NOW, days: 90, families: [] }, { minCell: 5 }));
+  assert.match(html, /0 live families/);
+  assert.match(html, /Not enough days clear the 5-family floor to draw a line/);
+  assert.match(html, /No timed session has been recorded for this track yet/);
+  assert.match(html, /operator only/);
+});
+
+test('smoke: the report a --min-cell of 1 produces still carries no id, only more numbers', async () => {
+  const { store, ids } = await syntheticStore({ count: 2 });
+  const report = buildReport(await collectSnapshot(store, { now: NOW, days: 90 }), { minCell: 1 });
+  const html = renderHtml(report);
+  assert.equal(report.households.total.value, 2);
+  assert.match(html, /computed from fewer than 1 families/);
+  for (const id of ids) assert.equal(html.includes(id), false);
+  assert.equal(/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i.test(JSON.stringify(report)), false);
 });

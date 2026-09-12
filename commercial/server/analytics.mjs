@@ -602,6 +602,174 @@ export function buildReport(snapshot, { minCell = MIN_CELL, by = 'year' } = {}) 
     shop: shopInsights(snapshot, cell),
   };
 }
+// ---------------------------------------------------------------- the page
+// One self-contained file: inline CSS, one inline SVG sparkline, no script and no external request of any
+// kind, so it opens offline from wherever the operator keeps it. It renders the report it is given and
+// computes nothing, which is why the tests above exercise the arithmetic and this only has to be read.
+const ESCAPES = Object.freeze({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' });
+export const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ESCAPES[c]);
+const OPERATOR_ONLY = 'operator only — aggregated family data';
+const STYLE = `
+:root { color-scheme: light; --ink: #16161d; --soft: #5d5d6b; --line: #d8d8e0; --panel: #f6f6fa; --warn: #8a4b00; --easy: #0a6b3d; --hard: #8a1c2b; }
+* { box-sizing: border-box; }
+body { margin: 0; background: #fff; color: var(--ink); font: 14px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+main { max-width: 1100px; margin: 0 auto; padding: 24px 20px 60px; }
+.band { background: var(--ink); color: #fff; padding: 14px 20px; font-weight: 600; letter-spacing: .02em; }
+.band small { display: block; font-weight: 400; opacity: .8; letter-spacing: 0; }
+h1 { font-size: 22px; margin: 24px 0 4px; }
+h2 { font-size: 17px; margin: 34px 0 6px; border-bottom: 2px solid var(--line); padding-bottom: 4px; }
+h3 { font-size: 14px; margin: 20px 0 6px; color: var(--soft); text-transform: uppercase; letter-spacing: .06em; }
+p, li { max-width: 78ch; }
+.note { color: var(--soft); }
+.scope { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; margin: 12px 0 0; }
+.wrap { overflow-x: auto; margin: 8px 0; }
+table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th, td { border: 1px solid var(--line); padding: 4px 8px; text-align: right; white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+thead th { background: var(--panel); }
+td.empty { background: repeating-linear-gradient(45deg, #fff, #fff 6px, var(--panel) 6px, var(--panel) 12px); }
+.dash { color: var(--soft); }
+.sub { display: block; font-size: 11px; color: var(--soft); }
+.easy { background: #e8f6ee; }
+.hard { background: #fdecef; }
+.tag { font-size: 11px; padding: 1px 5px; border-radius: 999px; border: 1px solid currentColor; }
+.tag.easy { color: var(--easy); }
+.tag.hard { color: var(--hard); }
+.names { columns: 4 180px; column-gap: 18px; list-style: none; padding: 0; }
+.names li { border-bottom: 1px dotted var(--line); padding: 2px 0; }
+footer { border-top: 2px solid var(--ink); margin-top: 40px; padding-top: 10px; color: var(--soft); }
+@media print { .band { background: #fff; color: #000; border-bottom: 2px solid #000; } }
+`;
+
+export function renderHtml(report) {
+  const floor = report.minCell;
+  const dash = `<span class="dash" title="computed from fewer than ${floor} families">—</span>`;
+  const show = (cell, suffix = '') => (!cell || cell.suppressed ? dash : `${escapeHtml(cell.value)}${suffix}`);
+  const when = new Date(report.generatedAt).toISOString().replace('T', ' ').slice(0, 16);
+  const h = report.households, shop = report.shop, rewards = report.rewards;
+  const rows = (list) => list.join('\n');
+  const table = (head, body, caption = '') => `<div class="wrap"><table>${caption ? `<caption>${escapeHtml(caption)}</caption>` : ''}<thead><tr>${head.map((c) => `<th>${escapeHtml(c)}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table></div>`;
+  const kv = (pairs) => table(['', 'value'], rows(pairs.map(([label, cell, suffix]) => `<tr><td>${escapeHtml(label)}</td><td>${show(cell, suffix || '')}</td></tr>`)));
+  const histogram = (list, key, label) => table([label, 'children'], rows(list.map((b) => `<tr><td>${escapeHtml(b[key])}</td><td>${show(b.children)}</td></tr>`)));
+
+  // --- section 1
+  const calendar = table(['month', 'trial ends', 'renewals', 'cancels at period end', 'grace ends', 'pilot grant expires'],
+    rows(h.subscriptionCalendar.map((m) => `<tr><td>${escapeHtml(m.month)}</td><td>${show(m.trialEnds)}</td><td>${show(m.renewals)}</td><td>${show(m.cancellations)}</td><td>${show(m.graceEnds)}</td><td>${show(m.grantExpiries)}</td></tr>`)));
+  const recent = h.dau.series.slice(-14);
+  const dauTable = table(['local day', 'children', 'families', '7-day mean', '28-day mean'],
+    rows(recent.map((d) => `<tr><td>${escapeHtml(d.day)}</td><td>${show(d.children)}</td><td>${show(d.families)}</td><td>${show(d.avg7)}</td><td>${show(d.avg28)}</td></tr>`)));
+
+  // --- section 2
+  const matrix = (m, title) => {
+    if (!m.rows.length) return `<h3>${escapeHtml(title)}</h3><p class="note">No timed session has been recorded for this track yet.</p>`;
+    const head = ['band', ...m.columns].map((c) => `<th>${escapeHtml(c)}</th>`).join('');
+    const body = rows(m.rows.map((r) => `<tr><td>${escapeHtml(r.label)} <span class="sub">${escapeHtml(BAND_LABEL[r.kind] || r.kind)}</span></td>${
+      m.columns.map((column) => {
+        const c = r.cells.find((x) => x.column === column);
+        if (!c || c.empty) return '<td class="empty"></td>';
+        if (c.suppressed) return `<td>${dash}</td>`;
+        return `<td class="${c.flag || ''}">${escapeHtml(c.medianSeconds)}s<span class="sub">share ${escapeHtml(c.medianShare)} · n ${escapeHtml(c.sessions)}</span></td>`;
+      }).join('')}</tr>`));
+    return `<h3>${escapeHtml(title)}</h3><div class="wrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+  };
+  const flagList = (list, kind) => (list.length
+    ? table(['sector', 'band', report.by === 'age' ? 'age' : 'year', 'sessions', 'median s/q', 'median share', 'pass rate', 'why'],
+      rows(list.map((f) => `<tr><td>${escapeHtml(f.sector)}</td><td>${escapeHtml(f.band)}</td><td>${escapeHtml(f.column)}</td><td>${escapeHtml(f.sessions)}</td><td>${escapeHtml(f.medianSeconds)}</td><td>${escapeHtml(f.medianShare)}</td><td>${escapeHtml(f.passRate)}</td><td>${escapeHtml(f.reason)}</td></tr>`)))
+    : `<p class="note">Nothing to review: no band clears the ${floor}-family and ${floor}-session floor with ${kind === 'easy' ? 'that margin over its neighbours' : 'those medians'}.</p>`);
+
+  // --- section 3
+  const categoryRows = rows(rewards.categories.map((c) => `<tr><td>${escapeHtml(c.label)}</td><td>${show(c.families)}</td><td>${show(c.rewards)}</td><td>${show(c.averageCost)}</td><td>${show(c.medianCost)}</td><td>${show(c.redemptions)}</td><td>${show(c.approvals)}</td><td>${show(c.refusals)}</td><td>${show(c.pending)}</td><td>${show(c.daysToFirstRedemption)}</td></tr>`));
+  const bandRows = rows(rewards.categories.flatMap((c) => c.bands.map((b) => `<tr><td>${escapeHtml(c.label)}</td><td>${escapeHtml(b.band)}</td><td>${show(b.families)}</td><td>${show(b.rewards)}</td><td>${show(b.redemptions)}</td></tr>`)));
+  const itemRows = (list) => rows(list.map((i) => `<tr><td>${escapeHtml(i.name)} <span class="sub">${escapeHtml(i.id)} · ${escapeHtml(i.kind)}</span></td><td>${escapeHtml(i.cost ?? '')}</td><td>${show(i.purchases)}</td><td>${show(i.children)}</td><td>${show(i.ownedPercent, '%')}</td><td>${show(i.medianBalanceBefore)}</td><td>${show(i.spent)}</td></tr>`));
+  const currency = (key, label) => {
+    const c = shop.currencies[key];
+    return `<tr><td>${escapeHtml(label)}</td><td>${show(c.earned)}</td><td>${show(c.spent)}</td><td>${show(c.saved)}</td><td>${show(c.spendingPercent, '%')}</td><td>${show(c.medianSpentPerChild)}</td><td>${show(c.medianSavedPerChild)}</td><td>${show(c.medianBalanceAtPurchase)}</td></tr>`;
+  };
+
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AutoMathtics operator dashboard — ${escapeHtml(when)} UTC</title>
+<style>${STYLE}</style></head>
+<body>
+<div class="band">${OPERATOR_ONLY}<small>Not for a family, a school or a marketplace listing. It holds no nickname, no family, child or parent reference, no address and nothing a child wrote. Keep it on the operator's own machine; it was never published and has no URL.</small></div>
+<main>
+<h1>AutoMathtics v3 — operator dashboard</h1>
+<p class="note">Generated ${escapeHtml(when)} UTC by <code>scripts/dashboard.mjs</code>, read-only, one audit row per run (<code>operator.dashboard</code>). Columns by ${escapeHtml(report.by === 'age' ? 'age' : 'year level')}; the daily series covers ${escapeHtml(report.days)} days.</p>
+<div class="scope"><strong>What this covers.</strong> ${escapeHtml(report.scope.families)} live famil${report.scope.families === 1 ? 'y' : 'ies'}, ${escapeHtml(report.scope.children)} child profile${report.scope.children === 1 ? '' : 's'}, and ${escapeHtml(report.scope.tombstones)} deleted famil${report.scope.tombstones === 1 ? 'y' : 'ies'} counted but not described.
+<br><strong>Why so many dashes.</strong> Any number computed from fewer than ${escapeHtml(floor)} families is not in this file at all — it prints as ${dash} and is absent from the JSON too. With ${escapeHtml(report.scope.families)} famil${report.scope.families === 1 ? 'y' : 'ies'} in the pilot, expect nearly every number below to be a dash; that is the report working, not a fault. The two numbers in this paragraph are the report's scope, not statistics about a subgroup, so they are printed plainly.</div>
+
+<h2>1 · Households</h2>
+${kv([['Families', h.total], ['Child profiles', h.children], ['Active in the last 7 days', h.active.d7], ['Active in the last 30 days', h.active.d30], ['Quiet for 30 days', h.quiet.d30], ['Quiet for 60 days', h.quiet.d60]])}
+<h3>Families created, by month</h3>
+${table(['month', 'families'], rows(h.createdPerMonth.map((m) => `<tr><td>${escapeHtml(m.month)}</td><td>${show(m.families)}</td></tr>`)))}
+<h3>Region</h3>
+<p class="note">Derived from the time zone on the family record — the only geography the service stores. The app keeps no city, no address and no location of any kind; a billing country will appear here when the payment provider is live, and reads “unknown” until then.</p>
+${table(['area', 'families'], rows(h.areas.map((a) => `<tr><td>${escapeHtml(a.key)}</td><td>${show(a.families)}</td></tr>`)))}
+${table(['time zone', 'families'], rows(h.zones.map((z) => `<tr><td>${escapeHtml(z.key)}</td><td>${show(z.families)}</td></tr>`)))}
+${table(['billing country', 'families'], rows(h.billingCountries.map((c) => `<tr><td>${escapeHtml(c.key)}</td><td>${show(c.families)}</td></tr>`)))}
+<h3>Children, ages, years and starting option</h3>
+${table(['children in the household', 'families'], rows(h.childrenPerHousehold.map((b) => `<tr><td>${escapeHtml(b.key)}</td><td>${show(b.families)}</td></tr>`)))}
+${histogram(h.childAges, 'key', 'age')}
+${histogram(h.yearLevels, 'key', 'year level')}
+${histogram(h.startOptions, 'key', 'starting option')}
+<h3>Subscription calendar</h3>
+<p class="note">Derived from the subscription facts each family already carries (trial end, period end, cancel-at-period-end, the seven grace days) and from the manual pilot grants. Nothing here schedules or changes anything.</p>
+${calendar}
+<h3>Daily active children</h3>
+<p class="note">Each answered question is dated in its own family's time zone, so a daylight-saving change moves the boundary with it. A day is printed only when at least ${escapeHtml(floor)} families were active on it; a rolling mean only when at least ${escapeHtml(floor)} families were active across its window. Distinct families active in the window: ${show(h.dau.totalFamilies)}.</p>
+${sparkline(h.dau, floor)}
+${dauTable}
+
+<h2>2 · Speed matrices</h2>
+<p class="note">Each cell: the median seconds per question over the sessions that passed with every question correct, with the median share of the allowance used and the number of such sessions. Sessions imported from v2 carry no allowance and are skipped. A hatched cell had no session; a ${dash} had too few families.</p>
+${matrix(report.speed.engine, 'Engine')}
+${matrix(report.speed.nav, 'Navigator')}
+<h3>Review difficulty — <span class="tag easy">passed unusually easily</span></h3>
+<p class="note">Median share below ${escapeHtml(EASY.shareBelow)} and at least ${escapeHtml(Math.round(EASY.fasterThanNeighbours * 100))}% faster than the neighbouring bands of the same sector and kind, from at least ${escapeHtml(floor)} passing sessions across at least ${escapeHtml(floor)} families. A band, not a child: nothing on these lines says who.</p>
+${flagList(report.speed.engine.flags.easy.concat(report.speed.nav.flags.easy).map((f) => f), 'easy')}
+<h3>Review difficulty — <span class="tag hard">unusually hard</span></h3>
+<p class="note">Median share at or above ${escapeHtml(HARD.shareAtLeast)}, or a pass rate below ${escapeHtml(HARD.passRateBelow)}, on the same floors.</p>
+${flagList(report.speed.engine.flags.hard.concat(report.speed.nav.flags.hard), 'hard')}
+
+<h2>3 · Rewards and the shop</h2>
+<p class="note">Families with a reward list: ${show(rewards.configuredFamilies)}. Reward-point fuel put into a Family Rocket is not a reward and is counted on its own: ${show(rewards.rocketFuel.redemptions)} across ${show(rewards.rocketFuel.families)} families. Costs are in reward points; the wait to a first redemption is counted only where the reward list has not been saved again since (the service stores one date for the list, not one per reward).</p>
+${table(['category', 'families', 'rewards', 'average cost', 'median cost', 'redemptions', 'approved', 'refused', 'pending', 'days to first'], categoryRows)}
+<h3>Similar rewards, by cost band</h3>
+${table(['category', 'cost band', 'families', 'rewards', 'redemptions'], bandRows)}
+<h3>Shop</h3>
+${table(['item', 'price', 'purchases', 'children', 'share owning', 'median balance before', 'coins spent'], itemRows(shop.items))}
+<h3>Most bought</h3>
+${shop.most.length ? table(['item', 'price', 'purchases', 'children', 'share owning', 'median balance before', 'coins spent'], itemRows(shop.most)) : `<p class="note">No item clears the ${escapeHtml(floor)}-family floor yet.</p>`}
+<h3>Least bought</h3>
+${shop.least.length ? table(['item', 'price', 'purchases', 'children', 'share owning', 'median balance before', 'coins spent'], itemRows(shop.least)) : `<p class="note">No item clears the ${escapeHtml(floor)}-family floor yet.</p>`}
+<h3>Never bought</h3>
+<p class="note">${shop.neverBought.length ? shop.neverBought.map((i) => `${escapeHtml(i.name)} (${escapeHtml(i.kind)}, ${escapeHtml(i.cost)})`).join(' · ') : 'Every purchasable item has been bought at least once.'}</p>
+<h3>By item kind</h3>
+${table(['kind', 'purchases', 'children', 'grid coins spent', 'reward points spent', 'median price'], rows(shop.kinds.map((k) => `<tr><td>${escapeHtml(k.kind)}</td><td>${show(k.purchases)}</td><td>${show(k.children)}</td><td>${show(k.spentGc)}</td><td>${show(k.spentRp)}</td><td>${show(k.medianCost)}</td></tr>`)))}
+<h3>The two currencies</h3>
+<p class="note">Earned and spent come from the per-child ledger, which is the source of truth for both currencies; saved is the balance held now. Children with a wallet: ${show(shop.children)}.</p>
+${table(['currency', 'earned', 'spent', 'saved', 'spent as a share of earned', 'median spent per child', 'median saved per child', 'median balance at purchase'], `${currency('gc', 'Grid Coins')}${currency('rp', 'Reward Points')}`)}
+<h3>Appendix — reward names as parents typed them</h3>
+<p class="note">De-duplicated, nothing else on the line: no family, no child, no cost, no count. ${escapeHtml(rewards.names.length)} distinct name${rewards.names.length === 1 ? '' : 's'}.</p>
+<ul class="names">${rewards.names.map((n) => `<li>${escapeHtml(n)}</li>`).join('')}</ul>
+
+<footer>${OPERATOR_ONLY} · generated ${escapeHtml(when)} UTC · a ${dash} means a number computed from fewer than ${escapeHtml(floor)} families, which is left out of this file and out of the JSON beside it · read-only, audited as <code>operator.dashboard</code> · PRIVACY.md</footer>
+</main></body></html>`;
+}
+/** The inline sparkline: the days that may be printed, as one polyline, with the suppressed days left out. */
+function sparkline(dau, floor) {
+  const points = dau.series.map((d, i) => ({ i, v: d.children.suppressed ? null : d.children.value })).filter((p) => p.v !== null);
+  if (points.length < 2) return `<p class="note">Not enough days clear the ${floor}-family floor to draw a line.</p>`;
+  const w = 720, hgt = 90, pad = 4, top = Math.max(1, ...points.map((p) => p.v)), span = Math.max(1, dau.series.length - 1);
+  const x = (i) => round(pad + (i * (w - 2 * pad)) / span, 1), y = (v) => round(hgt - pad - (v * (hgt - 2 * pad)) / top, 1);
+  const line = points.map((p) => `${x(p.i)},${y(p.v)}`).join(' ');
+  return `<svg viewBox="0 0 ${w} ${hgt}" width="100%" height="${hgt}" role="img" aria-label="distinct children answering a question per local day, ${dau.from} to ${dau.to}, peak ${top}">
+<rect x="0" y="0" width="${w}" height="${hgt}" fill="#f6f6fa" stroke="#d8d8e0"></rect>
+<polyline fill="none" stroke="#16161d" stroke-width="2" points="${line}"></polyline>
+${points.map((p) => `<circle cx="${x(p.i)}" cy="${y(p.v)}" r="2.5" fill="#16161d"></circle>`).join('')}
+<text x="${pad + 2}" y="12" font-size="10" fill="#5d5d6b">${escapeHtml(dau.from)} → ${escapeHtml(dau.to)}, peak ${escapeHtml(top)}</text></svg>`;
+}
+
 /** The audit row one run writes — built here so a test can check it names the operator and no family. */
 export function auditRow({ operator, at, families, minCell, days, by }) {
   return { action: 'operator.dashboard', uid: operator, familyId: null, childId: null, at,
