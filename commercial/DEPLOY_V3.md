@@ -499,6 +499,26 @@ To read them, in Cloud Shell with the variables `scripts/support.mjs` uses (`APP
 when, the screen, the release, the parent and family when signed in, the address to answer when one was given, and the words.
 `--days` takes 1 to 400.
 
+## Deploying from GitHub
+
+Merging is the deploy. `.github/workflows/deploy.yml` releases everything that lands on `release/v3.0`, so nobody has to
+remember to run block C afterwards — three deploys in a row were believed to have happened and had not (12-13 Sep 2026).
+
+It holds no key. GitHub presents a short-lived OIDC token, Google checks it against GitHub's own issuer and issues
+credentials good for about an hour (Workload Identity Federation). Block H
+(`scripts/cloudshell/08-deploy-identity.sh`) builds that once and pins the trust to this repository **and** to
+`refs/heads/release/v3.0`: a pull request runs as `refs/pull/N/merge` and is refused before it can ask, so a fork cannot
+reach this project. A service account key would have no such notion — any workflow able to read the secret could deploy.
+
+The identity it issues is its own account with what `scripts/deploy-staging.sh` actually uses and nothing else: Cloud Run,
+Cloud Build, Artifact Registry, the build's storage bucket, Hosting, Firestore rules, reading the project, and looking at
+secret *versions* by name. Reading a secret's value is the runtime's business. It may act as the runtime account and as no
+other identity, granted on that account rather than across the project.
+
+After block H, put the two lines it prints into GitHub under Settings → Secrets and variables → Actions → **Variables**:
+`GCP_WORKLOAD_IDENTITY_PROVIDER` and `GCP_DEPLOY_SERVICE_ACCOUNT`. Neither is secret; they name things, and a name grants
+nothing without a token that satisfies the condition above. Block C stays for a deploy by hand when one is wanted.
+
 **The waiting list's own sender.** `/join` writes one email back to every new address (server/waitlist.mjs), so it should not
 write as the address parents reply to. Export `WAITLIST_FROM='AutoMathtics <no-reply@THE-DOMAIN>'` and
 `WAITLIST_REPLY_TO='support@THE-DOMAIN'` before block C: the list then writes as no-reply, and a reader who answers anyway

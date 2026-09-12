@@ -1,0 +1,78 @@
+# Merging is the deploy. Everything that lands on release/v3.0 goes out from here, so nobody has to remember to run
+# anything afterwards — three deploys in a row were believed to have happened and had not (12-13 Sep 2026).
+#
+# It authenticates with no key at all: GitHub presents a short-lived OIDC token, Google checks it against GitHub's own
+# issuer and hands back credentials valid for about an hour. Block H (scripts/cloudshell/08-deploy-identity.sh) sets that
+# up, and pins the trust to this repository on this branch alone — a pull request runs with ref refs/pull/N/merge and is
+# refused before it can ask, so a fork cannot get near this project.
+#
+# The two values below are repository VARIABLES, not secrets: they name a provider and an account, and naming grants
+# nothing. Every action is pinned to a commit, because an action that can ask for deploy credentials is one worth pinning.
+name: Deploy release/v3.0
+on:
+  push:
+    branches: ['release/v3.0']
+    paths: ['commercial/**', '.github/workflows/deploy.yml']
+  workflow_dispatch: # for a re-run when a deploy failed on something outside the code
+permissions:
+  contents: read
+  id-token: write # the whole mechanism: without this the runner cannot be issued an OIDC token
+concurrency:
+  group: deploy-release # never two deploys at once; a newer commit waits rather than racing
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: staging
+    defaults:
+      run:
+        working-directory: commercial
+    env:
+      PROJECT_ID: automathtics-v3-staging
+      CONFIRM_PROJECT: automathtics-v3-staging
+      RUNTIME_SA: automathtics-v3-runtime@automathtics-v3-staging.iam.gserviceaccount.com
+      # Public identifiers, the same ones scripts/cloudshell/01-prepare.sh carries in this repository already
+      FIREBASE_WEB_API_KEY: AIzaSyCoVfsQwXV3AFoK789V99ncDJknMoPmWUI
+      FIREBASE_WEB_APP_ID: '1:1059646051128:web:df1a942e7a4136bd9d67cd'
+      TRUSTED_PROXY_HOPS: '2'
+      PAYMENT_PROVIDER: stripe
+      STRIPE_PRICE_STARTER: price_1UDktFEAg0w7lrNU8ixmQg6g
+      STRIPE_PRICE_FAMILY: price_1UDktZEAg0w7lrNU0kJdqUxK
+      STRIPE_PRICE_BIG: price_1UDktlEAg0w7lrNUb4AwLnP3
+      # The addresses the deploy has had to be told by hand every time, and was twice forgotten — a deploy without
+      # FEEDBACK_TO silently stops copying feedback to the owner (DEPLOY_V3.md → 5c)
+      EMAIL_PROVIDER: resend
+      FEEDBACK_TO: control.tower@automathtics.net
+      OWNER_EMAIL: control.tower@automathtics.net
+      EMAIL_FROM: AutoMathtics <control.tower@automathtics.net>
+      WAITLIST_FROM: AutoMathtics <no-reply@automathtics.net>
+      WAITLIST_REPLY_TO: support@automathtics.net
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # the deploy records the commit it released and exports that tree; a shallow clone has neither
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with: # the deploy runs the emulator suite itself before it releases anything
+          distribution: temurin
+          java-version: '21'
+      - id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - run: npm ci --ignore-scripts --no-fund --no-audit
+      - run: npm run deploy:staging
+      # The deploy script refuses to call itself done without a verdict, but say plainly here too which commit is live:
+      # a release that did not take must never be readable as one that did.
+      - name: What the live service is running
+        run: |
+          echo "expected $GITHUB_SHA"
+          curl -fsS "https://${PROJECT_ID}.web.app/api/health"; echo
+          curl -fsS "https://${PROJECT_ID}.web.app/api/health" | grep -q "$GITHUB_SHA" \
+            || { echo 'The live service is not running this commit.' >&2; exit 1; }
