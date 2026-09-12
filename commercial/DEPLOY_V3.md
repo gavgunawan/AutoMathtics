@@ -186,7 +186,10 @@ done
 
 `checkouts`, `billingChangeIntents`, `billingReconciliations`, `deletions`, `billingEvents`, `billingCustomers` and `families/*/billing` carry no
 `expireAt` on purpose: they are financial idempotency and recovery evidence and are kept under the
-retention policy in `PAYMENTS.md`, never by TTL (S3.4-G).
+retention policy in `PAYMENTS.md`, never by TTL (S3.4-G). `supportOperations` and `incidents` carry
+none either: the first records which operator started which corrective action, the second is the
+incident log a postmortem is written from (`INCIDENTS.md`; `SUPPORT.md` → retention). The audit rows
+those actions write do expire, with every other audit row, 400 days after each row.
 
 Learning sessions live under `families/*/learning/*/sessions`, whose collection group is
 `sessions` as well, so the first line covers them. Deletion runs within about 24 hours of the

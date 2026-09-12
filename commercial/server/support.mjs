@@ -36,8 +36,13 @@ export const RETENTION = Object.freeze({
   'deletions/{f}': 'the deletion record: who asked, who executed, what was removed and what was kept',
   'supportOperations/*': 'which operator started which corrective action, and how it ended',
   'sweeps/*': 'the routine invariant sweep: counts and findings; expires by TTL 90 days after each run',
+  'incidents/*': 'the incident log: severity, what was done, when it was resolved and what follows — the record a postmortem is written from; no TTL',
 });
 export const DELETION_BATCH = 300; // comfortably under Firestore's 500 writes per transaction
+// The incident log (INCIDENTS.md). 1: data loss, one family's data shown to another, money taken wrongly, the app down for
+// everyone. 2: a family blocked, refunds stuck. 3: the backlog.
+export const INCIDENT_SEVERITIES = Object.freeze([1, 2, 3]);
+const INCIDENT_NOTICE_MS = 72 * 3_600_000; // severity 1: affected parents told within 72 hours when personal data was involved (SUPPORT_DESK.md → Escalation)
 const ACCESS = new Set(['trial', 'active', 'grace']);
 const flagged = (docs, key, values) => docs.filter((d) => values.includes(d[key]));
 // What an operator can establish about an inbox row the server could not apply (Stage 4.2), after acting at the provider.
@@ -395,6 +400,73 @@ export class Support {
       this.audit(tx, 'support.recovery_cancelled', operator, parent?.familyId || null);
       return next;
     });
+  }
+
+  // ---------------------------------------------------------------- operator: the incident log (INCIDENTS.md)
+  /**
+   * Stage 4.6. Three verbs — open, note, close — one document per incident, an audit row for each,
+   * and a read-only list. It is written by hand, from a phone, while something is on fire: only the
+   * severity and one line of summary are required, everything else can arrive as a later note, and
+   * the id is short enough to type into a reply to a parent. An incident may cite the nightly sweep
+   * run that found it (`sweeps/{id}`).
+   */
+  incidentId() {
+    const d = new Date(this.now()), pad = (n) => String(n).padStart(2, '0');
+    return `inc-${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}-${randomUUID().slice(0, 4)}`;
+  }
+  async openIncident({ operator, severity, summary, systems = [], familiesAffected = 0, sweepId = null }) {
+    this.operator(operator);
+    if (!INCIDENT_SEVERITIES.includes(severity)) fail(400, 'INVALID_SEVERITY'); // 1, 2 or 3; nothing else, and never a guess
+    text(summary, 3, 500);
+    if (!Array.isArray(systems) || systems.length > 10) fail(400, 'INVALID_REQUEST');
+    for (const s of systems) text(s, 1, 40);
+    if (!Number.isSafeInteger(familiesAffected) || familiesAffected < 0) fail(400, 'INVALID_REQUEST');
+    if (sweepId !== null) uuid(sweepId); // the sweep run that named it, if one did
+    const now = this.now(), id = this.incidentId();
+    return this.store.transaction(async (tx) => {
+      if (await tx.get(`incidents/${id}`)) fail(409, 'INCIDENT_EXISTS'); // two opened in the same second under the same four characters: run it again
+      const record = { id, status: 'open', severity, summary, systems: [...systems], familiesAffected, openedAt: now, openedBy: operator, sweepId,
+        // severity 1 carries the deadline for telling affected parents when personal data was involved; the owner decides whether it was
+        parentNoticeDueAt: severity === 1 ? now + INCIDENT_NOTICE_MS : null,
+        actions: [], resolvedAt: null, resolvedBy: null, resolution: null, followUps: [] };
+      tx.set(`incidents/${id}`, record);
+      this.audit(tx, 'support.incident_opened', operator, null, { incidentId: id, severity });
+      return record;
+    });
+  }
+  /** One line on the timeline: what was tried, what it showed, what was decided. Only while the incident is open. */
+  async noteIncident(id, { operator, note }) {
+    this.operator(operator); text(id, 3, 64); text(note, 1, 1000);
+    return this.store.transaction(async (tx) => {
+      const incident = await tx.get(`incidents/${id}`); if (!incident) fail(404, 'INCIDENT_NOT_FOUND');
+      if (incident.status !== 'open') fail(409, 'INCIDENT_NOT_OPEN');
+      const next = { ...incident, actions: [...(incident.actions || []), { at: this.now(), by: operator, note }] };
+      tx.set(`incidents/${id}`, next);
+      this.audit(tx, 'support.incident_note', operator, null, { incidentId: id });
+      return next;
+    });
+  }
+  /** The end: how it was resolved, and what is left to do. Closing is final — the postmortem is written in INCIDENTS.md. */
+  async closeIncident(id, { operator, resolution, followUps = [] }) {
+    this.operator(operator); text(id, 3, 64); text(resolution, 3, 1000);
+    if (!Array.isArray(followUps) || followUps.length > 10) fail(400, 'INVALID_REQUEST');
+    for (const f of followUps) text(f, 1, 200);
+    return this.store.transaction(async (tx) => {
+      const incident = await tx.get(`incidents/${id}`); if (!incident) fail(404, 'INCIDENT_NOT_FOUND');
+      if (incident.status !== 'open') fail(409, 'INCIDENT_NOT_OPEN');
+      const now = this.now(), next = { ...incident, status: 'closed', resolvedAt: now, resolvedBy: operator, resolution, followUps: [...followUps] };
+      tx.set(`incidents/${id}`, next);
+      this.audit(tx, 'support.incident_closed', operator, null, { incidentId: id, severity: incident.severity, openForMs: now - incident.openedAt });
+      return next;
+    });
+  }
+  /** The log, newest first — `open` by default, so "what is on fire" is one command. Read-only. */
+  async listIncidents(status = 'open') {
+    if (!['open', 'closed', 'all'].includes(status)) fail(400, 'INVALID_REQUEST');
+    return (await this.store.list('incidents')).filter((r) => status === 'all' || r.status === status).sort((a, b) => b.openedAt - a.openedAt)
+      .map((r) => ({ id: r.id, status: r.status, severity: r.severity, summary: r.summary, systems: r.systems || [], familiesAffected: r.familiesAffected ?? null,
+        openedAt: r.openedAt, openedBy: r.openedBy, sweepId: r.sweepId || null, parentNoticeDueAt: r.parentNoticeDueAt || null,
+        notes: (r.actions || []).length, resolvedAt: r.resolvedAt || null, resolution: r.resolution || null, followUps: r.followUps || [] }));
   }
   /**
    * Stage 4.2: the provider's truth against the family's record, read-only at the provider, one
