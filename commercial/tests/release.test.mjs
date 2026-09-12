@@ -8,6 +8,7 @@ import { once } from 'node:events';
 import { VERSION } from '../server/version.mjs';
 import { createApp } from '../server/http.mjs';
 import { fixture, secret } from './support.mjs';
+import { RETENTION } from '../server/support.mjs';
 import { verifyRelease } from '../scripts/verify-release.mjs';
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 test('v3.0 version agrees across manifest, page and backend', async () => {
@@ -145,4 +146,45 @@ test('the image and the pipeline: the base image is pinned by digest, the shell 
   const deploy = await read('../DEPLOY_V3.md');
   assert.match(deploy, /^npm ci --ignore-scripts --no-fund --no-audit$/m); assert.ok(!/^npm install/m.test(deploy), 'section 3 says npm ci, never npm install');
   for (const s of ['GHSA-w5hq-g745-h8pq', 'roles/cloudbuild.builds.builder', 'roles/run.builder', 'automathtics-v3-sms-ladder@', 'allowed-on-error', 'SMS_LADDER_MISCONFIGURED', "value(ttlConfig.state)", 'BLOCK B DONE WITH WARNINGS']) assert.ok(deploy.includes(s), s);
+});
+test('the support desk ships as three documents a tired person can follow: the inbox and its DNS records, the labels in the order they are applied, the targets, the escalation ladder, the money procedures, the replies and the incident format', async () => {
+  const desk = await read('../SUPPORT_DESK.md'), replies = await read('../SUPPORT_REPLIES.md'), incidents = await read('../INCIDENTS.md');
+  for (const section of ['## The inbox', '### DNS records', '### Replies go out from the Gmail address', '### If there is no domain yet', '## Labels',
+    '### The filters that do the sorting', '## Response-time targets', '## Escalation', '## Feedback notes from the app', '## Refunds', '## Cancellations',
+    '## Running the commands from a phone', '## The weekly ops line', '## What only the owner can do']) assert.ok(desk.includes(section), `SUPPORT_DESK.md: ${section}`);
+  // a free inbox with its records spelled out, and the honest limit of it
+  for (const s of ['Cloudflare Email Routing', 'route1.mx.cloudflare.net', 'route2.mx.cloudflare.net', 'route3.mx.cloudflare.net',
+    'v=spf1 include:_spf.mx.cloudflare.net ~all', '_dmarc', 'Email Routing **receives** only']) assert.ok(desk.includes(s), s);
+  // the labels, in the order they are applied: child-safety and account-recovery first, then the rest; plus the two that travel with the thread
+  let at = desk.indexOf('## Labels');
+  for (const label of ['child-safety', 'account-recovery', 'billing', 'bug', 'refund', 'cancel', 'feature-idea', 'other']) {
+    const next = desk.indexOf(`\`${label}\``, at); assert.ok(next > at, `${label} is out of order in the label table`); at = next;
+  }
+  for (const label of ['needs-reply', 'waiting-on-parent']) assert.ok(desk.includes(`\`${label}\``), label);
+  // every target, and the plain statement that the app cannot say them to a parent yet
+  for (const target of ['same day, before anything else', 'one business day', 'two business days', 'three business days']) assert.ok(desk.includes(target), target);
+  assert.match(desk, /not stated inside the app today/);
+  assert.match(desk, /`FEEDBACK_TO` does not exist in this repository/);
+  // the escalation ladder, the 72 hours, and the rollback this deployment actually has (block C pulls the tip, so it is the way forward, not back)
+  for (const s of ['### Severity 1 — stop everything', '### Severity 2 — within the week', '### Severity 3 — the backlog', 'within 72 hours',
+    'Traffic back to the last good revision', 'scripts/cloudshell/03-deploy.sh', 'PAYMENT_PROVIDER=fake', 'FAKE_PAYMENTS_ACK=no-real-money',
+    'no per-feature kill switch']) assert.ok(desk.includes(s), s);
+  // the money procedures: the commands that exist, what the record holds afterwards, and what a refund never does
+  for (const s of ['node scripts/support.mjs family FAMILY_UUID', 'node scripts/subscription.mjs FAMILY_UUID refund AMOUNT_CENTS full',
+    'node scripts/subscription.mjs FAMILY_UUID cancel.request', 'node scripts/subscription.mjs FAMILY_UUID terminate',
+    'node scripts/support.mjs reconcile-provider FAMILY_UUID', 'CONFIRM_DELETION=FAMILY_UUID node scripts/support.mjs delete FAMILY_UUID',
+    '**Child wallets are never touched.**', '**A refund never removes access already paid for.**', "parent's own 14-day process"]) assert.ok(desk.includes(s), s);
+  for (const section of ['## How to use these', '## Never ask for a secret', '## The replies']) assert.ok(replies.includes(section), `SUPPORT_REPLIES.md: ${section}`);
+  assert.equal([...replies.matchAll(/^### \d+\. /gm)].length, 15, 'fifteen canned replies');
+  for (const section of ['## The three commands', '## The record', '## Retention', '## Postmortem template', '## The log']) assert.ok(incidents.includes(section), `INCIDENTS.md: ${section}`);
+  for (const s of ['`open SEVERITY "one line"`', '`note ID "what you did or found"`', '`close ID "how it ended"`', '`list [open|closed|all]`',
+    'node scripts/support.mjs incident open 1', 'node scripts/support.mjs incident note inc-', 'node scripts/support.mjs incident close inc-',
+    'inc-YYYYMMDD-xxxx', 'parentNoticeDueAt', 'INVALID_SEVERITY', 'INCIDENT_NOT_OPEN',
+    '**What happened.**', '**Why it happened.**', '**What caught it.**', '**What changes.**']) assert.ok(incidents.includes(s), s);
+  // the incident log is kept, not collected: RETENTION, SUPPORT.md and the deployment's TTL section agree
+  assert.ok(Object.hasOwn(RETENTION, 'incidents/*'));
+  assert.match(await read('../SUPPORT.md'), /\| `incidents\/\*` \|/);
+  const deploy = await read('../DEPLOY_V3.md');
+  assert.ok(!deploy.match(/for GROUP in ([^;]+); do/)[1].split(/\s+/).includes('incidents'), 'the incident log is not a TTL group');
+  assert.match(deploy, /`supportOperations` and `incidents` carry\nnone either/);
 });

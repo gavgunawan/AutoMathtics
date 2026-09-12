@@ -463,7 +463,8 @@ export class Support {
   /** The log, newest first — `open` by default, so "what is on fire" is one command. Read-only. */
   async listIncidents(status = 'open') {
     if (!['open', 'closed', 'all'].includes(status)) fail(400, 'INVALID_REQUEST');
-    return (await this.store.list('incidents')).filter((r) => status === 'all' || r.status === status).sort((a, b) => b.openedAt - a.openedAt)
+    return (await this.store.list('incidents')).filter((r) => status === 'all' || r.status === status)
+      .sort((a, b) => (b.openedAt - a.openedAt) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)) // deterministic: newest first, then the id (two can open in the same second)
       .map((r) => ({ id: r.id, status: r.status, severity: r.severity, summary: r.summary, systems: r.systems || [], familiesAffected: r.familiesAffected ?? null,
         openedAt: r.openedAt, openedBy: r.openedBy, sweepId: r.sweepId || null, parentNoticeDueAt: r.parentNoticeDueAt || null,
         notes: (r.actions || []).length, resolvedAt: r.resolvedAt || null, resolution: r.resolution || null, followUps: r.followUps || [] }));
