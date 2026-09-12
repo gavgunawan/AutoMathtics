@@ -42,7 +42,7 @@ test('checkout: one Stripe customer per family carrying our reference, a hosted 
   assert.ok(!JSON.stringify(r).includes('sk_test'), 'the key never leaves the adapter');
   const [search, create, session] = calls;
   assert.equal(search.method, 'GET'); assert.equal(new URLSearchParams(search.path.split('?')[1]).get('query'), "metadata['customerRef']:'cus_ours'");
-  assert.equal(create.headers['Idempotency-Key'], 'customer:cus_ours'); assert.equal(create.headers.Authorization, `Bearer ${KEY}`); assert.equal(create.body['metadata[customerRef]'], 'cus_ours');
+  assert.equal(create.headers['Idempotency-Key'], 'customer:cus_ours:first'); assert.equal(create.headers.Authorization, `Bearer ${KEY}`); assert.equal(create.body['metadata[customerRef]'], 'cus_ours');
   assert.equal(session.headers['Idempotency-Key'], checkoutId, 'the checkout id is the provider-side idempotency key (S3.3-A)');
   assert.equal(session.body.mode, 'subscription'); assert.equal(session.body['line_items[0][price]'], 'price_1Family000'); assert.equal(session.body.customer, 'cus_stripe1'); assert.equal(session.body.client_reference_id, checkoutId); assert.equal(session.body['subscription_data[metadata][familyId]'], 'fam_1');
   assert.ok(session.body.success_url.startsWith('https://pilot.example.test/'));
@@ -80,7 +80,7 @@ test('a plan change moves the live subscription to the new price with prorations
 test('webhooks: signature before parsing, then Stripe\'s events become the inbox shape with the price and period taken from Stripe\'s own objects', async () => {
   const f = fixture(); const end = f.now() + 30 * DAY;
   const { gw, calls } = gateway({ 'GET /v1/subscriptions/sub_1': sub('price_1Family000', end) });
-  const done = event(f, 'checkout.session.completed', { object: 'checkout.session', customer: 'cus_stripe1', subscription: 'sub_1', client_reference_id: 'chk_1', metadata: { familyId: 'fam_1', checkoutId: 'chk_1', price: 'price_1BigFam000' } });
+  const done = event(f, 'checkout.session.completed', { object: 'checkout.session', payment_status: 'paid', customer: 'cus_stripe1', subscription: 'sub_1', client_reference_id: 'chk_1', metadata: { familyId: 'fam_1', checkoutId: 'chk_1', price: 'price_1BigFam000' } });
   const { raw, headers } = signed(f, done);
   const n = await gw.verify(raw, headers, f.now());
   assert.match(n.fingerprint, /^[0-9a-f]{64}$/, 'the event fingerprinted by its own identity');
@@ -117,6 +117,7 @@ test('the whole flow through the Stage 3 inbox: checkout, Stripe\'s own customer
     'POST /v1/customers': (body) => { const c = { id: `cus_stripe${++created}`, metadata: { customerRef: body['metadata[customerRef]'] } }; customers = [c]; return c; },
     'POST /v1/checkout/sessions': (body) => ({ id: `cs_${body.client_reference_id.slice(0, 8)}`, url: 'https://checkout.stripe.com/c/pay/x' }),
     'POST /v1/checkout/sessions/': (body, all) => { expired.push(all.at(-1).path); return { status: 'expired' }; },
+    'GET /v1/subscriptions?customer=': { data: [] }, // a returning checkout inspects the customer before opening a session (fourth round): nothing live here
     'GET /v1/subscriptions/sub_1': sub('price_1Starter00', end),
   });
   const payments = new Payments({ foundation: f.service, store: f.store, billing: f.billing, provider: 'stripe', gateways: { stripe: gw }, now: f.now });
@@ -128,11 +129,11 @@ test('the whole flow through the Stage 3 inbox: checkout, Stripe\'s own customer
   assert.deepEqual(expired, [`/v1/checkout/sessions/${first.providerCheckoutRef}/expire`]);
   assert.equal((await f.store.get(`checkouts/stripe:${first.checkoutId}`)).status, 'superseded');
   // Stripe reports the second session completed; the inbox resolves the family by Stripe's customer id and the price by the subscription Stripe holds
-  const done = event(f, 'checkout.session.completed', { object: 'checkout.session', customer: 'cus_stripe1', subscription: 'sub_1', client_reference_id: second.checkoutId, metadata: { familyId: a.familyId, checkoutId: second.checkoutId } });
+  const done = event(f, 'checkout.session.completed', { object: 'checkout.session', payment_status: 'paid', customer: 'cus_stripe1', subscription: 'sub_1', client_reference_id: second.checkoutId, metadata: { familyId: a.familyId, checkoutId: second.checkoutId } });
   let s = signed(f, done); assert.deepEqual(await payments.receive('stripe', s.raw, s.headers), { status: 'applied', state: 'active', eventId: (await f.store.get(`billingEvents/stripe:${done.id}`)).outcome.eventId });
   let fam = await f.store.get(`families/${a.familyId}`); assert.equal(fam.subscription.plan, 'starter'); assert.equal(fam.subscription.periodEnd, Math.floor(end / 1000) * 1000); assert.equal(fam.subscription.providerRef, 'cus_stripe1');
   // the first (superseded) session completing later is refused, whatever Stripe says
-  const late = event(f, 'checkout.session.completed', { object: 'checkout.session', customer: 'cus_stripe1', subscription: 'sub_1', client_reference_id: first.checkoutId, metadata: { familyId: a.familyId } });
+  const late = event(f, 'checkout.session.completed', { object: 'checkout.session', payment_status: 'paid', customer: 'cus_stripe1', subscription: 'sub_1', client_reference_id: first.checkoutId, metadata: { familyId: a.familyId } });
   s = signed(f, late); assert.deepEqual(await payments.receive('stripe', s.raw, s.headers), { status: 'rejected', reason: 'CHECKOUT_SUPERSEDED' });
   // a renewal invoice, then a full refund, both by Stripe's customer id
   const renew = event(f, 'invoice.paid', { object: 'invoice', customer: 'cus_stripe1', lines: { data: [{ price: { id: 'price_1Starter00' }, period: { end: Math.floor((end + 30 * DAY) / 1000) } }] } });
@@ -167,7 +168,7 @@ test('Stripe API basil shapes: the period on the subscription item, the line pri
   assert.equal(periodEndOf(basilSub), end * 1000); assert.equal(periodEndOf(sub('price_1Starter00', end * 1000)), end * 1000); assert.equal(periodEndOf({ items: { data: [] } }), null);
   assert.equal(linePrice({ pricing: { price_details: { price: 'price_x' } } }), 'price_x'); assert.equal(linePrice({ price: { id: 'price_y' } }), 'price_y'); assert.equal(linePrice({}), null);
   const { gw } = gateway({ 'GET /v1/subscriptions/sub_b': basilSub });
-  const done = event(f, 'checkout.session.completed', { object: 'checkout.session', customer: 'cus_b', subscription: 'sub_b', client_reference_id: 'chk_b', metadata: { familyId: 'fam_b' } });
+  const done = event(f, 'checkout.session.completed', { object: 'checkout.session', payment_status: 'paid', customer: 'cus_b', subscription: 'sub_b', client_reference_id: 'chk_b', metadata: { familyId: 'fam_b' } });
   const n = await gw.verify(...Object.values(signed(f, done)).slice(0, 2), f.now());
   assert.equal(n.data.price, 'price_1Family000'); assert.equal(n.data.periodEnd, end * 1000);
   const paid = event(f, 'invoice.paid', { object: 'invoice', customer: 'cus_b', parent: { type: 'subscription_details', subscription_details: { subscription: 'sub_b', metadata: { familyId: 'fam_b' } } }, lines: { data: [{ pricing: { price_details: { price: 'price_1Family000', product: 'prod_x' } }, period: { end } }] } });
