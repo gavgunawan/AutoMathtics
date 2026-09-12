@@ -32,7 +32,7 @@ test('sign-up consent: the new account\'s own token and both boxes, recorded onc
   assert.equal(r.status, 200); assert.deepEqual(await r.json(), { ok: true });
   const doc = await f.store.get('emailPrefs/newParent');
   assert.equal(doc.progress, true); assert.equal(doc.news, true); assert.equal(doc.version, V); assert.equal(doc.updatedAt, f.now());
-  assert.deepEqual(doc.changes, [{ at: f.now(), progress: true, news: true, source: 'signup', version: V }]);
+  assert.deepEqual(doc.changes, [{ at: f.now(), progress: true, news: true, cadence: 'weekly', source: 'signup', version: V }]);
   assert.equal(await f.store.get('parents/newParent'), null, 'parents/{uid} is never created early: login() makes it, in its own shape');
   const rows = await audits(f, 'email.consent_recorded'); assert.equal(rows.length, 1); assert.equal(rows[0].uid, 'newParent'); assert.equal(rows[0].familyId, null); assert.equal(rows[0].childId, null);
   // only if absent: a second call, or anyone else holding the token, changes nothing
@@ -40,7 +40,7 @@ test('sign-up consent: the new account\'s own token and both boxes, recorded onc
   assert.deepEqual(await f.store.get('emailPrefs/newParent'), doc); assert.equal((await audits(f, 'email.consent_recorded')).length, 1);
   // news left out: the report on, news off
   assert.equal((await s.call('/api/auth/consent', { idToken: f.token('quietParent'), progress: true })).status, 200);
-  assert.deepEqual(prefsOf(await f.store.get('emailPrefs/quietParent')), { progress: true, news: false });
+  assert.deepEqual(prefsOf(await f.store.get('emailPrefs/quietParent')), { progress: true, news: false, cadence: 'weekly' });
   // the required box not sent, or not ticked: nothing recorded
   for (const body of [{ idToken: f.token('carelessParent'), news: true }, { idToken: f.token('carelessParent'), progress: false, news: true }]) {
     const x = await s.call('/api/auth/consent', body); assert.equal(x.status, 400); assert.equal((await x.json()).error, 'CONSENT_REQUIRED');
@@ -84,14 +84,14 @@ test('junk from everywhere fills only the instance\'s failure budget: after two 
 
 test('the switches: a parent session with a recent sign-in, booleans only; each change a versioned row with its door, the newest twenty kept; the switches saved as they are add nothing', async (t) => {
   const f = fixture(), a = await f.family('parentA', 1);
-  assert.deepEqual((await f.service.me(a.ctx)).emailPrefs, { progress: true, news: false }, 'no record: the report on, news off');
-  assert.deepEqual(await f.email.setPrefs(a.ctx, { progress: true, news: false }), { progress: true, news: false }); assert.equal(await f.store.get('emailPrefs/parentA'), null, 'the switches as they are: no record');
-  assert.deepEqual(await f.email.setPrefs(a.ctx, { progress: false }), { progress: false, news: false });
-  let doc = await f.store.get('emailPrefs/parentA'); assert.deepEqual(doc.changes, [{ at: f.now(), progress: false, news: false, source: 'settings', version: V }]);
-  assert.deepEqual((await f.service.me(a.ctx)).emailPrefs, { progress: false, news: false });
+  assert.deepEqual((await f.service.me(a.ctx)).emailPrefs, { progress: true, news: false, cadence: 'weekly' }, 'no record: the report on, weekly, news off');
+  assert.deepEqual(await f.email.setPrefs(a.ctx, { progress: true, news: false }), { progress: true, news: false, cadence: 'weekly' }); assert.equal(await f.store.get('emailPrefs/parentA'), null, 'the switches as they are: no record');
+  assert.deepEqual(await f.email.setPrefs(a.ctx, { progress: false }), { progress: false, news: false, cadence: 'off' });
+  let doc = await f.store.get('emailPrefs/parentA'); assert.deepEqual(doc.changes, [{ at: f.now(), progress: false, news: false, cadence: 'off', source: 'settings', version: V }]);
+  assert.deepEqual((await f.service.me(a.ctx)).emailPrefs, { progress: false, news: false, cadence: 'off' });
   assert.ok((await audits(f, 'email.prefs_changed')).some((x) => x.uid === 'parentA' && x.familyId === a.familyId));
   const audited = (await audits(f, 'email.prefs_changed')).length;
-  assert.deepEqual(await f.email.setPrefs(a.ctx, { progress: false, news: false }), { progress: false, news: false });
+  assert.deepEqual(await f.email.setPrefs(a.ctx, { progress: false, news: false }), { progress: false, news: false, cadence: 'off' });
   assert.equal((await f.store.get('emailPrefs/parentA')).changes.length, 1, 'both switches sent as they are: no row'); assert.equal((await audits(f, 'email.prefs_changed')).length, audited, 'and no audit');
   for (const bad of [{}, { progress: 'no' }, { news: 1 }, { progress: true, other: true }, null]) await assert.rejects(f.email.setPrefs(a.ctx, bad), rejected('INVALID_REQUEST'));
   for (let i = 0; i < 25; i++) await f.email.setPrefs(a.ctx, { news: i % 2 === 0 });
@@ -103,14 +103,14 @@ test('the switches: a parent session with a recent sign-in, booleans only; each 
   // over HTTP, with the session's own CSRF token; the selector and the child never see the prefs
   const p = await f.login('parentA'), s = await listen(t, f), csrf = (await f.service.me(p.ctx)).csrf;
   const r = await s.call('/api/account/email', { progress: true, news: true }, { Cookie: `__session=${p.cookie}`, 'X-CSRF-Token': csrf });
-  assert.equal(r.status, 200); assert.deepEqual(await r.json(), { progress: true, news: true });
+  assert.equal(r.status, 200); assert.deepEqual(await r.json(), { progress: true, news: true, cadence: 'weekly' }, 'the report on again after off is weekly again');
   assert.equal((await s.call('/api/account/email', { progress: true }, { Cookie: `__session=${p.cookie}`, 'X-CSRF-Token': 'nope' })).status, 403);
   assert.equal((await f.service.me(k.childCtx)).emailPrefs, undefined);
 });
 
 test('the record belongs to the sign-in account: the export carries it, family deletion keeps it, deleting the sign-in account deletes it', async () => {
   const f = fixture(), a = await f.family('parentA', 1);
-  assert.deepEqual((await f.support.exportFamily(a.ctx)).emailPrefs, [{ uid: 'parentA', progress: true, news: false, version: null, updatedAt: null, changes: [] }], 'nothing recorded: the defaults, said so');
+  assert.deepEqual((await f.support.exportFamily(a.ctx)).emailPrefs, [{ uid: 'parentA', progress: true, news: false, cadence: 'weekly', version: null, updatedAt: null, changes: [] }], 'nothing recorded: the defaults, said so');
   await f.email.setPrefs(a.ctx, { news: true });
   const x = await f.support.exportFamily(a.ctx);
   assert.deepEqual(x.emailPrefs.map((e) => [e.uid, e.progress, e.news, e.version, e.changes.length]), [['parentA', true, true, V, 1]]);
@@ -123,13 +123,13 @@ test('the record belongs to the sign-in account: the export carries it, family d
 });
 
 test('the record\'s shape: defaults without one; versioned rows with their door; the sign-up row kept for good while the newest others rotate; nothing new when nothing changes', () => {
-  assert.deepEqual(prefsOf(null), { progress: true, news: false }); assert.deepEqual(prefsOf({ progress: false }), { progress: false, news: false }); assert.deepEqual(prefsOf({ news: 'yes' }), { progress: true, news: false });
+  assert.deepEqual(prefsOf(null), { progress: true, news: false, cadence: 'weekly' }); assert.deepEqual(prefsOf({ progress: false }), { progress: false, news: false, cadence: 'off' }); assert.deepEqual(prefsOf({ news: 'yes' }), { progress: true, news: false, cadence: 'weekly' });
   assert.equal(withChange(null, { progress: true, news: false }, 'settings', 1), null, 'the defaults saved: nothing changes');
   let doc = withChange(null, { news: true }, 'signup', 1);
-  assert.deepEqual(doc, { progress: true, news: true, version: V, updatedAt: 1, changes: [{ at: 1, progress: true, news: true, source: 'signup', version: V }] });
+  assert.deepEqual(doc, { progress: true, news: true, cadence: 'weekly', version: V, updatedAt: 1, changes: [{ at: 1, progress: true, news: true, cadence: 'weekly', source: 'signup', version: V }] });
   assert.equal(withChange(doc, { news: true }, 'settings', 2), null, 'the same again: nothing');
   for (let i = 2; i < 30; i++) doc = withChange(doc, { progress: i % 2 === 1 }, 'settings', i);
-  assert.equal(doc.changes.length, 20); assert.deepEqual(doc.changes[0], { at: 1, progress: true, news: true, source: 'signup', version: V }, 'the consent itself is never rotated out');
+  assert.equal(doc.changes.length, 20); assert.deepEqual(doc.changes[0], { at: 1, progress: true, news: true, cadence: 'weekly', source: 'signup', version: V }, 'the consent itself is never rotated out');
   assert.equal(doc.changes[1].at, 11); assert.equal(doc.changes.at(-1).at, 29); assert.equal(doc.news, true); assert.ok(doc.changes.every((row) => row.version === V));
 });
 
@@ -146,14 +146,14 @@ test('UI: the sign-up form carries the two boxes, the first required and the sec
   assert.equal(h.nodes('INPUT')[1].value, 'SyntheticPasswordOnly', 'the password is still there for the second try');
   boxes()[0].checked = true; await h.submitLogin();
   assert.equal(made, 1); assert.ok(h.root.textContent.includes('Check your inbox.'), 'on to the email check');
-  const doc = await h.f.store.get('emailPrefs/newParent'); assert.deepEqual(prefsOf(doc), { progress: true, news: false }, 'news stays off unless ticked'); assert.equal(doc.changes[0].source, 'signup');
+  const doc = await h.f.store.get('emailPrefs/newParent'); assert.deepEqual(prefsOf(doc), { progress: true, news: false, cadence: 'weekly' }, 'news stays off unless ticked'); assert.equal(doc.changes[0].source, 'signup');
   assert.equal(await h.f.store.get('parents/newParent'), null);
   assert.ok(h.requests.some((r) => r.path === '/api/auth/consent' && r.method === 'POST'));
   // news ticked: recorded yes
   const g = await uiFixture(t, { signedIn: false }); g.api.signInScreen(true);
   g.setAuth('newsParent', { signUp: async () => ({ stage: 'verify' }), idToken: async () => g.f.token('newsParent') });
   for (const b of g.nodes('INPUT').filter((i) => i.type === 'checkbox')) b.checked = true;
-  await g.submitLogin(); assert.deepEqual(prefsOf(await g.f.store.get('emailPrefs/newsParent')), { progress: true, news: true });
+  await g.submitLogin(); assert.deepEqual(prefsOf(await g.f.store.get('emailPrefs/newsParent')), { progress: true, news: true, cadence: 'weekly' });
   // the server refuses, or the token cannot be had: the sign-up carries on regardless
   for (const idToken of [async () => BAD_TOKEN, async () => { throw Error('provider hiccup'); }]) {
     const u = await uiFixture(t, { signedIn: false }); u.api.signInScreen(true);

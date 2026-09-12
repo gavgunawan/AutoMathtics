@@ -55,20 +55,20 @@ test('a token is signed with its own key and read back only unchanged, only with
 
 test('describe says what a button does and changes nothing; apply does it and audits it, and a second tap sets the same value', async () => {
   const f = fixture(), a = await setup(f), pace = token(f, a);
-  assert.deepEqual(await f.email.describe({ t: pace }), { valid: true, action: 'pace', nickname: 'Allison', value: 75, current: 100, email: null, reason: null });
+  assert.deepEqual(await f.email.describe({ t: pace }), { valid: true, action: 'pace', nickname: 'Allison', value: 75, current: 100, cadence: null, email: null, reason: null });
   assert.equal(await prog(f, a), null, 'describe wrote nothing');
   assert.deepEqual(await f.email.apply({ t: pace }), { ok: true, message: 'Allison’s question time is now 75%.' }); assert.equal((await prog(f, a)).pacePercent, 75);
   assert.deepEqual(await f.email.apply({ t: pace }), { ok: true, message: 'Allison’s question time is now 75%.' }); assert.equal((await prog(f, a)).pacePercent, 75, 'twice is harmless');
   const rows = await applied(f); assert.equal(rows.length, 2); assert.deepEqual([rows[0].uid, rows[0].familyId, rows[0].childId, rows[0].kind, rows[0].week], ['parentA', a.familyId, a.childId, 'pace', WEEK]);
   assert.equal((await f.email.describe({ t: pace })).current, 75, 'the panel shows the value as it now is');
   const on = token(f, a, { a: 'focus', v: true }), off = token(f, a, { a: 'focus', v: false });
-  assert.deepEqual(await f.email.describe({ t: on }), { valid: true, action: 'focus', nickname: 'Allison', value: true, current: false, email: null, reason: null });
+  assert.deepEqual(await f.email.describe({ t: on }), { valid: true, action: 'focus', nickname: 'Allison', value: true, current: false, cadence: null, email: null, reason: null });
   assert.equal((await f.email.apply({ t: on })).message, 'Allison’s next System Scan focuses on the weak spots: about 75% of its questions.');
   assert.equal((await prog(f, a)).scanFocus, true); assert.equal((await prog(f, a)).pacePercent, 75, 'the pace stays');
   assert.equal((await f.email.apply({ t: off })).message, 'Allison’s System Scan is back to the normal mix.'); assert.equal((await prog(f, a)).scanFocus, false);
   // stopping the report: off, a change row from the email door, the address masked in the panel, Mission Control agrees
   const unsub = unsubToken(f, a);
-  assert.deepEqual(await f.email.describe({ t: unsub }), { valid: true, action: 'unsub', nickname: null, value: 'progress', current: true, email: 'p…@example.test', reason: null });
+  assert.deepEqual(await f.email.describe({ t: unsub }), { valid: true, action: 'unsub', nickname: null, value: 'progress', current: true, cadence: 'weekly', email: 'p…@example.test', reason: null }, 'the unsubscribe panel is told the cadence, so it can offer monthly before off');
   assert.equal((await f.email.apply({ t: unsub })).message, 'The weekly progress report is off. Switch it back on in Mission Control whenever you like.');
   const prefs = await f.store.get('emailPrefs/parentA'); assert.equal(prefs.progress, false); assert.equal(prefs.news, false); assert.deepEqual(prefs.changes.map((c) => c.source), ['email']);
   await f.email.apply({ t: unsub }); assert.equal((await f.store.get('emailPrefs/parentA')).changes.length, 1, 'already off: no second change row');

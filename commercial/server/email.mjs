@@ -50,20 +50,32 @@ export function readEmailToken(secret, token, now) {
   if (p.e <= now) fail(410, 'LINK_EXPIRED');
   return p;
 }
-const done = (p, nickname) => (p.a === 'pace' ? `${nickname}’s question time is now ${p.v}%.` : p.a === 'focus' ? (p.v ? `${nickname}’s next System Scan focuses on the weak spots: about 75% of its questions.` : `${nickname}’s System Scan is back to the normal mix.`)
-  : 'The weekly progress report is off. Switch it back on in Mission Control whenever you like.');
+const done = (p, nickname, cadence = 'off') => (p.a === 'pace' ? `${nickname}’s question time is now ${p.v}%.` : p.a === 'focus' ? (p.v ? `${nickname}’s next System Scan focuses on the weak spots: about 75% of its questions.` : `${nickname}’s System Scan is back to the normal mix.`)
+  : cadence === 'monthly' ? 'The progress report now comes once a month, on the first Monday, covering four weeks. Change it in Mission Control whenever you like.'
+    : 'The weekly progress report is off. Switch it back on in Mission Control whenever you like.');
 const CHANGES_MAX = 20;
 export const prefsPath = (uid) => `emailPrefs/${uid}`;
+// Leaving (12 Sep 2026): how often the progress report comes. `off` and `progress: false` are one and the same thing — the
+// boolean is kept because every reader of it (the job, the export, the buttons in an email) already knows what it means — and
+// `weekly` is what a record written before this existed means.
+export const CADENCES = Object.freeze(['weekly', 'monthly', 'off']);
+export const cadenceOf = (doc) => (doc?.progress === false ? 'off' : CADENCES.includes(doc?.cadence) ? doc.cadence : 'weekly');
 /** What the switches read: the record's state, or the defaults when none was ever written. */
-export const prefsOf = (doc) => ({ progress: doc?.progress !== false, news: doc?.news === true });
+export const prefsOf = (doc) => { const cadence = cadenceOf(doc); return { progress: cadence !== 'off', news: doc?.news === true, cadence }; };
 /**
  * The record after a change: the whole new state, and a row saying when, what, through which door and under which version of the
  * wording. The sign-up row is never rotated out; the newest of the others fill the rest of the twenty. null when nothing changes:
- * the switches saved as they are add no row (the app sends both switches every time).
+ * the switches saved as they are add no row (the app sends both switches every time). `cadence` and `progress` are the same
+ * switch from two sides: whichever the patch names decides, and `progress: true` after `off` means weekly again.
  */
 export function withChange(doc, patch, source, now) {
-  const was = prefsOf(doc), state = { progress: typeof patch.progress === 'boolean' ? patch.progress : was.progress, news: typeof patch.news === 'boolean' ? patch.news : was.news };
-  if (state.progress === was.progress && state.news === was.news) return null;
+  const was = prefsOf(doc);
+  const cadence = CADENCES.includes(patch.cadence) ? patch.cadence
+    : patch.progress === false ? 'off'
+      : patch.progress === true ? (was.cadence === 'off' ? 'weekly' : was.cadence)
+        : was.cadence;
+  const state = { progress: cadence !== 'off', news: typeof patch.news === 'boolean' ? patch.news : was.news, cadence };
+  if (state.progress === was.progress && state.news === was.news && state.cadence === was.cadence) return null;
   const rows = [...(Array.isArray(doc?.changes) ? doc.changes : []), { at: now, ...state, source, version: EMAIL_VERSION }], first = rows.find((r) => r?.source === 'signup'), rest = rows.filter((r) => r !== first);
   return { ...state, version: EMAIL_VERSION, updatedAt: now, changes: first ? [first, ...rest.slice(-(CHANGES_MAX - 1))] : rest.slice(-CHANGES_MAX) };
 }
@@ -86,7 +98,7 @@ export class Email {
       const recorded = await tx.get(prefsPath(uid)), parent = await tx.get(`parents/${uid}`);
       if (parent?.identityDeletion) fail(403, 'ACCOUNT_DELETED');
       if (recorded) return; // recorded already: from here on the switches change it
-      const now = this.now(), state = { progress: true, news: body.news === true };
+      const now = this.now(), state = { progress: true, news: body.news === true, cadence: 'weekly' };
       tx.set(prefsPath(uid), { ...state, version: EMAIL_VERSION, updatedAt: now, changes: [{ at: now, ...state, source: 'signup', version: EMAIL_VERSION }] });
       this.foundation.audit(tx, 'email.consent_recorded', uid);
     });
@@ -94,8 +106,9 @@ export class Email {
   }
   /** Mission Control's switches. A recent sign-in: a child at a remembered, open Mission Control must not switch the report off. */
   async setPrefs(ctx, body) {
-    object(body, ['progress', 'news']); flags(body, ['progress', 'news']);
-    if (body.progress === undefined && body.news === undefined) fail(400, 'INVALID_REQUEST');
+    object(body, ['progress', 'news', 'cadence']); flags(body, ['progress', 'news']);
+    if (body.cadence !== undefined && !CADENCES.includes(body.cadence)) fail(400, 'INVALID_REQUEST');
+    if (body.progress === undefined && body.news === undefined && body.cadence === undefined) fail(400, 'INVALID_REQUEST');
     return this.store.transaction(async (tx) => {
       const { s } = await this.foundation.authorize(tx, ctx, ['parent'], false); this.foundation.requireRecent(s);
       const old = await tx.get(prefsPath(s.uid)), next = withChange(old, body, 'settings', this.now());
@@ -121,26 +134,32 @@ export class Email {
     catch (error) { if (error instanceof Fault && error.status < 500) return { valid: false, reason: error.code === 'LINK_EXPIRED' ? 'expired' : 'invalid' }; throw error; }
     const view = await this.store.transaction(async (tx) => {
       const ctx = await this.context(tx, p); if (!ctx) return null;
-      return { valid: true, action: p.a, nickname: ctx.child?.nickname || null, value: p.v, current: p.a === 'pace' ? ctx.prog.pacePercent : p.a === 'focus' ? ctx.prog.scanFocus === true : prefsOf(ctx.prefs).progress, email: null, reason: null };
+      return { valid: true, action: p.a, nickname: ctx.child?.nickname || null, value: p.v, current: p.a === 'pace' ? ctx.prog.pacePercent : p.a === 'focus' ? ctx.prog.scanFocus === true : prefsOf(ctx.prefs).progress,
+        cadence: p.a === 'unsub' ? prefsOf(ctx.prefs).cadence : null, email: null, reason: null }; // the unsubscribe panel offers monthly before off, so it must know which the family has
     }, { readOnly: true });
     if (!view) return { valid: false, reason: 'gone' };
     if (p.a === 'unsub') { try { const user = await this.identity.lookup(p.u); view.email = user?.email ? maskAddress(user.email) : null; } catch { /* the panel says "for you" instead */ } }
     return view;
   }
-  /** The parent tapped Confirm. The same checks as describe(), in the transaction that writes; a second tap sets the same value. */
+  /**
+   * The parent tapped Confirm. The same checks as describe(), in the transaction that writes; a second tap sets the same value.
+   * An unsubscribe token may also choose `monthly` instead of `off` (the leaving flow's least drastic offer): less than the
+   * token already allows, never more — no token of any kind can switch a report on.
+   */
   async apply(body) {
-    object(body, ['t']); const p = readEmailToken(this.secret, body.t, this.now());
-    return this.store.transaction(async (tx) => { const ctx = await this.context(tx, p); if (!ctx) fail(409, 'LINK_GONE'); return this.write(tx, p, ctx); });
+    object(body, ['t', 'cadence']); const p = readEmailToken(this.secret, body.t, this.now());
+    if (body.cadence !== undefined && (p.a !== 'unsub' || !['monthly', 'off'].includes(body.cadence))) fail(400, 'INVALID_REQUEST');
+    return this.store.transaction(async (tx) => { const ctx = await this.context(tx, p); if (!ctx) fail(409, 'LINK_GONE'); return this.write(tx, p, ctx, body.cadence || 'off'); });
   }
   /** RFC 8058 one-click: the mailbox provider's POST (http.mjs), the token its only authentication; it can switch the weekly report off and nothing else. */
   async unsubscribe(t) {
     const p = readEmailToken(this.secret, t, this.now()); if (p.a !== 'unsub') fail(400, 'LINK_INVALID');
-    return this.store.transaction(async (tx) => { const ctx = await this.context(tx, p); if (!ctx) fail(409, 'LINK_GONE'); return this.write(tx, p, ctx); });
+    return this.store.transaction(async (tx) => { const ctx = await this.context(tx, p); if (!ctx) fail(409, 'LINK_GONE'); return this.write(tx, p, ctx, 'off'); });
   }
-  write(tx, p, ctx) {
+  write(tx, p, ctx, cadence = 'off') {
     if (p.a !== 'unsub') tx.set(`families/${p.f}/learning/${p.c}`, { ...ctx.prog, ...(p.a === 'pace' ? { pacePercent: p.v } : { scanFocus: p.v }) });
-    else { const next = withChange(ctx.prefs, { progress: false }, 'email', this.now()); if (next) tx.set(prefsPath(p.u), next); } // already off: no second change row
+    else { const next = withChange(ctx.prefs, { cadence }, 'email', this.now()); if (next) tx.set(prefsPath(p.u), next); } // already off: no second change row
     this.foundation.audit(tx, 'email.action_applied', p.u, p.f, p.c || null, { kind: p.a, week: p.w });
-    return { ok: true, message: done(p, ctx.child?.nickname) };
+    return { ok: true, message: done(p, ctx.child?.nickname, cadence) };
   }
 }
