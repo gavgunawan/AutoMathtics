@@ -16,10 +16,14 @@ active/grace/past_due ──payment.succeeded──▶ active (new period; failu
 active/grace ──cancel.request──▶ cancelled at period end (cancel.undo reverses while the period runs)
 any ──terminate (operator)──▶ cancelled now       cancelled/expired ──payment.succeeded──▶ active
 active/grace/past_due ──payment.failed──▶ (fact only: failedAt, failures; time decides the rest)
+active ──pause.start (parent: 1, 2 or 3 months)──▶ active to the period end, then paused
+paused ──payment.succeeded (the invoice after resumesAt)──▶ active    paused ──pause.end──▶ grace/past_due by the clock
+paused ──cancel.request──▶ cancelled now (no period is left to end, and nothing is being collected)
 ```
 
 Access (`entitlement.status === 'active'`) holds in `trial`, `active` and `grace`. `accessUntil` is the
-trial end, the period end, or the end of grace.
+trial end, the period end, or the end of grace. `paused` has none: a pause honours the period already paid
+for and grants nothing after it, raises no invoice, and is never counted as churn (`PAYMENTS.md` → Paused).
 
 ## Plans
 
@@ -104,6 +108,11 @@ unset; it is set on success, so a second family under the same phone (new email)
 policy: a family on an **active manual grant** is not offered the trial (`MANUAL_GRANT_ACTIVE`) — starting
 one would move the family under subscription management for good, which only the operator decides.
 `POST /api/billing/cancel { undo }` — cancel at period end or reverse it; access is never cut short.
+`POST /api/billing/pause { months: 1|2|3, operationId }` and `POST /api/billing/resume { operationId }` — pause
+collection instead of leaving, and end that pause (12 Sep 2026; `PAYMENTS.md` → Paused).
+`POST /api/leaving/offers { reason }` and `POST /api/leaving { reason, freeText?, action, … }` — the cancel-or-pause
+flow: what this family may be offered for that reason (reads only), and the record plus the action it asks for, which
+is carried out through the routes above and through `/api/account/email`, never around them (`server/leaving.mjs`).
 `GET /api/billing` — plans, the derived subscription, trial eligibility, the family's payment reference.
 `POST /api/billing/checkout { plan, operationId }` — start a checkout (3.3); the plan is applied only when
 the provider's signed event arrives.

@@ -42,6 +42,9 @@ export function stripeAccount(f, { customerId = 'cus_live1' } = {}) {
     'POST /v1/subscriptions/': (body) => {
       if (!state.sub) return missing;
       if (body.cancel_at_period_end !== undefined) state.sub.cancel_at_period_end = body.cancel_at_period_end === 'true';
+      // pause_collection: `pause_collection[behavior]=void[&pause_collection[resumes_at]=…]` pauses, the empty value removes it
+      if (body['pause_collection[behavior]']) state.sub.pause_collection = { behavior: body['pause_collection[behavior]'], ...(body['pause_collection[resumes_at]'] ? { resumes_at: Number(body['pause_collection[resumes_at]']) } : {}) };
+      else if (body.pause_collection === '') state.sub.pause_collection = null;
       const price = body['items[0][price]'], invoiceId = `in_${++state.invoices}`;
       if (price && body.payment_behavior === 'pending_if_incomplete' && state.upgradePayment && state.upgradePayment !== 'paid') {
         // Stripe holds the update: the price stays, pending_update is set, the invoice is open (a failed charge, or a card that needs authentication)

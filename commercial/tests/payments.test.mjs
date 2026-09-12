@@ -42,10 +42,10 @@ test('the signature covers the raw bytes and the timestamp, in constant time, in
 test('a derived event id is uuid-shaped and stable; the normalized event has a fixed shape', () => {
   const id = derivedEventId('fake:evt_1'); assert.equal(uuid(id), id); assert.equal(derivedEventId('fake:evt_1'), id); assert.notEqual(derivedEventId('fake:evt_2'), id);
   const n = normalizeEvent({ id: 'evt_1', type: 'invoice.paid', at: 5, customer: 'cus_1', data: { price: 'price_fake_starter', periodEnd: 9 } });
-  assert.deepEqual(Object.keys(n), ['id', 'type', 'at', 'seq', 'customer', 'data']); assert.equal(n.seq, null); assert.deepEqual(n.data, { price: 'price_fake_starter', periodEnd: 9, familyId: null, checkoutId: null, amountCents: null, full: null, ref: null, subscriptionRef: null });
+  assert.deepEqual(Object.keys(n), ['id', 'type', 'at', 'seq', 'customer', 'data']); assert.equal(n.seq, null); assert.deepEqual(n.data, { price: 'price_fake_starter', periodEnd: 9, familyId: null, checkoutId: null, amountCents: null, full: null, ref: null, subscriptionRef: null, resumesAt: null });
   for (const bad of [{ id: 'evt 1', type: 'x', at: 1, customer: 'c', data: {} }, { id: 'evt_1', type: 'x', at: -1, customer: 'c', data: {} }, { id: 'evt_1', type: 'x', at: 1, customer: 'c', data: { amount: 5 } },
     { id: 'evt_1', type: 'x', at: 1, customer: 'c', data: { plan: 'gold' } }, { id: 'evt_1', type: 'x', at: 1, customer: 'c', data: [] }, 'nope', null]) assert.throws(() => normalizeEvent(bad));
-  assert.deepEqual(normalizeEvent({ id: 'evt_1', type: 'x', at: 1, customer: 'c' }).data, { price: null, periodEnd: null, familyId: null, checkoutId: null, amountCents: null, full: null, ref: null, subscriptionRef: null }); // data is optional
+  assert.deepEqual(normalizeEvent({ id: 'evt_1', type: 'x', at: 1, customer: 'c' }).data, { price: null, periodEnd: null, familyId: null, checkoutId: null, amountCents: null, full: null, ref: null, subscriptionRef: null, resumesAt: null }); // data is optional
 });
 test('checkout: a parent chooses a purchasable plan; the server mints one customer reference per family and never takes one from the browser', async () => {
   const f = fixture(); const a = await f.family('parentA', 0);
@@ -163,7 +163,7 @@ test('a signed body that is not a well-formed event is refused after the signatu
   assert.equal(await f.store.get('billingEvents/fake:evt_named'), null);
   const notJson = Buffer.from('{not json'); await assert.rejects(f.payments.receive('fake', notJson, { 'x-webhook-signature': signWebhook(webhookSecret, notJson, f.now()) }), rejected('INVALID_JSON'));
   assert.equal(await f.store.get('billingEvents/fake:evt_bad'), null);
-  for (const t of Object.keys(PROVIDER_EVENTS)) assert.ok(['payment.succeeded', 'payment.failed', 'terminate', 'refund'].includes(PROVIDER_EVENTS[t]));
+  for (const t of Object.keys(PROVIDER_EVENTS)) assert.ok(['payment.succeeded', 'payment.failed', 'terminate', 'refund', 'pause.start', 'pause.end'].includes(PROVIDER_EVENTS[t])); // pause.start/end: the provider's echo of collection paused or resumed (12 Sep 2026)
   assert.ok(!Object.values(PROVIDER_EVENTS).includes('plan.change'), 'no webhook changes seat capacity before 3.4');
 });
 async function serverTest(t) {

@@ -20,10 +20,10 @@ fi
 gcloud services enable cloudscheduler.googleapis.com --project "$PROJECT_ID" >/dev/null && echo 'Cloud Scheduler API enabled'
 IMAGE=$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format 'value(spec.template.spec.containers[0].image)')
 [[ -n "$IMAGE" ]] || { echo 'deploy the service first (block C)'; return 1 2>/dev/null || exit 1; }
-# the report claims (status only, never content) expire after 400 days and the fake provider's outbox after 14: TTL policies,
-# requested only when none is listed and then verified, as block B does
+# the report claims (status only, never content) expire after 400 days, the fake provider's outbox after 14, and the leaving
+# records after 400: TTL policies, requested only when none is listed and then verified, as block B does
 TTL_WARNINGS=0
-for GROUP in reports outbox; do
+for GROUP in reports outbox leaving; do
   STATE="$(gcloud firestore fields ttls list --collection-group="$GROUP" --project "$PROJECT_ID" --format 'value(ttlConfig.state)')"
   if [[ -z "$STATE" ]]; then
     gcloud firestore fields ttls update expireAt --collection-group="$GROUP" --enable-ttl --project "$PROJECT_ID" --quiet --async >/dev/null && echo "TTL policy requested for $GROUP"
@@ -32,7 +32,10 @@ for GROUP in reports outbox; do
   if [[ -n "$STATE" ]]; then echo "TTL $GROUP: $STATE"; else echo "WARNING: no TTL policy on $GROUP (rerun this block, or look under Firestore > Time-to-live)"; TTL_WARNINGS=$((TTL_WARNINGS + 1)); fi
 done
 # the sender's display name has a space and angle brackets, so the variables use | between them (gcloud topic escaping)
+# OWNER_EMAIL is where the monthly leaving report goes (FEEDBACK_TO wins when the service has one): the same Monday run that sends
+# the monthly family reports sends it, for the month just ended, so there is one schedule and not two (DEPLOY_V3.md → 5b).
 ENV_VARS="^|^APP_MODE=staging|FIREBASE_PROJECT_ID=$PROJECT_ID|CONFIRM_PROJECT=$PROJECT_ID|OPERATOR_ID=scheduler@$PROJECT_ID|APP_ORIGIN=https://$PROJECT_ID.web.app|EMAIL_PROVIDER=$EMAIL_PROVIDER|EMAIL_FROM=$EMAIL_FROM"
+if [[ -n "${OWNER_EMAIL:-}" ]]; then ENV_VARS="$ENV_VARS|OWNER_EMAIL=$OWNER_EMAIL"; echo "the monthly leaving report will go to $OWNER_EMAIL"; else echo 'no OWNER_EMAIL: the monthly leaving report is skipped with a log line (rerun this block with OWNER_EMAIL set)'; fi
 VERB=create; gcloud run jobs describe "$JOB" --project "$PROJECT_ID" --region "$REGION" >/dev/null 2>&1 && VERB=update
 gcloud run jobs "$VERB" "$JOB" --project "$PROJECT_ID" --region "$REGION" --image "$IMAGE" --service-account "$RUNTIME_SA" \
   --command node --args scripts/report.mjs,send --max-retries 0 --task-timeout 20m --memory 512Mi \

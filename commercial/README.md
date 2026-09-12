@@ -52,6 +52,13 @@ from the old project directly. The commercial server explicitly refuses the lega
   totals, a goldilocks pace and a System Scan focus offer (about 75 % weak styles, 25 % recap). Its buttons open the app,
   which confirms before anything changes, and mail apps get RFC 8058 one-click unsubscribe. Until the owner opens a Resend
   account the `fake` provider keeps each email in Firestore's outbox for 14 days (`DEPLOY_V3.md` → Email).
+- Cancel or pause (12 Sep 2026): one page, reached from Mission Control and from an email's unsubscribe link. It names
+  what will and will not change, asks why, and offers an alternative before it does anything — the report monthly
+  instead of weekly, a pause of one to three months (`pause_collection`, behaviour `void`: nothing is collected and
+  nothing is granted beyond the period already paid for), a smaller plan at renewal, or the feedback panel for a
+  technical problem — at most one set of offers per family per 90 days. Each flow is recorded at
+  `families/{f}/leaving/{id}` (TTL 400 days), and once a month the owner gets a plain report of who left, why, and which
+  offers worked (`scripts/report.mjs leaving`, `PRIVACY.md`).
 
 ## Not implemented yet (Stage 3+)
 

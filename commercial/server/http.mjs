@@ -70,7 +70,7 @@ async function oneClick(req) {
   const text = Buffer.concat(parts).toString('utf8');
   return type === 'multipart/form-data' ? /name="List-Unsubscribe"\r?\n(?:[^\r\n]+\r?\n)*\r?\nOne-Click\r?\n/i.test(text) : new URLSearchParams(text).get('List-Unsubscribe') === 'One-Click';
 }
-export function createApp(service, cfg, { publicDir = new URL('../public/', import.meta.url), reportError = () => {}, learning = null, game = null, billing = null, payments = null, support = null, recovery = null, email = null, feedback = null, peerFactor = 20 } = {}) {
+export function createApp(service, cfg, { publicDir = new URL('../public/', import.meta.url), reportError = () => {}, learning = null, game = null, billing = null, payments = null, support = null, recovery = null, email = null, feedback = null, leaving = null, peerFactor = 20 } = {}) {
   // A session cookie lives exactly as long as the session row it names (F12), read back from the row the service has just
   // written: 30 minutes for a parent, 12 hours on the launch pad, or what is left of 30 days on a remembered device. The
   // rotation has already committed, so a failed read never fails the request (review of PR #44): the cookie then gets the
@@ -308,12 +308,18 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
       if (billing && path === '/api/billing/trial') return json(200, await billing.startTrial(ctx, data));
       if (billing && path === '/api/billing/cancel') return json(200, await (payments ? payments.cancel(ctx, data) : billing.cancel(ctx, data))); // Stage 4.2: the provider hears it first
       if (billing && path === '/api/billing/seats') return json(200, await billing.seats(ctx, data));
+      // Leaving (12 Sep 2026): pause and resume. The provider hears each first (payments.mjs); without a gateway the machine alone records it.
+      if (billing && path === '/api/billing/pause') return json(200, await (payments ? payments.pause(ctx, data) : billing.pause(ctx, data)));
+      if (billing && path === '/api/billing/resume') return json(200, await (payments ? payments.resume(ctx, data) : billing.resume(ctx, data)));
       if (payments && path === '/api/billing/checkout') return json(200, await payments.checkout(ctx, data));
       if (payments && path === '/api/billing/plan') return json(200, await payments.changePlan(ctx, data));
       if (support && path === '/api/family/deletion') return json(200, await support.requestDeletion(ctx, data));
       if (support && path === '/api/family/deletion/cancel') return json(200, await support.cancelDeletion(ctx, data));
       if (support && path === '/api/account/deletion') return json(200, await support.deleteAccount(ctx, data)); // Stage 4: the sign-in account, once no family remains
       if (email && path === '/api/account/email') return json(200, await email.setPrefs(ctx, data)); // email-v1: Mission Control's switches (recent sign-in)
+      // Leaving (12 Sep 2026): the flow asks what its offers are (reads only), then records the reason and does what was asked.
+      if (leaving && path === '/api/leaving/offers') return json(200, await leaving.offers(ctx, data));
+      if (leaving && path === '/api/leaving') return json(200, await leaving.submit(ctx, data));
       if (game && path === '/api/game/shop/buy') return json(200, await game.buy(ctx, data));
       if (game && path === '/api/game/shop/equip') return json(200, await game.equip(ctx, data));
       if (game && path === '/api/game/rewards/redeem') return json(200, await game.redeem(ctx, data));

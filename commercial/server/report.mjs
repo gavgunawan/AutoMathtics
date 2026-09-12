@@ -47,11 +47,30 @@ export { weekStart }; // the Monday of an ISO week lives beside weekISO (progres
 export function weekDays(week) { const s = weekStart(week); if (s === null) throw Error('WEEK_INVALID'); return Array.from({ length: 7 }, (_, i) => new Date(s + i * DAY).toISOString().slice(0, 10)); }
 /** The last complete ISO week in a time zone: the week before the one its today is in. */
 export const lastWeek = (now, timeZone) => weekISO(Date.parse(dayISO(now, timeZone)) - 7 * DAY, 'UTC');
-/** "7–13 Sep 2026", "31 Aug – 6 Sep 2026", "29 Dec 2025 – 4 Jan 2026". */
-export function weekLabel(week) {
-  const d = weekDays(week), [a, b] = [d[0], d[6]].map((x) => x.split('-').map(Number)), mon = (x) => MONTHS[x[1] - 1];
+/** "7–13 Sep 2026", "31 Aug – 6 Sep 2026", "29 Dec 2025 – 4 Jan 2026" — from the first date to the last, however many weeks apart. */
+export function rangeLabel(from, to) {
+  const [a, b] = [from, to].map((x) => x.split('-').map(Number)), mon = (x) => MONTHS[x[1] - 1];
   if (a[0] !== b[0]) return `${a[2]} ${mon(a)} ${a[0]} – ${b[2]} ${mon(b)} ${b[0]}`;
   return a[1] !== b[1] ? `${a[2]} ${mon(a)} – ${b[2]} ${mon(b)} ${b[0]}` : `${a[2]}–${b[2]} ${mon(b)} ${b[0]}`;
+}
+export function weekLabel(week) { const d = weekDays(week); return rangeLabel(d[0], d[6]); }
+// Leaving (12 Sep 2026): a family on the monthly cadence gets its report on the first Monday of the month, covering the four
+// complete weeks that end with the report's own week. The job runs on a Monday for the week just gone, so the week to send is
+// the one whose following Monday — the day the email goes out — falls on the 1st to the 7th. It follows from the week alone, so
+// an operator's rerun (send --week) decides the same thing the scheduled run did.
+export const MONTHLY_WEEKS = 4;
+export const isMonthlySendWeek = (week) => { const s = weekStart(week); return s !== null && new Date(s + 7 * DAY).getUTCDate() <= 7; };
+/** The month the owner's leaving report covers on that Monday: the one before it, which is the last complete month. 'YYYY-MM'. */
+export function monthlyLeavingMonth(week) {
+  const s = weekStart(week); if (s === null) throw Error('WEEK_INVALID');
+  const out = new Date(s + 7 * DAY); // the Monday the email goes out: the 1st to the 7th of its month
+  const prev = new Date(Date.UTC(out.getUTCFullYear(), out.getUTCMonth() - 1, 1));
+  return `${prev.getUTCFullYear()}-${String(prev.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+/** The four complete ISO weeks ending with `week`, oldest first. */
+export function monthlyWeeks(week, count = MONTHLY_WEEKS) {
+  const s = weekStart(week); if (s === null) throw Error('WEEK_INVALID');
+  return Array.from({ length: count }, (_, i) => weekISO(s - (count - 1 - i) * 7 * DAY, 'UTC'));
 }
 
 // ---- the goldilocks pace
@@ -78,16 +97,16 @@ export function goldilocks(items, pacePercent) {
   return { current: p, suggested: s, direction: s < p ? 'faster' : s > p ? 'slower' : 'keep', enough: true, held: guarded && s === p, limit: s === p ? beyond : null, evidence: { q, accuracy, timeoutRate, n } };
 }
 const pct = (x) => `${Math.round(x * 100)}%`;
-/** The pace in one plain sentence, the child named, no pronoun guessed. */
-export function paceSentence(name, g) {
-  if (!g.enough) return `Not enough play this week to suggest a pace (${g.evidence.n} answer${g.evidence.n === 1 ? '' : 's'}; ${PACE_RULES.minAnswers} needed).`;
+/** The pace in one plain sentence, the child named, no pronoun guessed. `period` is the word for what it covers: a week, or a month. */
+export function paceSentence(name, g, period = 'week') {
+  if (!g.enough) return `Not enough play this ${period} to suggest a pace (${g.evidence.n} answer${g.evidence.n === 1 ? '' : 's'}; ${PACE_RULES.minAnswers} needed).`;
   const { q, accuracy: acc, timeoutRate: tr } = g.evidence, p = g.current, s = g.suggested, timingOut = tr > PACE_RULES.timeouts;
   const within = q === null ? '' : q < 0.5 ? 'under half the time allowed' : `up to ${pct(q)} of the time allowed`;
   if (g.direction === 'faster') return `${name} uses ${within} on 8 in 10 correct answers, at ${pct(acc)} accuracy: the goldilocks pace is ${s}% (now ${p}%) — more push, still room to think.`;
   if (g.direction === 'slower') return timingOut ? `${name} ran out of time on ${pct(tr)} of questions, at ${pct(acc)} accuracy: the goldilocks pace is ${s}% (now ${p}%) — more time to think it through.`
     : `${name} needs ${within} on 8 in 10 correct answers, at ${pct(acc)} accuracy: the goldilocks pace is ${s}% (now ${p}%) — more room to think.`;
   if (timingOut) return `${name} ran out of time on ${pct(tr)} of questions; the pace is already ${p}%, at the most time a question can have.`;
-  if (acc < PACE_RULES.accuracy) return `${name} got ${pct(acc)} right this week: the pace stays at ${p}%, and gets faster only once accuracy is back to 80%.`;
+  if (acc < PACE_RULES.accuracy) return `${name} got ${pct(acc)} right this ${period}: the pace stays at ${p}%, and gets faster only once accuracy is back to 80%.`;
   if (g.limit === 'floor') return `${name} uses ${within} on 8 in 10 correct answers, at ${pct(acc)} accuracy: the pace stays at ${p}%, as the goldilocks pace never goes under ${PACE_RULES.min}%.`;
   if (g.limit === 'ceiling') return `${name} needs ${within} on 8 in 10 correct answers, at ${pct(acc)} accuracy: the pace stays at ${p}%, as the goldilocks pace never goes over ${PACE_RULES.max}%.`;
   return `${name} uses ${within} on 8 in 10 correct answers, at ${pct(acc)} accuracy: the pace of ${p}% is already in the goldilocks zone.`;
@@ -98,29 +117,37 @@ export function paceSentence(name, g) {
 export const inputsOf = (prog) => ({ history: prog.history, pacePercent: prog.pacePercent, scanFocus: prog.scanFocus === true, lastScanWeek: prog.wallet?.lastScanWeek ?? null,
   levels: { engine: trk(prog, 'engine'), nav: trk(prog, 'nav') } });
 /**
- * One child's week. `history` is the progress document's, newest first; `levels` are the tracks as they stand now, which is
+ * One child's week — or, for a family on the monthly cadence, the four complete weeks `weeks` names, which are contiguous and
+ * end with `week`. `history` is the progress document's, newest first; `levels` are the tracks as they stand now, which is
  * what the System Scan's unlock rule reads. A quit row has no answers and counts apart.
  */
-export function buildChildReport({ history, pacePercent, scanFocus, lastScanWeek, levels, week, nickname = 'Your child' }) {
-  const days = weekDays(week), inWeek = (r) => typeof r?.date === 'string' && r.date >= days[0] && r.date <= days[6], kept = Array.isArray(history) ? history : [];
+export function buildChildReport({ history, pacePercent, scanFocus, lastScanWeek, levels, week, weeks = null, period = 'week', nickname = 'Your child' }) {
+  const span = weeks && weeks.length ? weeks : [week], from = weekDays(span[0])[0], to = weekDays(span[span.length - 1])[6];
+  const inWeek = (r) => typeof r?.date === 'string' && r.date >= from && r.date <= to, kept = Array.isArray(history) ? history : [];
   const rows = kept.filter(inWeek), played = rows.filter((r) => !r.quit), items = answersOf(played), lists = classes(styleStats(items)), correct = items.filter((x) => x.ok).length;
   const passed = (mode) => played.filter((r) => r.passed === true && (!mode || r.mode === mode)).length;
   const totals = { questions: items.length, correct, accuracy: items.length ? correct / items.length : null, minutes: Math.round(played.reduce((a, r) => a + (Number.isFinite(r.secs) ? r.secs : 0), 0) / 60),
     sessions: played.length, left: rows.length - played.length, passes: passed(), papersPassed: PAPERS_PER_SESSION * passed('paper'), checkpoints: passed('boss') };
-  const scan = { status: lastScanWeek === week || passed('scan') ? 'passed' : scanUnlocked(levels?.engine || { level: 0, paper: 1 }) ? 'available' : 'locked', focus: scanFocus === true, tried: played.some((r) => r.mode === 'scan') };
+  const scan = { status: span.includes(lastScanWeek) || passed('scan') ? 'passed' : scanUnlocked(levels?.engine || { level: 0, paper: 1 }) ? 'available' : 'locked', focus: scanFocus === true, tried: played.some((r) => r.mode === 'scan') };
   const pace = goldilocks(items, pacePercent), named = (st) => ({ ...st, label: styleLabel(st) });
   // The scan focus is offered on the very list a focused scan would use (learning.mjs → styles.mjs weakStyles): all kept history,
   // Engine only, none above the sector now, as it stands when the report is made. The week's three lists are another cut.
   const focusStyles = weakStyles(kept, levels?.engine?.level ?? 0).map((w) => named({ ...w, track: 'engine' }));
   return { nickname, week, answered: items.length > 0, totals, trouble: lists.trouble.map(named), slow: lists.slow.map(named), strong: lists.strong.map(named),
-    focusStyles, scan, pace: { ...pace, sentence: paceSentence(nickname, pace) },
+    focusStyles, scan, pace: { ...pace, sentence: paceSentence(nickname, pace, period) },
     partial: kept.length >= HISTORY_KEPT && inWeek(kept[kept.length - 1]) };
 }
-/** The family's week: every child given (the seated ones), in order; a child without an answer that week gets one line. */
-export function buildFamilyReport({ familyLabel = null, children, week }) {
-  const kids = children.map((c) => ({ childId: c.id, ...buildChildReport({ ...inputsOf(c.progress), week, nickname: c.nickname }) }));
+/**
+ * The family's week: every child given (the seated ones), in order; a child without an answer that week gets one line. With
+ * `cadence: 'monthly'` it is the family's four weeks instead, ending with `week` — the same report over a longer span, so the
+ * email, the buttons and the claim are unchanged (the buttons' expiry follows from `week`, which is still the report's own).
+ */
+export function buildFamilyReport({ familyLabel = null, children, week, weeks = null, cadence = 'weekly' }) {
+  const span = cadence === 'monthly' ? weeks || monthlyWeeks(week) : [week], period = cadence === 'monthly' ? 'month' : 'week';
+  const kids = children.map((c) => ({ childId: c.id, ...buildChildReport({ ...inputsOf(c.progress), week, weeks: span, period, nickname: c.nickname }) }));
   const sum = (k) => kids.reduce((a, c) => a + c.totals[k], 0), questions = sum('questions'), correct = sum('correct');
-  return { week, weekLabel: weekLabel(week), familyLabel, children: kids, totals: { sessions: sum('sessions'), questions, correct, accuracy: questions ? correct / questions : null }, answered: questions > 0 };
+  const days = [weekDays(span[0])[0], weekDays(span[span.length - 1])[6]];
+  return { week, weeks: span, cadence, period, weekLabel: rangeLabel(days[0], days[1]), familyLabel, children: kids, totals: { sessions: sum('sessions'), questions, correct, accuracy: questions ? correct / questions : null }, answered: questions > 0 };
 }
 
 // ---- the job: one email per family per week (scripts/report.mjs; Cloud Shell block G runs it every Monday at 07:00 Singapore)
@@ -171,7 +198,7 @@ export class Reports {
       if (!to) return await end('skipped', { reason: 'no_verified_address' });
       if (dryRun) return { week, status: 'would_send', reason: null };
       const links = this.links(ready.uid, familyId, ready.report), mail = renderReport(ready.report, links);
-      const sent = await this.mailer.send({ to, ...mail, familyId, idempotencyKey: `report:${familyId}:${week}`, tags: [{ name: 'kind', value: 'weekly_report' }, { name: 'week', value: week }],
+      const sent = await this.mailer.send({ to, ...mail, familyId, idempotencyKey: `report:${familyId}:${week}`, tags: [{ name: 'kind', value: ready.report.cadence === 'monthly' ? 'monthly_report' : 'weekly_report' }, { name: 'week', value: week }],
         headers: { 'List-Unsubscribe': `<${links.oneClick}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' } }); // RFC 8058 one-click
       // Resend refused the key as reused with another body: an email under it reached Resend already (a key still in flight is
       // PROVIDER_IN_FLIGHT, thrown by the mailer: failed below, and the next run retries it)
@@ -207,8 +234,12 @@ export class Reports {
     if (!e || e.status !== 'active' || !(e.accessUntil > now)) return { skip: 'no_entitlement' };
     const children = await this.children(familyId, family); if (!children.length) return { skip: 'no_children' };
     const uid = await this.owner(familyId); if (!uid) return { skip: 'no_owner' };
-    if (!prefsOf(await this.store.get(prefsPath(uid))).progress) return { skip: 'progress_off' };
-    const report = buildFamilyReport({ familyLabel: family.label || null, children, week });
+    // Leaving (12 Sep 2026): off, weekly, or monthly — and a monthly family only on the first Monday of the month, covering the
+    // four complete weeks that end with this one. Every other week it is skipped with a reason of its own, so the log says why.
+    const { cadence } = prefsOf(await this.store.get(prefsPath(uid)));
+    if (cadence === 'off') return { skip: 'progress_off' };
+    if (cadence === 'monthly' && !isMonthlySendWeek(week)) return { skip: 'monthly_not_due' };
+    const report = buildFamilyReport({ familyLabel: family.label || null, children, week, cadence });
     return report.answered ? { uid, report } : { skip: 'no_play' };
   }
   /** The family's owner, as the membership and the parent record both say (one owner per family in this release). */

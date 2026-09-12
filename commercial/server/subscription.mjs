@@ -27,10 +27,21 @@ export const PLANS = Object.freeze({
   family: { id: 'family', name: 'Family', seats: 4, priceCents: 900, purchasable: true },
   big: { id: 'big', name: 'Big family', seats: 6, priceCents: 1400, purchasable: true },
 });
-export const STATES = Object.freeze(['none', 'trial', 'active', 'grace', 'past_due', 'cancelled', 'expired']);
-export const EVENTS = Object.freeze(['trial.start', 'payment.succeeded', 'payment.failed', 'plan.change', 'plan.schedule', 'cancel.request', 'cancel.undo', 'terminate', 'seats.assign', 'refund']);
+export const STATES = Object.freeze(['none', 'trial', 'active', 'grace', 'past_due', 'paused', 'cancelled', 'expired']);
+export const EVENTS = Object.freeze(['trial.start', 'payment.succeeded', 'payment.failed', 'plan.change', 'plan.schedule', 'cancel.request', 'cancel.undo', 'pause.start', 'pause.end', 'terminate', 'seats.assign', 'refund']);
 const ACCESS = new Set(['trial', 'active', 'grace']);
+export const PAUSE_MONTHS = Object.freeze([1, 2, 3]); // what a parent may ask for; the provider's echo may say anything
 export const publicPlan = (p) => ({ id: p.id, name: p.name, seats: p.seats, priceCents: p.priceCents, purchasable: p.purchasable });
+/**
+ * `n` calendar months after an instant, in UTC, clamped to the end of the month: 31 January plus one month is 28 February
+ * (29 in a leap year), never 3 March. A pause's `resumesAt` is this, so "two months" means what a parent means by it.
+ * It lives here because it is a fact of the machine; server/leaving.mjs re-exports it for the report's arithmetic.
+ */
+export function monthsAfter(ms, n) {
+  const d = new Date(ms), day = d.getUTCDate(), target = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + n, 1));
+  const last = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
+  return Date.UTC(target.getUTCFullYear(), target.getUTCMonth(), Math.min(day, last), d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds(), d.getUTCMilliseconds());
+}
 
 /** The state a subscription is in at `now`, from its facts alone. */
 export function deriveState(sub, now) {
@@ -38,7 +49,10 @@ export function deriveState(sub, now) {
   if (sub.state === 'cancelled' || sub.state === 'expired') return sub.state;
   if (sub.state === 'trial') return now < sub.trialEndsAt ? 'trial' : (sub.cancelAtPeriodEnd ? 'cancelled' : 'expired');
   if (sub.state === 'active') {
-    if (now < sub.periodEnd) return 'active';
+    if (now < sub.periodEnd) return 'active'; // the period already paid for is honoured, pause or no pause
+    // Collection is paused at the provider: no invoice is due, so there is no grace, no dunning and no churn — and no access
+    // either, until the invoice after `resumesAt` is paid (which clears the pause). A pause never grants an unpaid period.
+    if (sub.pause) return 'paused';
     if (sub.cancelAtPeriodEnd) return 'cancelled';
     if (now < sub.periodEnd + GRACE_DAYS * DAY) return 'grace';
     return now < sub.periodEnd + (GRACE_DAYS + DUNNING_DAYS) * DAY ? 'past_due' : 'expired';
@@ -58,7 +72,9 @@ export function entitlementFor(sub, now) {
   const state = deriveState(sub, now), until = accessUntil(sub, now);
   return { status: ACCESS.has(state) && until > now ? 'active' : 'inactive', seatLimit: sub.seats, accessUntil: until, version: sub.version, source: 'subscription',
     state, plan: sub.plan, planName: PLANS[sub.plan]?.name || sub.plan, cancelAtPeriodEnd: !!sub.cancelAtPeriodEnd, periodEnd: sub.periodEnd || null, trialEndsAt: sub.trialEndsAt || null,
-    graceUntil: sub.state === 'active' && sub.periodEnd ? sub.periodEnd + GRACE_DAYS * DAY : null, failedAt: sub.failedAt || null,
+    // a paused subscription raises no invoice, so it has no grace period to fall into
+    graceUntil: sub.state === 'active' && sub.periodEnd && !sub.pause ? sub.periodEnd + GRACE_DAYS * DAY : null, failedAt: sub.failedAt || null,
+    pause: sub.pause ? { months: sub.pause.months ?? null, pausedAt: sub.pause.pausedAt, resumesAt: sub.pause.resumesAt ?? null, by: sub.pause.by } : null,
     scheduled: sub.scheduled ? { plan: sub.scheduled.plan, planName: PLANS[sub.scheduled.plan]?.name || sub.scheduled.plan, seats: sub.scheduled.seats, at: sub.scheduled.at } : null,
     refunds: (sub.refunds || []).length };
 }
@@ -91,7 +107,9 @@ export function transition(sub, event, now) {
       // A scheduled change is applied by the renewal on its plan (or replaced by a fresh intent); a renewal on the plan the family
       // is already on - a retried older invoice, a provider that has not moved the price yet - leaves it waiting for the next one.
       const scheduled = event.authorized || !sub?.scheduled || sub.scheduled.plan === p.id ? null : { ...sub.scheduled, at: event.periodEnd };
-      return { ...(sub || {}), plan: p.id, seats: p.seats, state: 'active', trialEndsAt: null, endedAt: null, periodEnd: event.periodEnd, cancelAtPeriodEnd, failedAt: null, failures: 0, scheduled, // endedAt: a paid subscription never carries the previous one's ending
+      // pause: the invoice after `resumesAt` is paid, so collection has resumed and the family is active again. A paid invoice
+      // during a pause (the parent paid it by hand, or the provider was un-paused there) means the same thing: money arrived.
+      return { ...(sub || {}), plan: p.id, seats: p.seats, state: 'active', trialEndsAt: null, endedAt: null, periodEnd: event.periodEnd, cancelAtPeriodEnd, failedAt: null, failures: 0, scheduled, pause: null, // endedAt: a paid subscription never carries the previous one's ending
         lastPaymentAt: now, startedAt: sub?.startedAt || now, updatedAt: now, version, provider: event.provider || sub?.provider || 'manual', providerRef: event.providerRef ?? sub?.providerRef ?? null,
         providerSubscriptionRef: event.subscriptionRef ?? sub?.providerSubscriptionRef ?? null }; // the provider's subscription this payment was for: events about another one are not this family's
     }
@@ -113,17 +131,43 @@ export function transition(sub, event, now) {
       if (state === 'none') fail(409, 'INVALID_TRANSITION');
       if (!Number.isSafeInteger(event.amountCents) || event.amountCents < 1 || (event.full !== undefined && typeof event.full !== 'boolean')) fail(400, 'INVALID_REQUEST'); // a zero-cent 'full' refund cannot cancel anyone, even by operator mistake
       const refunds = [...(sub.refunds || []), { amountCents: event.amountCents, full: event.full === true, providerRef: event.providerRef || null, at: now }];
-      return { ...sub, refunds, ...(event.full === true ? { state: 'cancelled', endedAt: now, scheduled: null } : {}), updatedAt: now, version };
+      return { ...sub, refunds, ...(event.full === true ? { state: 'cancelled', endedAt: now, scheduled: null, pause: null } : {}), updatedAt: now, version };
     }
     case 'cancel.request':
+      // A paused subscription has no period left to end and nothing being collected: cancelling it takes no access away, so it
+      // ends now rather than at a period end already past (Payments.cancel ends it at the provider too).
+      if (state === 'paused') return { ...sub, cancelAtPeriodEnd: true, state: 'cancelled', endedAt: now, pause: null, scheduled: null, updatedAt: now, version };
       if (!['trial', 'active', 'grace'].includes(state)) fail(409, 'INVALID_TRANSITION');
       return { ...sub, cancelAtPeriodEnd: true, updatedAt: now, version };
     case 'cancel.undo':
       if (!sub?.cancelAtPeriodEnd || !['trial', 'active', 'grace'].includes(state)) fail(409, 'INVALID_TRANSITION');
       return { ...sub, cancelAtPeriodEnd: false, updatedAt: now, version };
+    // Leaving (12 Sep 2026): a pause instead of a cancellation. `pause` is a fact like every other — collection is paused at
+    // the provider from the end of the period already paid for until `resumesAt` — and deriveState() reads it. The provider is
+    // the authority: its echo (`by: 'provider'`, customer.subscription.updated carrying pause_collection) sets or clears the
+    // fact whatever this record thought, and says when collection resumes.
+    case 'pause.start': {
+      if (!sub) fail(409, 'NO_SUBSCRIPTION');
+      const byProvider = event.by === 'provider';
+      if (byProvider) { if (!['active', 'paused', 'grace', 'past_due'].includes(state)) fail(409, 'INVALID_TRANSITION'); }
+      else {
+        if (state !== 'active' || sub.plan === 'trial') fail(409, 'INVALID_TRANSITION'); // a trial collects nothing; an unpaid period is never paused into access
+        if (sub.cancelAtPeriodEnd) fail(409, 'CANCEL_SCHEDULED'); // a pause must never quietly undo a cancellation the parent asked for
+        if (!PAUSE_MONTHS.includes(event.months)) fail(400, 'INVALID_MONTHS');
+        if (!Number.isSafeInteger(sub.periodEnd)) fail(409, 'INVALID_TRANSITION');
+      }
+      const pause = { months: byProvider ? sub.pause?.months ?? null : event.months,
+        pausedAt: sub.pause?.pausedAt ?? now, // an echo of our own pause does not move when it started
+        resumesAt: byProvider ? (Number.isSafeInteger(event.resumesAt) ? event.resumesAt : sub.pause?.resumesAt ?? null) : monthsAfter(sub.periodEnd, event.months),
+        by: sub.pause?.by ?? (byProvider ? 'provider' : 'parent'), echoed: byProvider || sub.pause?.echoed === true };
+      return { ...sub, pause, updatedAt: now, version };
+    }
+    case 'pause.end':
+      if (!sub) fail(409, 'NO_SUBSCRIPTION');
+      return { ...sub, pause: null, updatedAt: now, version }; // idempotent: the provider's echo of a resume this server has already recorded clears nothing twice
     case 'terminate':
       if (state === 'none') fail(409, 'INVALID_TRANSITION');
-      return { ...sub, state: 'cancelled', endedAt: now, scheduled: null, updatedAt: now, version };
+      return { ...sub, state: 'cancelled', endedAt: now, scheduled: null, pause: null, updatedAt: now, version };
     case 'seats.assign':
       if (!ACCESS.has(state)) fail(409, 'INVALID_TRANSITION');
       return { ...sub, updatedAt: now, version }; // capacity unchanged; the occupants change in assignSeats()
@@ -147,7 +191,7 @@ export function assignSeats(family, seats, seatChildIds) {
   if (next.length > seats || next.some((id) => !all.includes(id))) fail(409, 'SELECT_CHILDREN_FOR_DOWNGRADE');
   return { activeChildIds: next, activated: next.filter((id) => !active.includes(id)), deactivated: active.filter((id) => !next.includes(id)) };
 }
-const fingerprintOf = (event) => sha256(JSON.stringify({ type: event.type, provider: event.provider || null, providerRef: event.providerRef || null, plan: event.plan || null, periodEnd: event.periodEnd || null, seatChildIds: event.seatChildIds ? [...new Set(event.seatChildIds)].sort() : null, amountCents: event.amountCents ?? null, full: event.full === true }));
+const fingerprintOf = (event) => sha256(JSON.stringify({ type: event.type, provider: event.provider || null, providerRef: event.providerRef || null, plan: event.plan || null, periodEnd: event.periodEnd || null, seatChildIds: event.seatChildIds ? [...new Set(event.seatChildIds)].sort() : null, amountCents: event.amountCents ?? null, full: event.full === true, months: event.months ?? null, resumesAt: event.resumesAt ?? null, by: event.by || null }));
 
 export class Subscriptions {
   constructor({ foundation = null, store, now = Date.now, audit = null }) {
@@ -178,13 +222,14 @@ export class Subscriptions {
     }
     const result = { state: deriveState(sub, now), entitlement: entitlementFor(sub, now), activeChildIds, activated, deactivated };
     tx.set(evPath, { id: event.id, type: event.type, plan: event.plan || null, periodEnd: event.periodEnd || null, provider: event.provider || null, providerRef: event.providerRef || null,
-      seatChildIds: event.seatChildIds ? [...new Set(event.seatChildIds)].sort() : null, amountCents: event.amountCents ?? null, full: event.full === true, proration: event.proration || null, authorized: event.authorized === true, subscriptionRef: event.subscriptionRef || null, fingerprint, actor, at: now, result });
+      seatChildIds: event.seatChildIds ? [...new Set(event.seatChildIds)].sort() : null, amountCents: event.amountCents ?? null, full: event.full === true, proration: event.proration || null, authorized: event.authorized === true, subscriptionRef: event.subscriptionRef || null,
+      months: event.months ?? null, resumesAt: event.resumesAt ?? null, by: event.by || null, fingerprint, actor, at: now, result });
     this.audit(tx, `billing.${event.type}`, actor, familyId);
     return result;
   }
   /** Operator / webhook path (no browser session). Idempotent by event id + content. */
   async apply(familyId, event, actor = 'system') {
-    uuid(familyId); object(event, ['id', 'type', 'plan', 'periodEnd', 'seatChildIds', 'provider', 'providerRef', 'amountCents', 'full']); uuid(event.id);
+    uuid(familyId); object(event, ['id', 'type', 'plan', 'periodEnd', 'seatChildIds', 'provider', 'providerRef', 'amountCents', 'full', 'months', 'resumesAt', 'by']); uuid(event.id);
     if (!EVENTS.includes(event.type)) fail(400, 'INVALID_EVENT');
     if (event.type === 'trial.start') fail(400, 'TRIAL_IS_PARENT_ACTION'); // eligibility lives with the parent's verified phone
     return this.store.transaction(async (tx) => {
@@ -243,6 +288,29 @@ export class Subscriptions {
       const { s, family } = await this.parent(tx, ctx, true);
       if (!family.subscription) fail(409, 'NO_SUBSCRIPTION');
       return this.commit(tx, s.familyId, family, { id: eventId, type: body.undo === true ? 'cancel.undo' : 'cancel.request' }, s.uid, this.now());
+    });
+  }
+  /**
+   * Pause for 1, 2 or 3 months instead of leaving (the leaving flow). The period already paid for runs to its end; from then
+   * until `resumesAt` nothing is collected and nothing is granted. Payments.pause tells the provider first.
+   */
+  async pause(ctx, body) {
+    object(body, ['months', 'operationId']); const eventId = this.eventId(body);
+    if (!PAUSE_MONTHS.includes(body.months)) fail(400, 'INVALID_MONTHS');
+    return this.store.transaction(async (tx) => {
+      const { s, family } = await this.parent(tx, ctx, true);
+      if (!family.subscription) fail(409, 'NO_SUBSCRIPTION');
+      return this.commit(tx, s.familyId, family, { id: eventId, type: 'pause.start', months: body.months, by: 'parent' }, s.uid, this.now());
+    });
+  }
+  /** End a pause early. The provider hears it first (Payments.resume); its next invoice is the one that brings the family back. */
+  async resume(ctx, body) {
+    object(body, ['operationId']); const eventId = this.eventId(body);
+    return this.store.transaction(async (tx) => {
+      const { s, family } = await this.parent(tx, ctx, true);
+      if (!family.subscription) fail(409, 'NO_SUBSCRIPTION');
+      if (!family.subscription.pause && !(await tx.get(`families/${s.familyId}/billing/${eventId}`))) fail(409, 'NOT_PAUSED'); // a replay still answers as the first call did
+      return this.commit(tx, s.familyId, family, { id: eventId, type: 'pause.end', by: 'parent' }, s.uid, this.now());
     });
   }
   /** Give free seats to existing children. Adding only: swapping children within a paid cycle is not a parent action. */
