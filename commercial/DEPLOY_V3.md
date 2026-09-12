@@ -527,6 +527,68 @@ For a downgrade, append the UUIDs that keep seats; with zero seats append `none`
 Use the UI and staging tests to verify the result. Do not edit Firestore by hand to
 bypass application invariants. OPERATOR_ID is an audit label; IAM is the permission.
 
+## 6b. The operator dashboard - a private file, not a page
+
+There is no dashboard URL and no operator login: no browser route in this release is a generic admin
+surface, and adding one would be a new attack surface for one person's convenience. The dashboard is a
+read-only command that writes ONE self-contained HTML file wherever you tell it to. Run it in Cloud Shell
+or locally with the same operator environment `scripts/support.mjs` needs, then open the file from your own
+machine:
+
+```bash
+export APP_MODE=staging
+export FIREBASE_PROJECT_ID="$PROJECT_ID"
+export CONFIRM_PROJECT="$PROJECT_ID"
+export OPERATOR_ID='YOUR_OPERATOR_EMAIL'
+# SESSION_SECRET, PIN_PEPPER and the provider secret are read from the same place the server reads them
+node scripts/dashboard.mjs --out dashboard.html                       # the whole report
+node scripts/dashboard.mjs --out dashboard.html --json dashboard.json # and the numbers behind it
+node scripts/dashboard.mjs --days 180 --by age                        # a longer daily series, columns by age
+```
+
+In Cloud Shell, `cloudshell download dashboard.html` brings it to your machine; delete the copy in the
+shell afterwards. The file is plain HTML with inline CSS and one inline SVG: no script, no web font, no
+request of any kind, so it opens with the network off. It is never uploaded, never published and has no
+URL - if it needs to reach somebody else, that is a decision about a document, not a login to grant.
+
+What it holds, and the rule that keeps it safe to hold:
+
+- **Section 1, households**: how many families there are, when they were created, who is active in the
+  last 7 and 30 days, who has been quiet for 30 and 60, the region *derived from the time zone on the
+  family record* (the service stores no city and no address), children per household, ages, year levels
+  and starting options, a month-by-month subscription calendar from the last 3 months to the next 6
+  (trial ends, renewals, cancel-at-period-end dates, the ends of the grace windows, pilot-grant
+  expiries), and daily active children per **local** day with 7- and 28-day means and a sparkline.
+- **Section 2, speed matrices**: Engine then Navigator, the paper bands the history records down the side
+  and year level (or age) across. Each cell is the median seconds per question over the sessions that
+  passed with every question correct, with the median share of the allowance used and how many such
+  sessions there were. Sessions imported from v2 carry seconds without an allowance and are skipped. Two
+  review flags, about a band and never about a child: *passed unusually easily* (median share below 0.5
+  and at least 35 % faster than the neighbouring bands of the same sector and kind) and *unusually hard*
+  (median share at or above 0.9, or a pass rate below 40 %).
+- **Section 3, rewards and the shop**: parent-entered reward names folded into categories by keyword
+  (English and Indonesian - `uang jajan` is pocket money, `jajan` a snack, `main game` the console,
+  `nonton` watching something), with families, costs, redemptions, approvals, refusals, cost bands and
+  the wait to a first redemption; then the shop from the ledger - what is bought and ignored, the share
+  of children owning each item, the balance held at the moment of purchase, and what each currency does
+  (earned, spent, saved, spent as a share of earned). An appendix lists the de-duplicated raw reward
+  names, one per line, with nothing beside them.
+- **The suppression rule**: any number computed from fewer than `--min-cell` families (default **5**) is
+  not in the file at all - it prints as a dash and is absent from the JSON too. During the pilot that is
+  nearly every number, and the header says so plainly so a reader does not mistake it for a fault. Only
+  the cohort's own size (how many families and tombstones the report covers) is printed regardless,
+  because a reader cannot understand the dashes without it. `--min-cell 1` shows everything; use it only
+  where you could defend it, and delete what it produces.
+- **Nothing identifying, by construction**: the collector does not even read a nickname or a family
+  label, and there is no family, child or parent reference anywhere in the output. A test renders the
+  page from a synthetic multi-family store and fails if an id, a nickname or a label appears in the HTML
+  or the JSON.
+
+Each run writes exactly one row to the project: `audit/{uuid}` with `action: operator.dashboard`, your
+`OPERATOR_ID`, the run's settings and how many families it covered - never which ones. It expires with
+the same 400-day TTL as every other audit row (section 4b). Treat the file itself as confidential
+working material: `PRIVACY.md` has its inventory row.
+
 ## 7. Acceptance and rollback
 
 Run `ACCEPTANCE.md` on the real devices: email and SMS delivery, PIN lockout and reset,
