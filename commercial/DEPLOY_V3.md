@@ -186,7 +186,10 @@ done
 
 `checkouts`, `billingChangeIntents`, `billingReconciliations`, `deletions`, `billingEvents`, `billingCustomers` and `families/*/billing` carry no
 `expireAt` on purpose: they are financial idempotency and recovery evidence and are kept under the
-retention policy in `PAYMENTS.md`, never by TTL (S3.4-G).
+retention policy in `PAYMENTS.md`, never by TTL (S3.4-G). `supportOperations` and `incidents` carry
+none either: the first records which operator started which corrective action, the second is the
+incident log a postmortem is written from (`INCIDENTS.md`; `SUPPORT.md` → retention). The audit rows
+those actions write do expire, with every other audit row, 400 days after each row.
 
 `emailPrefs` (email-v1) has no `expireAt` either: it is the parent account's consent record and lives as long as the sign-in
 account. `reports` (the weekly email's claim and outcome, 400 days) and `outbox` (the fake mail provider's copies, 14 days) do
