@@ -45,6 +45,16 @@ fi
 for name in am-v3-session am-v3-pin-pepper $PROVIDER_SECRETS; do
   gcloud secrets versions describe 1 --secret "$name" --project "$PROJECT_ID" >/dev/null
 done
+# Send feedback (DEPLOY_V3.md → 5c): with FEEDBACK_TO the service also emails each note to that address, through Resend when
+# EMAIL_PROVIDER=resend (the key in am-v3-email-key, which block G grants the runtime account). Without it nothing is emailed.
+if [[ -n "${FEEDBACK_TO:-}" ]]; then
+  [[ "$FEEDBACK_TO" == ?*@?*.?* && "$FEEDBACK_TO" != *[[:space:]]* ]] || { echo 'FEEDBACK_TO must be one email address.' >&2; exit 1; }
+  case "${EMAIL_PROVIDER:-fake}" in
+    fake) ;;
+    resend) gcloud secrets versions describe 1 --secret am-v3-email-key --project "$PROJECT_ID" >/dev/null ;;
+    *) echo 'EMAIL_PROVIDER must be fake or resend.' >&2; exit 1 ;;
+  esac
+fi
 # The commit being deployed travels with the service — RELEASE_SHA in the environment, a release-sha label on the revision — and
 # /api/health reports it, so "which commit runs on staging" is a fact anyone can read, not a line in somebody's terminal.
 # A dirty checkout would deploy code the commit does not describe: refused — and a git that cannot answer stops the helper too
@@ -68,18 +78,19 @@ npm run test:emulator
 DIRTY="$(git status --porcelain --untracked-files=no)"
 [[ "$(git rev-parse HEAD)" == "$RELEASE_SHA" && -z "$DIRTY" ]] || { echo 'The checkout changed while the tests ran: start again.' >&2; exit 1; }
 # Ephemeral config contains ONLY public identifiers. Secret values never enter it.
-export PROJECT_ID FIREBASE_WEB_API_KEY FIREBASE_WEB_APP_ID TRUSTED_PROXY_HOPS PAYMENT_PROVIDER STRIPE_PRICE_STARTER STRIPE_PRICE_FAMILY STRIPE_PRICE_BIG RELEASE_SHA
+export PROJECT_ID FIREBASE_WEB_API_KEY FIREBASE_WEB_APP_ID TRUSTED_PROXY_HOPS PAYMENT_PROVIDER STRIPE_PRICE_STARTER STRIPE_PRICE_FAMILY STRIPE_PRICE_BIG RELEASE_SHA FEEDBACK_TO EMAIL_PROVIDER EMAIL_FROM
 node --input-type=module - "$ENV_FILE" <<'NODE'
 import { writeFileSync } from 'node:fs';
 const p = process.env;
 writeFileSync(process.argv[2], JSON.stringify({ APP_MODE: 'staging',
   APP_ORIGIN: `https://${p.PROJECT_ID}.web.app`, FIREBASE_PROJECT_ID: p.PROJECT_ID,
   FIREBASE_WEB_API_KEY: p.FIREBASE_WEB_API_KEY, FIREBASE_WEB_APP_ID: p.FIREBASE_WEB_APP_ID,
-  TRUSTED_PROXY_HOPS: p.TRUSTED_PROXY_HOPS, RELEASE_SHA: p.RELEASE_SHA, PAYMENT_PROVIDER: p.PAYMENT_PROVIDER || 'fake', ...(p.PAYMENT_PROVIDER === 'stripe' ? { STRIPE_PRICE_STARTER: p.STRIPE_PRICE_STARTER, STRIPE_PRICE_FAMILY: p.STRIPE_PRICE_FAMILY, STRIPE_PRICE_BIG: p.STRIPE_PRICE_BIG } : { FAKE_PAYMENTS_ACK: 'no-real-money' }) }), { mode: 0o600 });
+  TRUSTED_PROXY_HOPS: p.TRUSTED_PROXY_HOPS, RELEASE_SHA: p.RELEASE_SHA, PAYMENT_PROVIDER: p.PAYMENT_PROVIDER || 'fake', ...(p.PAYMENT_PROVIDER === 'stripe' ? { STRIPE_PRICE_STARTER: p.STRIPE_PRICE_STARTER, STRIPE_PRICE_FAMILY: p.STRIPE_PRICE_FAMILY, STRIPE_PRICE_BIG: p.STRIPE_PRICE_BIG } : { FAKE_PAYMENTS_ACK: 'no-real-money' }),
+  ...(p.FEEDBACK_TO ? { FEEDBACK_TO: p.FEEDBACK_TO, EMAIL_PROVIDER: p.EMAIL_PROVIDER || 'fake', EMAIL_FROM: p.EMAIL_FROM || 'AutoMathtics <onboarding@resend.dev>' } : {}) }), { mode: 0o600 });
 NODE
 # Deny browser database access BEFORE publishing the new service.
 ./node_modules/.bin/firebase deploy --config firebase.staging.json --project "$PROJECT_ID" --only firestore:rules
-gcloud run deploy "$SERVICE" --project "$PROJECT_ID" --region "$REGION"   --source "$SRC" --service-account "$RUNTIME_SA" --allow-unauthenticated   --port 8080 --memory 512Mi --cpu 1 --concurrency 4 --min-instances 0 --max-instances 3   --timeout 60 --labels "release-sha=$RELEASE_SHA" --env-vars-file "$ENV_FILE"   --set-secrets "SESSION_SECRET=am-v3-session:1,PIN_PEPPER=am-v3-pin-pepper:1,$([ "${PAYMENT_PROVIDER:-fake}" = stripe ] && echo 'STRIPE_SECRET_KEY=am-v3-stripe-key:1,WEBHOOK_SECRET_STRIPE=am-v3-webhook-stripe:1' || echo 'WEBHOOK_SECRET_FAKE=am-v3-webhook-fake:1')"
+gcloud run deploy "$SERVICE" --project "$PROJECT_ID" --region "$REGION"   --source "$SRC" --service-account "$RUNTIME_SA" --allow-unauthenticated   --port 8080 --memory 512Mi --cpu 1 --concurrency 4 --min-instances 0 --max-instances 3   --timeout 60 --labels "release-sha=$RELEASE_SHA" --env-vars-file "$ENV_FILE"   --set-secrets "SESSION_SECRET=am-v3-session:1,PIN_PEPPER=am-v3-pin-pepper:1,$([ "${PAYMENT_PROVIDER:-fake}" = stripe ] && echo 'STRIPE_SECRET_KEY=am-v3-stripe-key:1,WEBHOOK_SECRET_STRIPE=am-v3-webhook-stripe:1' || echo 'WEBHOOK_SECRET_FAKE=am-v3-webhook-fake:1')$([ -n "${FEEDBACK_TO:-}" ] && [ "${EMAIL_PROVIDER:-fake}" = resend ] && echo ',EMAIL_API_KEY=am-v3-email-key:1')"
 mkdir -p .hosting  # deliberately empty; git keeps no empty directory, so make sure it exists
 ./node_modules/.bin/firebase deploy --config firebase.staging.json --project "$PROJECT_ID" --only hosting
 # The revision this run created must be the one serving — traffic pinned to an earlier revision (a rollback per DEPLOY_V3.md §7)

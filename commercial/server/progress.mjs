@@ -162,11 +162,31 @@ export function placementFromResults(results, level) {
 }
 // v2 weekly System Scan: 25 Engine questions, ten from the current sector and fifteen from
 // previously learned sectors, shuffled. It unlocks from sector B after papers 1-20 are clear.
-export function buildScanQuestions(level, pace = 1) {
-  const qs = [];
-  const push = (li) => qs.push(question('engine', li, 1 + Math.floor(Math.random() * PAPERS_PER_LEVEL), pace));
-  for (let i = 0; i < 10; i++) push(level);
-  for (let i = 0; i < 15; i++) push(level > 0 ? Math.floor(Math.random() * level) : 0);
+// Scan focus (email-v1, a parent's yes from the weekly email or Game & progress): 19 of the 25 come from the child's weak Engine
+// styles (styles.mjs weakStyles, over all kept history), each at its own sector on a paper inside its tier's band, shared by
+// misses with at least two each; the other six are the normal mix scaled down (two from the sector now, four from earlier
+// ones). No weak style: the normal scan. The unlock, the 25/25 rule, the double pay and the retries do not change.
+export const SCAN_FOCUS = Object.freeze({ weak: 19, minEach: 2, recapCurrent: 2, recapEarlier: 4 });
+/** How many of the 19 each weak style gets: two each, the rest by misses (largest remainder, ties to the weaker). No random. */
+export function focusPlan(styles) {
+  const list = Array.isArray(styles) ? styles.slice(0, 4) : []; if (!list.length) return [];
+  const rest = SCAN_FOCUS.weak - SCAN_FOCUS.minEach * list.length, w = list.map((s) => Math.max(0, Number(s.misses) || 0)), sum = w.reduce((a, b) => a + b, 0);
+  const exact = w.map((x) => (sum ? (rest * x) / sum : rest / list.length)), whole = exact.map((x) => Math.floor(x + 1e-9)), counts = whole.map((x) => SCAN_FOCUS.minEach + x);
+  let left = SCAN_FOCUS.weak - counts.reduce((a, b) => a + b, 0);
+  for (const [, i] of exact.map((x, i) => [x - whole[i], i]).sort((a, b) => b[0] - a[0] || a[1] - b[1])) { if (left <= 0) break; counts[i]++; left--; }
+  return list.map((s, i) => ({ level: s.level, tier: s.tier, count: counts[i] }));
+}
+export function buildScanQuestions(level, pace = 1, focus = null) {
+  const qs = [], plan = focusPlan(focus);
+  const push = (li, paper) => qs.push(question('engine', li, paper, pace)), anyPaper = () => 1 + Math.floor(Math.random() * PAPERS_PER_LEVEL), earlier = () => (level > 0 ? Math.floor(Math.random() * level) : 0);
+  if (plan.length) {
+    for (const s of plan) for (let i = 0; i < s.count; i++) push(s.level, (s.tier - 1) * 20 + 1 + Math.floor(Math.random() * 20));
+    for (let i = 0; i < SCAN_FOCUS.recapCurrent; i++) push(level, anyPaper());
+    for (let i = 0; i < SCAN_FOCUS.recapEarlier; i++) push(earlier(), anyPaper());
+  } else {
+    for (let i = 0; i < 10; i++) push(level, anyPaper());
+    for (let i = 0; i < 15; i++) push(earlier(), anyPaper());
+  }
   for (let i = qs.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [qs[i], qs[j]] = [qs[j], qs[i]]; }
   return qs;
 }
@@ -227,7 +247,15 @@ export function weekISO(ms, timeZone) {
   const y0 = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
   return `${t.getUTCFullYear()}-W${String(Math.ceil(((t - y0) / 86_400_000 + 1) / 7)).padStart(2, '0')}`;
 }
+/** The Monday of an ISO week as a UTC midnight, or null for a week that does not exist (2025-W53, 2026-W00): weekISO's inverse. */
+export function weekStart(week) {
+  const m = /^(\d{4})-W(\d{2})$/.exec(typeof week === 'string' ? week : ''); if (!m) return null;
+  const jan4 = Date.UTC(Number(m[1]), 0, 4), start = jan4 - ((new Date(jan4).getUTCDay() || 7) - 1) * 86_400_000 + (Number(m[2]) - 1) * 7 * 86_400_000;
+  return weekISO(start, 'UTC') === week ? start : null;
+}
+// one unlock rule for the scan itself, the weekly report and its email (server/report.mjs): Engine Sector B, papers 1-20 clear
+export const scanUnlocked = (engine) => engine.level >= 1 && engine.paper > 20;
 export function scanState(prog, now, timeZone) {
-  const e = trk(prog, 'engine'); const unlocked = e.level >= 1 && e.paper > 20; const week = weekISO(now, timeZone);
+  const e = trk(prog, 'engine'); const unlocked = scanUnlocked(e); const week = weekISO(now, timeZone);
   return { unlocked, available: unlocked && prog.wallet.lastScanWeek !== week, week, doneThisWeek: prog.wallet.lastScanWeek === week };
 }

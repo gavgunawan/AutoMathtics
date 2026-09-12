@@ -503,3 +503,10 @@ test('a filtered page after a document id (queryAfter) on real Firestore: id ord
   assert.deepEqual((await store.transaction((tx) => tx.queryAfter(col, 'familyId', 'odd', 'd1', 5), { readOnly: true })).map(([id]) => id), ['d3', 'd5']);
   assert.deepEqual(await store.queryAfter(col, 'familyId', 'none', null, 5), []);
 });
+test('the newest rows since a time (since, the feedback read) on real Firestore: at or after the time, newest first, at most the limit', async () => {
+  const col = `since-${randomUUID()}`;
+  await store.transaction(async (tx) => { for (let i = 0; i < 5; i++) tx.set(`${col}/d${i}`, { at: 1000 + i * 10, n: i }); });
+  assert.deepEqual((await store.since(col, 'at', 1020, 10)).map(([id]) => id), ['d4', 'd3', 'd2']);
+  assert.deepEqual(await store.since(col, 'at', 0, 2), [['d4', { at: 1040, n: 4 }], ['d3', { at: 1030, n: 3 }]]);
+  assert.deepEqual(await store.since(col, 'at', 5000, 10), []);
+});

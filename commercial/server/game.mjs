@@ -1,6 +1,6 @@
 import { randomInt, randomUUID } from 'node:crypto';
 import { fail, object, text, uuid } from './security.mjs';
-import { GC_PASS, RP_PASS, EQUIP_SLOTS, LEVELS, bonusesFor, dayISO, normalizeProgress, liveDayRun, scanState, trk, trackDone, bossDue } from './progress.mjs';
+import { GC_PASS, RP_PASS, EQUIP_SLOTS, LEVELS, bonusesFor, dayISO, normalizeProgress, normalizeWallet, liveDayRun, scanState, trk, trackDone, bossDue } from './progress.mjs';
 import { entry, post } from './ledger.mjs';
 
 const MINUTE = 60_000, DAY = 24 * 60 * MINUTE;
@@ -78,6 +78,16 @@ const previousDay = (date, n = 1) => new Date(Date.parse(date) - n * DAY).toISOS
 const itemPublic = (x) => ({ id: x.id, kind: x.kind, emoji: x.emoji, name: x.name, cost: x.cost, ...(x.big ? { big: true } : {}), ...(x.hatch ? { hatch: true } : {}), ...(x.unlock ? { unlock: x.unlock } : {}) });
 const item = (id) => { const x = typeof id === 'string' ? BY_ID.get(id) : null; if (!x) fail(400, 'INVALID_ITEM'); return x; };
 const nowRow = (it, cost, now, timeZone, how = null) => ({ id: it.id, emoji: it.emoji, name: how ? `${it.name} (${how})` : it.name, cost, date: dayISO(now, timeZone), at: now });
+// What each child's card shows the launch pad and the parent (v2's player cards; port plan S1): the worn look as catalogue ids
+// and display text, never a balance or the inventory. A slot holding anything but an item of its own kind is worn as nothing.
+// The legendary tags are display text the frozen catalogue does not carry.
+export const LEGEND = Object.freeze({ pet_legend: 'legendary', pet_semilegend: 'semi' }); // public/app.js keeps the same map (tests/ui-cosmetics.test.mjs holds them equal)
+export function appearanceOf(wallet) {
+  const w = normalizeWallet(wallet), worn = (kind) => { const it = BY_ID.get(w[EQUIP_SLOTS[kind]]); return it?.kind === kind ? it : null; };
+  const pet = worn('pet'), title = worn('title'), outfit = worn('outfit'), vehicle = worn('vehicle');
+  return { ring: worn('ring')?.id ?? null, nameFx: worn('namefx')?.id ?? null, title: title ? { name: title.name } : null,
+    pet: pet ? { emoji: pet.emoji, legend: LEGEND[pet.id] ?? null } : null, outfit: outfit ? { emoji: outfit.emoji } : null, vehicle: vehicle ? { emoji: vehicle.emoji } : null };
+}
 
 function passRun(history, since) {
   let n = 0;
@@ -138,16 +148,23 @@ export function applyGameDerived(value, now, timeZone, pickIndex = (n) => random
   return { progress: { ...p, wallet: w }, events };
 }
 
+// The fluency grid (the map's heatmap, v2 3352-3364 and 3453-3471): per track, sector and tier, how many answers, how many right,
+// the seconds taken, and the pace — the seconds taken over the seconds allowed. The pace counts only the questions whose
+// allowance was logged (`timed`): a row carried over from v2 has seconds but no allowance, and its seconds against the newer
+// rows' allowances alone would make a quick child read as slow. A question without its own sector takes its session's, except
+// on a scan, whose questions come from several sectors: v2 left those out rather than skew a tier, and so does this.
 export function heatmap(progress) {
   const cells = {};
   for (const h of progress.history || []) for (const q of h.qlog || []) {
-    const track = q.track || h.track || 'engine', level = Number.isInteger(q.l) ? q.l : h.level, tier = q.t;
+    const track = q.track || h.track || 'engine', level = Number.isInteger(q.l) ? q.l : h.mode === 'scan' ? null : h.level, tier = q.t;
     if (!['engine', 'nav'].includes(track) || !Number.isInteger(level) || !Number.isInteger(tier)) continue;
-    const key = `${track}:${level}:${tier}`, c = cells[key] || { track, level, levelId: LEVELS[level]?.id || '?', tier, attempts: 0, correct: 0, secs: 0, allowed: 0 };
-    c.attempts++; c.correct += q.ok ? 1 : 0; if (Number.isFinite(q.s)) c.secs += q.s; if (Number.isFinite(q.a)) c.allowed += q.a; cells[key] = c;
+    const key = `${track}:${level}:${tier}`, c = cells[key] || { track, level, levelId: LEVELS[level]?.id || '?', tier, attempts: 0, correct: 0, secs: 0, allowed: 0, timed: 0, timedSecs: 0 };
+    c.attempts++; c.correct += q.ok ? 1 : 0; if (Number.isFinite(q.s)) c.secs += q.s;
+    if (Number.isFinite(q.a) && Number.isFinite(q.s)) { c.allowed += q.a; c.timed++; c.timedSecs += q.s; }
+    cells[key] = c;
   }
-  return Object.values(cells).map((c) => ({ ...c, accuracy: c.attempts ? Math.round(c.correct * 1000 / c.attempts) / 10 : 0,
-    avgSeconds: c.attempts ? Math.round(c.secs * 10 / c.attempts) / 10 : null, pace: c.allowed ? Math.round(c.secs * 100 / c.allowed) / 100 : null }));
+  return Object.values(cells).map(({ timedSecs, ...c }) => ({ ...c, accuracy: c.attempts ? Math.round(c.correct * 1000 / c.attempts) / 10 : 0,
+    avgSeconds: c.attempts ? Math.round(c.secs * 10 / c.attempts) / 10 : null, pace: c.allowed ? Math.round(timedSecs * 100 / c.allowed) / 100 : null }));
 }
 
 const rewardPublic = (r) => ({ id: r.id, emoji: r.emoji, name: r.name, cost: r.cost, hidden: r.hidden, cap: r.cap, childIds: r.childIds });
@@ -188,8 +205,20 @@ export const rocketFuel = (r) => Object.values(r?.fuel || {}).reduce((a, b) => a
 export const rocketReady = (r) => r?.status === 'fueling' && rocketFuel(r) >= r.goal && (!r.minEach || r.crewChildIds.every((id) => (r.fuel[id] || 0) >= r.minEach));
 const publicRocket = (r) => !r ? null : ({ id: r.id, status: r.status, prize: r.prize, currency: r.currency, goal: r.goal, minEach: r.minEach,
   crewChildIds: r.crewChildIds, fuel: r.fuel, totalFuel: rocketFuel(r), createdAt: r.createdAt, launchedAt: r.launchedAt || null });
-const childRocket = (r, childId) => !r ? null : ({ id: r.id, status: r.status, prize: r.prize, currency: r.currency, goal: r.goal, minEach: r.minEach,
-  totalFuel: rocketFuel(r), myFuel: r.fuel?.[childId] || 0, isCrew: r.crewChildIds?.includes(childId) || false, createdAt: r.createdAt, launchedAt: r.launchedAt || null });
+const childRocket = (r, childId, crew = null) => !r ? null : ({ id: r.id, status: r.status, prize: r.prize, currency: r.currency, goal: r.goal, minEach: r.minEach,
+  totalFuel: rocketFuel(r), myFuel: r.fuel?.[childId] || 0, isCrew: r.crewChildIds?.includes(childId) || false, createdAt: r.createdAt, launchedAt: r.launchedAt || null, ...(crew ? { crew } : {}) });
+// The Family Rocket's crew as a child's screen shows it (owner, 11 Sep 2026: each sibling's name and fuel, as v2 did): a
+// nickname, the amount poured and whether the minimum is met, in the crew's order — never an id: crewChildIds and the
+// fuel map keyed by child id stay out of every child projection.
+async function rocketCrew(tx, familyId, r) {
+  const crew = [];
+  for (const id of r?.crewChildIds || []) {
+    const c = await tx.get(`families/${familyId}/children/${id}`); if (!c) continue;
+    const fuel = Number.isSafeInteger(r.fuel?.[id]) ? r.fuel[id] : 0;
+    crew.push({ nickname: c.nickname, fuel, metMin: fuel >= (r.minEach || 0) });
+  }
+  return crew;
+}
 
 export class Game {
   constructor({ foundation, store, now = Date.now, pickIndex = (n) => randomInt(n) }) { this.foundation = foundation; this.store = store; this.now = now; this.pickIndex = pickIndex; }
@@ -209,9 +238,11 @@ export class Game {
     return this.store.transaction(async (tx) => {
       const { prog, cfg, family, s } = await this.child(tx, ctx);
       const rewards = cfg.rewards.filter((r) => !r.childIds?.length || r.childIds.includes(s.childId)).filter((r) => !r.hidden || prog.wallet.rp >= r.cost).map(rewardChildPublic);
-      const timeZone = family.timeZone || 'Asia/Singapore';
-      return { wallet: this.publicWallet(prog.wallet), catalog: this.catalogFor(prog, timeZone), rewards, rocket: childRocket(cfg.rocket, s.childId), heatmap: heatmap(prog), pacePercent: prog.pacePercent,
-        scan: scanState(prog, this.now(), timeZone) };
+      const timeZone = family.timeZone || 'Asia/Singapore', crew = cfg.rocket ? await rocketCrew(tx, s.familyId, cfg.rocket) : null;
+      return { wallet: this.publicWallet(prog.wallet), catalog: this.catalogFor(prog, timeZone), rewards, rocket: childRocket(cfg.rocket, s.childId, crew), heatmap: heatmap(prog), pacePercent: prog.pacePercent,
+        scan: scanState(prog, this.now(), timeZone),
+        // the home's streak note (port plan S2): today's run of pass days, shield days bridging, as the Thunder Hawk's unlock counts it
+        liveRun: liveLocalRun([...(prog.passDays || []), ...prog.wallet.shieldDays], this.now(), timeZone) };
     }, { readOnly: true });
   }
   async operation(tx, p, operationId, action, fingerprint) {
@@ -306,7 +337,7 @@ export class Game {
     return this.store.transaction(async (tx) => {
       const { s, family, cfg } = await this.parent(tx, ctx, false); const children = [];
       for (const id of family.childIds || []) { const child = await tx.get(`families/${s.familyId}/children/${id}`); const prog = normalizeProgress(await tx.get(`families/${s.familyId}/learning/${id}`));
-        if (child) children.push({ child: { id, nickname: child.nickname, icon: child.icon, status: child.status }, pacePercent: prog.pacePercent,
+        if (child) children.push({ child: { id, nickname: child.nickname, icon: child.icon, status: child.status }, pacePercent: prog.pacePercent, scanFocus: prog.scanFocus === true,
           engine: { ...trk(prog, 'engine'), levelId: LEVELS[trk(prog, 'engine').level].id, done: trackDone(prog, 'engine'), bossDue: bossDue(prog, 'engine') },
           nav: { ...trk(prog, 'nav'), levelId: LEVELS[trk(prog, 'nav').level].id, done: trackDone(prog, 'nav'), bossDue: bossDue(prog, 'nav') }, wallet: this.publicWallet(prog.wallet), stats: prog.stats, history: prog.history.slice(0, 12), heatmap: heatmap(prog) }); }
       return { timeZone: family.timeZone || 'Asia/Singapore', rewards: cfg.rewards.map(rewardPublic), rocket: publicRocket(cfg.rocket), rocketHistory: cfg.rocketHistory, children };
@@ -359,12 +390,16 @@ export class Game {
       const response = { wallet: this.publicWallet(next.wallet) }; tx.set(base, next);
       tx.set(opPath, { action: 'adjust', fingerprint: fp, response, at: this.now(), expireAt: this.now() + OP_LIFE }); this.foundation.audit(tx, 'game.parent_adjust', s.uid, s.familyId, body.childId); return response; });
   }
+  // A child's pace and, since email-v1, whether the System Scan focuses on the child's weak styles (progress.mjs buildScanQuestions): either or both.
   async settings(ctx, body) {
-    object(body, ['timeZone', 'childId', 'pacePercent']);
+    object(body, ['timeZone', 'childId', 'pacePercent', 'scanFocus']);
+    if (body.scanFocus !== undefined && typeof body.scanFocus !== 'boolean') fail(400, 'INVALID_REQUEST');
+    const hasPace = body.pacePercent !== undefined, hasFocus = body.scanFocus !== undefined;
     return this.store.transaction(async (tx) => { const { s, family } = await this.parent(tx, ctx, true); let nextFamily = family, childPath = null, prog = null;
       if (body.timeZone !== undefined && body.timeZone !== null) { const tz = text(body.timeZone, 1, 64); try { new Intl.DateTimeFormat('en', { timeZone: tz }).format(new Date()); } catch { fail(400, 'INVALID_TIME_ZONE'); } nextFamily = { ...family, timeZone: tz }; }
-      if (body.childId !== undefined && body.childId !== null) { uuid(body.childId); if (!family.childIds.includes(body.childId) || !Number.isInteger(body.pacePercent) || body.pacePercent < 10 || body.pacePercent > 200) fail(400, 'INVALID_PACE'); childPath = `families/${s.familyId}/learning/${body.childId}`; prog = normalizeProgress(await tx.get(childPath)); }
-      if (nextFamily !== family) tx.set(`families/${s.familyId}`, nextFamily); if (childPath) tx.set(childPath, { ...prog, pacePercent: body.pacePercent }); this.foundation.audit(tx, 'game.settings', s.uid, s.familyId, body.childId || null);
-      return { timeZone: nextFamily.timeZone, childId: body.childId || null, pacePercent: body.childId ? body.pacePercent : null }; });
+      if (body.childId !== undefined && body.childId !== null) { uuid(body.childId); if (!family.childIds.includes(body.childId) || (!hasPace && !hasFocus) || (hasPace && (!Number.isInteger(body.pacePercent) || body.pacePercent < 10 || body.pacePercent > 200))) fail(400, 'INVALID_PACE'); childPath = `families/${s.familyId}/learning/${body.childId}`; prog = normalizeProgress(await tx.get(childPath)); }
+      const next = childPath ? { ...prog, ...(hasPace ? { pacePercent: body.pacePercent } : {}), ...(hasFocus ? { scanFocus: body.scanFocus } : {}) } : null;
+      if (nextFamily !== family) tx.set(`families/${s.familyId}`, nextFamily); if (next) tx.set(childPath, next); this.foundation.audit(tx, 'game.settings', s.uid, s.familyId, body.childId || null);
+      return { timeZone: nextFamily.timeZone, childId: body.childId || null, pacePercent: next ? next.pacePercent : null, scanFocus: next ? next.scanFocus === true : null }; });
   }
 }

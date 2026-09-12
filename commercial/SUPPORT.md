@@ -48,6 +48,7 @@ Idempotent. In order:
 | family / parent tombstones | the minimum linkage the records above need; a returning parent starts fresh and gets no second trial |
 | `audit/*` | security and accountability trail (uid, familyId, childId, action); expires by TTL 400 days after each row |
 | `deletions/{f}`, `supportOperations/*` | who asked, who executed, what was removed and kept; which operator started which corrective action |
+| `incidents/*` | the incident log and the postmortems written from it: severity, timeline, resolution, follow-ups; no TTL (`INCIDENTS.md`) |
 
 ### How it runs
 
@@ -117,8 +118,17 @@ actions are the ones below, and each writes an audit row with the operator's ide
 | `resolve-event PROVIDER EVENT_ID OUTCOME "note"` | Stage 4.2: close an inbox row the server could not apply — `reconciliation_required` (a late event on a deleted family) or `rejected` — after acting at the provider: `refunded_at_provider`, `cancelled_at_provider`, `applied_by_operator`, `no_action_needed`; the row keeps its outcome and gains the resolution, `billingReconciliations/{id}` (`kind: event`) records it, and **attention** stops counting it |
 | `cancel-recovery UID "reason"` | Stage 4.4: cancel a pending account-recovery request (the parent says it was not them, or anything looks wrong). Protective only — there is no command that removes a second factor, shortens the wait or completes a recovery (`RECOVERY.md`) |
 | `sweep [batch]` | the routine invariant sweep over every family, every provider customer mapping and the inbox (RECONCILIATION.md → Routine sweep): seats vs children, child list vs documents, members vs parents, provider links both ways, subscription facts, ledgers, open intents/checkouts/markers, deletions due or stuck, recoveries stuck, tombstone residue. Read-only; writes `sweeps/{id}` and an audit row; exits 2 when there is a finding, so the scheduled daily run fails visibly |
+| `incident open SEVERITY "one line" [systems=a,b] [families=N] [sweep=SWEEP_UUID]`, `incident note ID "…"`, `incident close ID "…" [follow-ups="one; two"]`, `incident list [open\|closed\|all]` | Stage 4.6: the incident log `incidents/{id}` — severity 1/2/3 (anything else is `INVALID_SEVERITY`), the timeline of what was done, the resolution and the follow-ups; severity 1 carries the 72-hour deadline for telling affected parents. Closing is final (`INCIDENT_NOT_OPEN`). An audit row per verb; the document has no TTL. `INCIDENTS.md` holds the format and the postmortem template; `SUPPORT_DESK.md` holds the escalation ladder it serves |
 | `export FAMILY_UUID` | the same export the parent gets |
 | `delete FAMILY_UUID` | execute a requested deletion (above) |
+
+There is one more operator command, in its own file because it answers a different question and touches
+nothing: `node scripts/dashboard.mjs` writes a private HTML page of **aggregates** — households, the two
+speed matrices with their difficulty flags, rewards and the shop — with every number computed from fewer
+than five families left out, no identifying value anywhere, and one `operator.dashboard` audit row per run.
+It is deliberately not a route on the site: there is no operator login in this release, and no browser route
+is a generic admin surface. `DEPLOY_V3.md` section 6b says how to run it and what it holds; `PRIVACY.md` has
+the report's inventory row.
 
 Superseded checkouts and superseded/stale/creating intents appear in the report. With Stripe (Stage
 4.1/4.2) a superseded hosted session is expired at the provider, a superseded checkout never returns

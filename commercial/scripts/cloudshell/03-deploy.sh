@@ -20,4 +20,6 @@ if ! ./node_modules/.bin/firebase projects:list --project "$PROJECT_ID" >/dev/nu
   echo 'The Firebase CLI needs a sign-in: follow the link it prints, then paste the code back here.'
   ./node_modules/.bin/firebase login --no-localhost
 fi
+# Send feedback copies each note to FEEDBACK_TO when it is set (by Resend with EMAIL_PROVIDER=resend): DEPLOY_V3.md → 5c
+[[ -n "${FEEDBACK_TO:-}" ]] && export FEEDBACK_TO EMAIL_PROVIDER="${EMAIL_PROVIDER:-fake}" && echo "feedback is copied to $FEEDBACK_TO (EMAIL_PROVIDER=$EMAIL_PROVIDER)"
 npm run deploy:staging && { echo; echo 'proxy depth probe:'; curl -s -H 'X-Forwarded-For: 203.0.113.250' "https://${PROJECT_ID}.web.app/api/health"; echo; echo 'BLOCK C DONE'; }

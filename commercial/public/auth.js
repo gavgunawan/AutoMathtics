@@ -46,6 +46,8 @@ export async function signUp(email, password) {
   await sdk.sendEmailVerification(user);
   return { stage: 'verify' };
 }
+// email-v1: the new account's ID token, handed to the server once to record the sign-up boxes (app.js recordConsent); never kept
+export async function idToken() { return auth.currentUser ? auth.currentUser.getIdToken() : ''; }
 export async function checkEmail() {
   if (!auth.currentUser) return { stage: 'signin' };
   return stage(auth.currentUser);

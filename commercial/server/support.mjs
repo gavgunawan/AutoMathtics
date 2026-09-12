@@ -17,13 +17,18 @@ import { reconcile } from './ledger.mjs';
 import { deriveState, effectiveEntitlement } from './subscription.mjs';
 import { sweepSessions, RECOVERY_WINDOW_MS } from './recovery.mjs';
 import { INTENT_INFLIGHT_MS, AWAITING_PAYMENT_MS } from './payments.mjs';
+import { prefsOf, prefsPath } from './email.mjs';
 
 const DAY = 86_400_000, AUDIT_RETENTION_MS = 400 * DAY;
 export const DELETION_GRACE_MS = 14 * DAY;
+// How long after a pause's resume date the sweep waits before naming it: the provider raises its first invoice then, and a
+// payment takes a few days to fail through dunning. Sooner would name every family in the week its pause ends.
+export const GRACE_AFTER_PAUSE_MS = 7 * DAY;
 export const INTENT_OUTCOMES = Object.freeze(['no_provider_change', 'provider_reverted', 'applied_by_operator', 'refunded']);
 /** What deletion keeps, and why. */
 export const RETENTION = Object.freeze({
   'families/{f}/billing/*': 'financial record of every subscription event',
+  'families/{f}/leaving/*': 'why a family left: the reason, the offers shown and taken, the action, the plan, the seats and the creation month, with the parent\'s own words removed at deletion; names nobody and expires by TTL 400 days after each record',
   'billingEvents/*': 'provider event inbox: idempotency and dispute evidence',
   'billingCustomers/*': 'provider customer reference → family: needed to read the records above',
   'checkouts/*': 'checkout intents: idempotency evidence for hosted sessions that may have been paid',
@@ -36,8 +41,17 @@ export const RETENTION = Object.freeze({
   'deletions/{f}': 'the deletion record: who asked, who executed, what was removed and what was kept',
   'supportOperations/*': 'which operator started which corrective action, and how it ended',
   'sweeps/*': 'the routine invariant sweep: counts and findings; expires by TTL 90 days after each run',
+  'emailPrefs/{uid}': 'the parent account\'s email choices and their history (the consent record): the sign-in account outlives the family; deleted with that account',
+  'reports/*': 'weekly report status per family and week (sent or skipped, attempts, provider message id; no content); expires by TTL 400 days after each week',
+  'feedback/* (sent signed out)': 'notes from the sign-in screen name no family and no account, so no export carries them and no deletion finds them, even one with an address to answer; they expire by TTL 400 days after each (a parent\'s own notes go with the family or the sign-in account)',
+  'feedback copies (the owner\'s mailbox, Resend\'s log)': 'the emailed copy of a note, its words and the parent\'s address as Reply-To, lives outside this service: in the owner\'s mailbox for as long as the owner keeps it and in Resend\'s log for its own retention; no family or account deletion reaches it',
+  'incidents/*': 'the incident log: severity, what was done, when it was resolved and what follows — the record a postmortem is written from; no TTL',
 });
 export const DELETION_BATCH = 300; // comfortably under Firestore's 500 writes per transaction
+// The incident log (INCIDENTS.md). 1: data loss, one family's data shown to another, money taken wrongly, the app down for
+// everyone. 2: a family blocked, refunds stuck. 3: the backlog.
+export const INCIDENT_SEVERITIES = Object.freeze([1, 2, 3]);
+const INCIDENT_NOTICE_MS = 72 * 3_600_000; // severity 1: affected parents told within 72 hours when personal data was involved (SUPPORT_DESK.md → Escalation)
 const ACCESS = new Set(['trial', 'active', 'grace']);
 const flagged = (docs, key, values) => docs.filter((d) => values.includes(d[key]));
 // What an operator can establish about an inbox row the server could not apply (Stage 4.2), after acting at the provider.
@@ -79,10 +93,23 @@ export class Support {
     const config = stored ? Object.fromEntries(Object.entries(stored).filter(([k]) => k !== 'rocketMigration')) : null;
     const billing = (await tx.list(`families/${f}/billing`)).sort((a, b) => a.at - b.at)
       .map((e) => ({ id: e.id, type: e.type, plan: e.plan, periodEnd: e.periodEnd, amountCents: e.amountCents ?? null, at: e.at, actor: e.actor, state: e.result?.state || null }));
+    // email-v1: the owner's email choices, with their history; the address itself stays with the identity provider
+    const emailPrefs = [];
+    for (const [owner, m] of await tx.entries(`families/${f}/members`)) if (m.role === 'owner') { const d = await tx.get(prefsPath(owner)); emailPrefs.push({ uid: owner, ...prefsOf(d), version: d?.version || null, updatedAt: d?.updatedAt || null, changes: d?.changes || [] }); }
+    // the notes this family's parents sent with Send feedback (feedback.mjs), oldest first; one sent signed out names no family and is not here
+    const feedback = [];
+    for (let after = null; ;) {
+      const page = await tx.queryAfter('feedback', 'familyId', f, after, this.auditPage);
+      for (const [id, d] of page) feedback.push({ id, at: d.at, page: d.page, text: d.text, uid: d.uid || null, release: d.release || null });
+      if (page.length < this.auditPage) break; after = page.at(-1)[0];
+    }
+    feedback.sort((a, b) => a.at - b.at);
+    // Leaving (12 Sep 2026): every cancel-or-pause flow this family went through, oldest first, the parent's own words included
+    const leaving = (await tx.entries(`families/${f}/leaving`, 100)).map(([, r]) => r).sort((a, b) => a.at - b.at);
     const trail = await this.familyAudit(tx, f), audit = trail.rows.map((a) => ({ action: a.action, at: a.at, childId: a.childId || null })); // every row of this family's, in pages (fourth round)
     return { exportedAt: this.now(), exportedBy: uid,
       family: { id: f, label: family.label, createdAt: family.createdAt, timeZone: family.timeZone || null, activeChildIds: family.activeChildIds || [], deletion: family.deletion || null },
-      entitlement: effectiveEntitlement(family, this.now()), subscription: family.subscription || null, billing, gameConfig: config || null, children, audit, auditTruncated: trail.truncated };
+      entitlement: effectiveEntitlement(family, this.now()), subscription: family.subscription || null, billing, gameConfig: config || null, children, emailPrefs, feedback, leaving, audit, auditTruncated: trail.truncated };
   }
   /** The rows of one collection with `field` equal to `value`, read in pages under the reader given (a transaction or the store); `truncated` only past the cap — and then the rows kept are the first by document id, not by time (the cap is years of use; SUPPORT.md). Never a whole collection: one family's rows cost one family's reads (fifth round). */
   async pagedBy(reader, collection, field, value) {
@@ -163,12 +190,14 @@ export class Support {
     const now = this.now();
     tx.set(`parents/${uid}`, { ...parent, deleted: true, deletedAt: parent.deletedAt || now, familyId: null, reauthAfter: Math.max(parent.reauthAfter || 0, Math.floor(now / 1000)), phoneKey: parent.phoneKey || null,
       identityDeletion: { requestedAt: parent.identityDeletion?.requestedAt || now, requestedBy: parent.identityDeletion?.requestedBy || actor, deletedAt: parent.identityDeletion?.deletedAt || null } });
+    tx.delete(prefsPath(uid)); // email-v1: the account's email choices go with it; nothing is sent to an account being deleted
     this.audit(tx, 'account.deletion_started', actor, null, { subject: uid });
     return { uid };
   }
   /** Steps two and three: every session of the uid in bounded batches, the identity at the provider, then the record. A provider fault leaves requestedAt without deletedAt; the operator retries. */
   async finishIdentityDeletion(uid, actor) {
     const sessions = await sweepSessions(this.store, uid, DELETION_BATCH);
+    await this.sweepWhere('feedback', 'uid', uid, DELETION_BATCH, null, 'feedback'); // the notes the account sent (those with a family went with it)
     try { await this.foundation.identity.deleteUser(uid); }
     catch (error) { if (error?.code === 'auth/user-not-found' || /not.found|missing/i.test(String(error?.message))) { /* already gone at the provider: finish the record */ } else throw error; }
     return this.store.transaction(async (tx) => {
@@ -369,6 +398,13 @@ export class Support {
       const state = deriveState(sub, now);
       if (sub.periodEnd && sub.periodEnd > now + 400 * DAY) add('SUBSCRIPTION_PERIOD_ABSURD', id, new Date(sub.periodEnd).toISOString());
       if (['active', 'grace', 'past_due'].includes(state) && sub.plan !== 'trial' && sub.provider !== 'manual' && !f.billing?.[sub.provider]) add('PAID_WITHOUT_CUSTOMER', id, `${state} on ${sub.plan} via ${sub.provider}, no customer reference`);
+      // Leaving (12 Sep 2026): a paused family is reported, never counted as churn. A pause the provider never echoed, or one
+      // whose resume date has passed with no invoice since, is named: the family is waiting for money that is not coming.
+      if (sub.pause) {
+        counts.paused = (counts.paused || 0) + 1;
+        if (sub.pause.echoed !== true && sub.pause.pausedAt < now - DAY) add('PAUSE_NOT_ECHOED', id, `paused ${new Date(sub.pause.pausedAt).toISOString()} and the provider has never echoed it: reconcile-provider`);
+        if (Number.isSafeInteger(sub.pause.resumesAt) && sub.pause.resumesAt < now - GRACE_AFTER_PAUSE_MS) add('PAUSE_OVERDUE', id, `collection should have resumed ${new Date(sub.pause.resumesAt).toISOString()} and no invoice has been paid since: reconcile-provider`);
+      }
     }
     for (const [, i] of await this.store.query('billingChangeIntents', 'familyId', id, 100)) {
       if (['creating', 'awaiting_payment', 'stale', 'superseded', 'frozen_by_deletion'].includes(i.status)) counts.openIntents++;
@@ -396,6 +432,74 @@ export class Support {
       return next;
     });
   }
+
+  // ---------------------------------------------------------------- operator: the incident log (INCIDENTS.md)
+  /**
+   * Stage 4.6. Three verbs — open, note, close — one document per incident, an audit row for each,
+   * and a read-only list. It is written by hand, from a phone, while something is on fire: only the
+   * severity and one line of summary are required, everything else can arrive as a later note, and
+   * the id is short enough to type into a reply to a parent. An incident may cite the nightly sweep
+   * run that found it (`sweeps/{id}`).
+   */
+  incidentId() {
+    const d = new Date(this.now()), pad = (n) => String(n).padStart(2, '0');
+    return `inc-${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}-${randomUUID().slice(0, 4)}`;
+  }
+  async openIncident({ operator, severity, summary, systems = [], familiesAffected = 0, sweepId = null }) {
+    this.operator(operator);
+    if (!INCIDENT_SEVERITIES.includes(severity)) fail(400, 'INVALID_SEVERITY'); // 1, 2 or 3; nothing else, and never a guess
+    text(summary, 3, 500);
+    if (!Array.isArray(systems) || systems.length > 10) fail(400, 'INVALID_REQUEST');
+    for (const s of systems) text(s, 1, 40);
+    if (!Number.isSafeInteger(familiesAffected) || familiesAffected < 0) fail(400, 'INVALID_REQUEST');
+    if (sweepId !== null) uuid(sweepId); // the sweep run that named it, if one did
+    const now = this.now(), id = this.incidentId();
+    return this.store.transaction(async (tx) => {
+      if (await tx.get(`incidents/${id}`)) fail(409, 'INCIDENT_EXISTS'); // two opened in the same second under the same four characters: run it again
+      const record = { id, status: 'open', severity, summary, systems: [...systems], familiesAffected, openedAt: now, openedBy: operator, sweepId,
+        // severity 1 carries the deadline for telling affected parents when personal data was involved; the owner decides whether it was
+        parentNoticeDueAt: severity === 1 ? now + INCIDENT_NOTICE_MS : null,
+        actions: [], resolvedAt: null, resolvedBy: null, resolution: null, followUps: [] };
+      tx.set(`incidents/${id}`, record);
+      this.audit(tx, 'support.incident_opened', operator, null, { incidentId: id, severity });
+      return record;
+    });
+  }
+  /** One line on the timeline: what was tried, what it showed, what was decided. Only while the incident is open. */
+  async noteIncident(id, { operator, note }) {
+    this.operator(operator); text(id, 3, 64); text(note, 1, 1000);
+    return this.store.transaction(async (tx) => {
+      const incident = await tx.get(`incidents/${id}`); if (!incident) fail(404, 'INCIDENT_NOT_FOUND');
+      if (incident.status !== 'open') fail(409, 'INCIDENT_NOT_OPEN');
+      const next = { ...incident, actions: [...(incident.actions || []), { at: this.now(), by: operator, note }] };
+      tx.set(`incidents/${id}`, next);
+      this.audit(tx, 'support.incident_note', operator, null, { incidentId: id });
+      return next;
+    });
+  }
+  /** The end: how it was resolved, and what is left to do. Closing is final — the postmortem is written in INCIDENTS.md. */
+  async closeIncident(id, { operator, resolution, followUps = [] }) {
+    this.operator(operator); text(id, 3, 64); text(resolution, 3, 1000);
+    if (!Array.isArray(followUps) || followUps.length > 10) fail(400, 'INVALID_REQUEST');
+    for (const f of followUps) text(f, 1, 200);
+    return this.store.transaction(async (tx) => {
+      const incident = await tx.get(`incidents/${id}`); if (!incident) fail(404, 'INCIDENT_NOT_FOUND');
+      if (incident.status !== 'open') fail(409, 'INCIDENT_NOT_OPEN');
+      const now = this.now(), next = { ...incident, status: 'closed', resolvedAt: now, resolvedBy: operator, resolution, followUps: [...followUps] };
+      tx.set(`incidents/${id}`, next);
+      this.audit(tx, 'support.incident_closed', operator, null, { incidentId: id, severity: incident.severity, openForMs: now - incident.openedAt });
+      return next;
+    });
+  }
+  /** The log, newest first — `open` by default, so "what is on fire" is one command. Read-only. */
+  async listIncidents(status = 'open') {
+    if (!['open', 'closed', 'all'].includes(status)) fail(400, 'INVALID_REQUEST');
+    return (await this.store.list('incidents')).filter((r) => status === 'all' || r.status === status)
+      .sort((a, b) => (b.openedAt - a.openedAt) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)) // deterministic: newest first, then the id (two can open in the same second)
+      .map((r) => ({ id: r.id, status: r.status, severity: r.severity, summary: r.summary, systems: r.systems || [], familiesAffected: r.familiesAffected ?? null,
+        openedAt: r.openedAt, openedBy: r.openedBy, sweepId: r.sweepId || null, parentNoticeDueAt: r.parentNoticeDueAt || null,
+        notes: (r.actions || []).length, resolvedAt: r.resolvedAt || null, resolution: r.resolution || null, followUps: r.followUps || [] }));
+  }
   /**
    * Stage 4.2: the provider's truth against the family's record, read-only at the provider, one
    * reconciliation record per run (`kind: provider_state`) with the findings an operator acts on
@@ -405,8 +509,11 @@ export class Support {
     uuid(familyId); this.operator(operator);
     const family = await this.store.get(`families/${familyId}`); if (!family) fail(404, 'FAMILY_NOT_FOUND');
     const now = this.now(), sub = family.subscription || null, state = sub ? deriveState(sub, now) : 'none', gone = family.deleted === true || family.deletion?.status === 'executing';
-    const local = { state, plan: sub?.plan || null, scheduledPlan: sub?.scheduled?.plan || null, periodEnd: sub?.periodEnd || null, cancelAtPeriodEnd: !!sub?.cancelAtPeriodEnd, provider: sub?.provider || null, providerRef: sub?.providerRef || null, version: sub?.version ?? null };
-    const wantsProvider = !!sub && sub.plan !== 'trial' && ['active', 'grace', 'past_due'].includes(state) && !gone; // the family's record says a provider subscription should be live
+    const local = { state, plan: sub?.plan || null, scheduledPlan: sub?.scheduled?.plan || null, periodEnd: sub?.periodEnd || null, cancelAtPeriodEnd: !!sub?.cancelAtPeriodEnd, provider: sub?.provider || null, providerRef: sub?.providerRef || null, version: sub?.version ?? null,
+      paused: !!sub?.pause, pauseResumesAt: sub?.pause?.resumesAt ?? null, pauseEchoed: sub?.pause?.echoed === true };
+    // A paused subscription is still live at the provider — collection is paused, the subscription is not — so the record still
+    // expects one; `paused` is the state the family is in once the paid period has run out (deriveState).
+    const wantsProvider = !!sub && sub.plan !== 'trial' && ['active', 'grace', 'past_due', 'paused'].includes(state) && !gone; // the family's record says a provider subscription should be live
     const providers = [];
     for (const [provider, ref] of Object.entries(family.billing || {})) {
       const st = this.payments ? await this.payments.providerState(provider, ref, family.providerCustomer?.[provider] || null) : { provider, available: false };
@@ -424,6 +531,12 @@ export class Support {
         else if (ps.plan !== local.plan && ps.plan !== local.scheduledPlan) add('PLAN_MISMATCH', `provider ${ps.plan}; family ${local.plan}${local.scheduledPlan ? ` (scheduled ${local.scheduledPlan})` : ''}`);
         if (ps.periodEnd && local.periodEnd && Math.abs(ps.periodEnd - local.periodEnd) > 60_000) add('PERIOD_END_MISMATCH', `provider ${new Date(ps.periodEnd).toISOString()}; family ${new Date(local.periodEnd).toISOString()}`);
         if (ps.cancelAtPeriodEnd !== local.cancelAtPeriodEnd) add('CANCEL_FLAG_MISMATCH', `provider cancel at period end ${ps.cancelAtPeriodEnd}; family ${local.cancelAtPeriodEnd}`);
+        // The provider is the authority on a pause: paused there and not here would charge nothing and grant access; paused here
+        // and not there would charge a family that was told it would not be charged. Either way the operator resolves it.
+        if (ps.paused === true && !local.paused) add('PAUSE_MISMATCH', `the provider has collection paused on ${ps.ref}${ps.pauseResumesAt ? ` until ${new Date(ps.pauseResumesAt).toISOString()}` : ' with no resume date'}; the family's record is not paused`);
+        else if (ps.paused === false && local.paused) add('PAUSE_MISMATCH', `the family is paused${local.pauseResumesAt ? ` until ${new Date(local.pauseResumesAt).toISOString()}` : ''}; the provider is collecting as usual on ${ps.ref}`);
+        else if (ps.paused === true && local.paused && ps.pauseResumesAt !== local.pauseResumesAt) add('PAUSE_RESUME_MISMATCH', `provider ${ps.pauseResumesAt ? new Date(ps.pauseResumesAt).toISOString() : 'no resume date'}; family ${local.pauseResumesAt ? new Date(local.pauseResumesAt).toISOString() : 'no resume date'}`);
+        if (ps.paused === true && ps.pauseBehavior && ps.pauseBehavior !== 'void') add('PAUSE_BEHAVIOUR', `the provider's pause is "${ps.pauseBehavior}", not "void": an invoice raised now would be collected later`);
       }
       providers.push({ provider, ref, available: st.available, simulated: st.simulated === true, error: st.error || null, customer: st.customer || null, customerDeleted: st.customerDeleted === true, subscription: ps, liveCount: st.liveCount ?? null, findings });
     }
@@ -590,6 +703,8 @@ export class Support {
     const members = await this.store.entries(`families/${familyId}/members`), uids = members.map(([uid]) => uid);
     await this.sweepWhere('sessions', 'familyId', familyId, batch, familyId, 'loginSessions');
     for (const uid of uids) await this.sweepWhere('sessions', 'uid', uid, batch, familyId, 'loginSessions');
+    await this.sweepWhere('outbox', 'familyId', familyId, batch, familyId, 'outbox'); // email-v1: the fake mail provider's rendered reports go now, not in 14 days
+    await this.sweepWhere('feedback', 'familyId', familyId, batch, familyId, 'feedback'); // the notes its parents sent with Send feedback (feedback.mjs)
     await this.progress(familyId, 'sessions');
     // phase 2 — each child's learning and game data, bounded batches, then the progress document
     for (const childId of family.childIds || []) {
@@ -604,11 +719,15 @@ export class Support {
       const now = this.now(), col = (c) => tx.entries(`families/${familyId}/${c}`);
       const mem = await col('members'), childDocs = await col('children'), creds = await col('credentials'), attempts = await col('pinAttempts'), receipts = await col('operations');
       const config = await tx.get(`families/${familyId}/game/config`);
+      // Leaving (12 Sep 2026): why the family left is kept — the reason, the offers and the action name nobody and are the churn
+      // record the owner's monthly report reads — but the parent's own words go with the rest of their writing.
+      const leaving = await tx.entries(`families/${familyId}/leaving`, 100);
       const parents = []; for (const [uid] of mem) parents.push([uid, await tx.get(`parents/${uid}`)]);
       for (const [name, rows] of [['children', childDocs], ['credentials', creds], ['pinAttempts', attempts], ['operations', receipts], ['members', mem]]) for (const [id] of rows) tx.delete(`families/${familyId}/${name}/${id}`);
+      for (const [id, rec] of leaving) if (rec.freeText !== null) tx.set(`families/${familyId}/leaving/${id}`, { ...rec, freeText: null, redactedAt: now });
       if (config) tx.delete(`families/${familyId}/game/config`);
       for (const [uid, p] of parents) if (p) tx.set(`parents/${uid}`, { deleted: true, deletedAt: now, familyId: null, reauthAfter: Math.max(p.reauthAfter || 0, Math.floor(now / 1000)), phoneKey: p.phoneKey || null, createdAt: p.createdAt || null }); // seconds, like login()
-      const counts = { ...(current.deletion.counts || {}), children: childDocs.length };
+      const counts = { ...(current.deletion.counts || {}), children: childDocs.length, leavingRedacted: leaving.filter(([, r]) => r.freeText !== null).length };
       const deletion = { ...current.deletion, status: 'done', phase: 'done', executedAt: now, counts };
       tx.set(`families/${familyId}`, { id: familyId, deleted: true, deletedAt: now, deletedBy: current.deletion.executedBy || operator, createdAt: current.createdAt || null, phoneKey: current.phoneKey || null, billing: current.billing || null, providerCustomer: current.providerCustomer || null,
         subscription: current.subscription || null, childIds: [], activeChildIds: [], deletion, retention: Object.keys(RETENTION) });

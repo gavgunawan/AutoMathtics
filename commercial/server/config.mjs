@@ -1,3 +1,5 @@
+import { mailerConfig } from './mailer.mjs';
+
 export function config(env = process.env) {
   const mode = env.APP_MODE;
   if (!['emulator', 'staging', 'production'].includes(mode)) throw Error('Set APP_MODE explicitly.');
@@ -61,8 +63,13 @@ export function config(env = process.env) {
   }
   // the commit this build was deployed from (deploy-staging.sh sets it; /api/health reports it): staging evidence, never a secret
   const releaseSha = /^[0-9a-f]{40}$/.test(env.RELEASE_SHA || '') ? env.RELEASE_SHA : null;
+  // Feedback (server/feedback.mjs): with FEEDBACK_TO set and EMAIL_PROVIDER=resend each note is also emailed to the owner, under the
+  // report job's mail settings (mailer.mjs mailerConfig); without FEEDBACK_TO the service emails nothing at all.
+  const feedbackTo = env.FEEDBACK_TO || null;
+  if (feedbackTo !== null && !/^[^\s@<>"]{1,64}@[^\s@<>"]{1,190}\.[^\s@<>"]{2,}$/.test(feedbackTo)) throw Error('FEEDBACK_TO must be one email address: where feedback is copied to.');
+  const feedback = { to: feedbackTo, mail: feedbackTo ? mailerConfig(env) : null };
   const port = Number(env.PORT || 8787);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw Error('Invalid PORT.');
-  return { mode, emulator, projectId, origin, secret, pepper, previousPeppers, proxyHops, port, releaseSha, payments: { provider, webhookSecrets: { fake: webhookSecret }, stripe },
+  return { mode, emulator, projectId, origin, secret, pepper, previousPeppers, proxyHops, port, releaseSha, feedback, payments: { provider, webhookSecrets: { fake: webhookSecret }, stripe },
     web: { apiKey: env.FIREBASE_WEB_API_KEY, appId: env.FIREBASE_WEB_APP_ID, projectId, authDomain: `${projectId}.firebaseapp.com` } };
 }

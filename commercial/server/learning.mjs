@@ -3,6 +3,7 @@ import { fail, object, uuid } from './security.mjs';
 import { TRACKS, LEVELS, GC_PASS, RP_PASS, PAPERS_PER_LEVEL, PAPERS_PER_SESSION, normalizeProgress, trk, withTrk, trackDone, bossDue, settleJumps, nextRun, buildQuestions, buildScanQuestions, buildPlacementQuestions, placementFromResults, grade, answerText, bonusesFor, dayISO, weekISO, scanState } from './progress.mjs';
 import { applyGameDerived, heatmap } from './game.mjs';
 import { entry, post } from './ledger.mjs';
+import { weakStyles } from './styles.mjs';
 
 const MINUTE = 60_000, HOUR = 60 * MINUTE;
 const SESSION_LIFE = 2 * HOUR;
@@ -68,7 +69,9 @@ export class Learning {
       if (requestedMode === 'placement') { run = { mode: 'placement', level: original.placement.level, startPaper: null, tierEnd: null }; questions = buildPlacementQuestions(run.level, prog.pacePercent / 100); }
       else if (requestedMode === 'scan') {
         const state = scanState(prog, this.now(), tz); if (!state.available) fail(409, state.unlocked ? 'SCAN_ALREADY_DONE' : 'SCAN_LOCKED');
-        run = { mode: 'scan', level: trk(prog, 'engine').level, startPaper: null, tierEnd: null }; questions = buildScanQuestions(run.level, prog.pacePercent / 100);
+        run = { mode: 'scan', level: trk(prog, 'engine').level, startPaper: null, tierEnd: null };
+        // a parent's scan focus (email-v1): the weak Engine styles of all kept history, none above the sector now (styles.mjs)
+        questions = buildScanQuestions(run.level, prog.pacePercent / 100, prog.scanFocus === true ? weakStyles(prog.history, run.level) : null);
       } else { run = nextRun(prog, track); questions = buildQuestions(track, run, prog.pacePercent / 100); }
       const now = this.now(), sess = { id, childId: s.childId, track, mode: run.mode, level: run.level, startPaper: run.startPaper, tierEnd: run.tierEnd,
         questions, results: [], index: 0, askedAt: now, status: 'active', createdAt: now, expireAt: now + 24 * HOUR, lastAttempt: null };
@@ -170,7 +173,7 @@ export class Learning {
     // Earned pets, a hatching egg and a streak shield are derived from trusted progress, in this transaction.
     const derived = applyGameDerived(np, now, timeZone); np = derived.progress;
     const summary = { passed, rewarded, correct, incorrect, timeout, total, gcEarned: np.wallet.gc - prog.wallet.gc, rpEarned: np.wallet.rp - prog.wallet.rp, wallet: np.wallet,
-      track: sess.track, mode: sess.mode, papers: row.papers, gameEvents: derived.events, leveledUp: jumped.includes(sess.track), jumped,
+      track: sess.track, mode: sess.mode, papers: row.papers, secs: row.secs, gameEvents: derived.events, leveledUp: jumped.includes(sess.track), jumped, // secs: the run's time, "· m:ss min" on the summary (port plan S3)
       newLevel: trk(np, sess.track).level, newLevelId: LEVELS[trk(np, sess.track).level].id,
       bossNext: passed && !['boss', 'scan'].includes(sess.mode) && bossDue(np, sess.track), trackNowDone: passed && !jumped.includes(sess.track) && trackDone(np, sess.track) && !trackDone(prog, sess.track) };
     return { progress: np, summary };

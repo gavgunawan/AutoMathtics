@@ -8,7 +8,9 @@ import vm from 'node:vm';
 import { fixture, secret } from './support.mjs';
 import { createApp } from '../server/http.mjs';
 export class Element {
-  constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.value = ''; this._text = ''; this.attrs = {}; this.events = {}; }
+  constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.value = ''; this._text = ''; this.attrs = {}; this.events = {};
+    // only the CSSOM custom properties the page sets through setVar (the CSP refuses every other way), readable as style.props
+    this.style = { props: {}, setProperty(k, v) { this.props[k] = String(v); }, removeProperty(k) { delete this.props[k]; } }; }
   append(...items) { this.children.push(...items); }
   replaceChildren(...items) { this.children = items; this._text = ''; }
   set textContent(x) { this._text = String(x); this.children = []; }
@@ -26,12 +28,17 @@ export function control(root, label) {
 }
 // clock: a function returning the time the page reads from Date.now(), for tests that count down (omit for real time)
 // storage: a stand-in for the page's localStorage (omit: the page has none, as in a browser that blocks site data)
-// location: the page's address, e.g. { search: '?resetsms', pathname: '/' } (omit: no location, as before)
-export async function uiFixture(t, { family = true, signedIn = true, clock = null, storage = null, location = null } = {}) {
+// location: the page's address, e.g. { search: '?resetsms', pathname: '/' } (omit: no location, as before), or an async
+// function (f, a) → that address, run before the page loads, for an address that needs the fixture's ids (an email button)
+// recordBodies: routes whose request bodies the test may read back from requests; only routes that carry no credential, such as '/api/learn/answer'
+// svg: a DOM that makes SVG nodes (document.createElementNS), as a browser does (omit: it cannot, and the page must manage without)
+// audio: a stand-in for window.AudioContext (omit: the page has no WebAudio and plays nothing)
+export async function uiFixture(t, { family = true, signedIn = true, clock = null, storage = null, location = null, recordBodies = [], svg = false, audio = null } = {}) {
   const f = fixture();
   const a = signedIn ? (family ? await f.family('parentA', 2) : await f.login('parentA')) : null;
+  if (typeof location === 'function') location = await location(f, a);
   const cfg = { origin: 'http://127.0.0.1', secret, emulator: true, web: { authDomain: 'demo-am-foundation.firebaseapp.com' } };
-  const server = createApp(f.service, cfg, { learning: f.learning, game: f.game, billing: f.billing }); server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const server = createApp(f.service, cfg, { learning: f.learning, game: f.game, billing: f.billing, payments: f.payments, email: f.email, feedback: f.feedback, leaving: f.leaving }); server.listen(0, '127.0.0.1'); await once(server, 'listening');
   cfg.origin = `http://127.0.0.1:${server.address().port}`;
   t.after(() => { server.closeAllConnections(); server.close(); });
   let cookie = a ? `__session=${a.cookie}` : '';
@@ -43,10 +50,13 @@ export async function uiFixture(t, { family = true, signedIn = true, clock = nul
     postMessage(message) { broadcasts.push(message); }
   }
   const root = new Element('main'), message = new Element('p');
-  const document = { visibilityState: 'visible', querySelector: sel => sel === '#app' ? root : message,
-    createElement: tag => new Element(tag), addEventListener: (name, fn) => { documentEvents[name] = fn; } };
+  // html: the page's root element, which carries data-mode (and data-bg on kid screens); decor: the #decor layer behind #app
+  const html = new Element('html'), decor = new Element('div'); decor.id = 'decor';
+  const document = { visibilityState: 'visible', querySelector: sel => sel === '#app' ? root : message, documentElement: html,
+    getElementById: id => id === 'decor' ? decor : null, createElement: tag => new Element(tag),
+    ...(svg ? { createElementNS: (ns, tag) => Object.assign(new Element(tag), { namespaceURI: ns }) } : {}), addEventListener: (name, fn) => { documentEvents[name] = fn; } };
   const fetchForPage = async (path, options = {}) => {
-    requests.push({ path, method: options.method || 'GET' }); // never retain request credentials
+    requests.push({ path, method: options.method || 'GET', ...(recordBodies.includes(path) && options.body ? { body: JSON.parse(options.body) } : {}) }); // never retain request credentials
     const r = await fetch(cfg.origin + path, { ...options, headers: { ...options.headers, Cookie: cookie, Origin: cfg.origin } });
     const next = r.headers.get('set-cookie'); if (next) cookie = next.split(';')[0]; return r;
   };
@@ -60,7 +70,7 @@ export async function uiFixture(t, { family = true, signedIn = true, clock = nul
     pushState(state) { this.entries.splice(this.index + 1); this.entries.push({ state }); this.index++; },
     replaceState(state) { this.entries[this.index] = { state }; } };
   const windowEvents = {};
-  const window = { BroadcastChannel: Channel, speechSynthesis, SpeechSynthesisUtterance, history, addEventListener: (name, fn) => { windowEvents[name] = fn; } };
+  const window = { BroadcastChannel: Channel, speechSynthesis, SpeechSynthesisUtterance, history, addEventListener: (name, fn) => { windowEvents[name] = fn; }, ...(audio ? { AudioContext: audio } : {}) };
   // Intervals are held, never run on their own: a test ticks them (and moves its clock) explicitly.
   const intervals = new Map(); let intervalId = 0;
   const context = vm.createContext({ document, window, history, BroadcastChannel: Channel, crypto: webcrypto, fetch: fetchForPage, console, TextEncoder, URLSearchParams, ...(storage ? { localStorage: storage } : {}), ...(location ? { location } : {}),
@@ -68,12 +78,13 @@ export async function uiFixture(t, { family = true, signedIn = true, clock = nul
     setTimeout: (fn) => { fn(); return 0; },
     ...(clock ? { Date: class extends Date { static now() { return clock(); } } } : {}) });
   const api = await vm.runInContext(`(async()=>{ ${source}\nreturn { addChildScreen, familySetup, resetPinScreen, signInScreen, refresh, hms,
-    getModel:()=>model, isWorking:()=>working, setAuth:x=>{authModule=x;} }; })()`, context);
+    getModel:()=>model, isWorking:()=>working, setWorking:x=>{working=x;}, setAuth:x=>{authModule=x;} }; })()`, context); // setWorking: a request in flight, held for as long as a test needs
   const idle = async () => { for (let i = 0; i < 1000 && api.isWorking(); i++) await new Promise(r => setTimeout(r, 2)); assert.equal(api.isWorking(), false); };
   const setAuth = (uid = 'parentA', extra = {}) => api.setAuth({ signIn: async () => ({ stage: 'ready', idToken: f.token(uid) }), clear: async () => {}, ...extra });
   const submitLogin = async () => {
     const form = nodes(root, 'FORM')[0]; assert.ok(form, 'login form missing');
     const inputs = nodes(form, 'INPUT'); inputs[0].value = 'synthetic@example.test'; inputs[1].value = 'SyntheticPasswordOnly';
+    for (const again of inputs.slice(2)) if (again.type === 'password') again.value = inputs[1].value; // sign-up asks for it twice
     form.onsubmit({ preventDefault() {} }); await idle();
   };
   const draft = async (nickname = 'Private draft') => {
@@ -82,10 +93,14 @@ export async function uiFixture(t, { family = true, signedIn = true, clock = nul
     nodes(root, 'SELECT')[0].value = 'wolf'; f.advance(301000);
     await control(root, 'Create child profile').onclick(); assert.ok(root.textContent.includes('PARENT VERIFICATION'));
   };
-  return { f, a, root, message, api, requests, broadcasts, nodes: tag => nodes(root, tag), click: label => control(root, label).onclick(),
+  return { f, a, root, message, html, decor, api, requests, broadcasts, nodes: tag => nodes(root, tag), click: label => control(root, label).onclick(),
     idle, setAuth, submitLogin, draft, cookie: () => cookie, setCookie: value => { cookie = `__session=${value}`; },
     visibility: () => documentEvents.visibilitychange?.(), sessionChange: () => channelHandler?.(),
-    history, intervals: () => intervals.size, tick: () => { for (const fn of [...intervals.values()]) fn(); },
+    tap: (type = 'click') => documentEvents[type]?.({ type }), // a user's tap as the document sees it first (a click, a touchend, a key)
+    // the release check (app.js releaseTick) lives as long as the page: ticked with the other clocks, never counted among them;
+    // tick's promise settles once every clock has done its work (the check's question to the server included)
+    history, intervals: () => [...intervals.values()].filter((fn) => fn.name !== 'releaseTick').length, tick: () => Promise.all([...intervals.values()].map((fn) => fn())),
+    setRelease: (release) => { cfg.releaseSha = release; }, // a deploy, as the running server would report it
     // the browser's Back: one entry down, popstate with that entry's state, or out of the page from the first entry
     back: async () => { if (history.index === 0) { history.left++; return; } history.index--; windowEvents.popstate?.({ state: history.state }); await idle(); },
     popstate: async (state) => { windowEvents.popstate?.({ state }); await idle(); } };

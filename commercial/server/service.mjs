@@ -3,12 +3,15 @@ import { Fault, fail, sha256, mac, randomToken, object, text, uuid, pin, childIn
 import { initialProgress, normalizeProgress } from './progress.mjs';
 import { effectiveEntitlement } from './subscription.mjs';
 import { recoveryView } from './recovery.mjs';
+import { appearanceOf } from './game.mjs';
+import { prefsOf, prefsPath } from './email.mjs';
 
 const MINUTE = 60_000, DAY = 24 * 60 * MINUTE;
 // Remember this device (owner's request, 11 Sep 2026): how long a session lasts on a device the parent ticked it on.
 export const REMEMBER_MS = 30 * DAY;
 const FAMILY_LIMIT = 20; // Pilot safety cap, independent of paid seat count.
-const AUDIT_RETENTION_MS = 400 * DAY, OPERATION_RETENTION_MS = DAY;
+export const AUDIT_RETENTION_MS = 400 * DAY; // the weekly report job writes its run's row with the same expiry (report.mjs)
+const OPERATION_RETENTION_MS = DAY;
 export const DEFAULT_TIME_ZONE = 'Asia/Singapore'; // the family's calendar day for streaks; parent-editable later
 const sessionKey = (token) => /^[A-Za-z0-9_-]{43}$/.test(token || '') ? sha256(token) : null;
 
@@ -26,6 +29,7 @@ export class Foundation {
     this.secret = secret; this.now = now;
   }
   // Audit rows expire after AUDIT_RETENTION_MS through the Firestore TTL policy on `expireAt`.
+  // `extra` names what a row alone cannot say (which email button was applied); never a secret, an address or a body.
   audit(tx, action, uid, familyId = null, childId = null, extra = null) {
     tx.set(`audit/${randomUUID()}`, { action, uid, familyId, childId, at: this.now(), expireAt: this.now() + AUDIT_RETENTION_MS, ...(extra && typeof extra === 'object' ? extra : {}) });
   }
@@ -141,14 +145,18 @@ export class Foundation {
   async me(ctx) {
     return this.store.transaction(async (tx) => {
       const { s, family, child } = await this.authorize(tx, ctx, ['parent', 'selector', 'child'], false);
-      if (s.role === 'child') return { role: 'child', csrf: s.csrf, child: publicChild(child) };
+      // a child's colour is its place in the family (v2's player palette, styles.css acc-N); presentation only
+      const accent = (id) => Math.max(0, family?.childIds?.indexOf(id) ?? 0) % 6;
+      if (s.role === 'child') return { role: 'child', csrf: s.csrf, child: { ...publicChild(child), accent: accent(child.id) } };
       const children = [];
       for (const id of family?.childIds || []) {
         const c = await tx.get(`families/${s.familyId}/children/${id}`);
-        if (c) children.push(publicChild(c));
+        // the launch pad and the parent draw each card with what the child wears (port plan S1): the look, never the wallet
+        if (c) children.push({ ...publicChild(c), accent: accent(id), appearance: appearanceOf((await tx.get(`families/${s.familyId}/learning/${id}`))?.wallet) });
       }
       const recovery = s.role === 'parent' ? recoveryView(await tx.get(`recoveries/${s.uid}`), this.now()) : null; // Stage 4.4: a finished request is shown until acknowledged
-      return { role: s.role, csrf: s.csrf, ...(s.role === 'parent' ? { parent: { uid: s.uid }, recovery, rememberedUntil: s.remember === true ? s.expiresAt : null } : {}), family: family ? {
+      const emailPrefs = s.role === 'parent' ? prefsOf(await tx.get(prefsPath(s.uid))) : null; // email-v1: Mission Control's switches, as the server holds them
+      return { role: s.role, csrf: s.csrf, ...(s.role === 'parent' ? { parent: { uid: s.uid }, recovery, rememberedUntil: s.remember === true ? s.expiresAt : null, emailPrefs } : {}), family: family ? {
         id: family.id, label: family.label, children,
         ...(s.role === 'parent' ? { entitlement: effectiveEntitlement(family, this.now()), activeCount: family.activeChildIds.length, deletion: family.deletion ? { requestedAt: family.deletion.requestedAt, effectiveAt: family.deletion.effectiveAt } : null } : {}),
       } : null };

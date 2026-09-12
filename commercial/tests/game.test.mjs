@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { fixture, rejected, canonical } from './support.mjs';
 import { freshProgress, normalizeProgress } from '../server/progress.mjs';
-import { applyGameDerived, SHOP_ITEMS } from '../server/game.mjs';
+import { applyGameDerived, SHOP_ITEMS, heatmap } from '../server/game.mjs';
 import { bootstrap } from '../server/ledger.mjs';
 
 const progPath = (k) => `families/${k.p.familyId}/learning/${k.child.id}`;
@@ -110,14 +110,35 @@ test('game routes preserve the Stage 1 role boundary: parent cannot spend child 
   await assert.rejects(f.game.adjust(k.childCtx, { childId: k.child.id, currency: 'gc', amount: 50, reason: 'forged child admin credit', operationId: randomUUID() }), rejected('PARENT_REQUIRED'));
 });
 
-test('child game projections do not disclose sibling reward eligibility or Rocket crew identifiers', async () => {
-  const f = fixture(), k = await f.childSession(); await earn(f, k, 1000, 1000); const parent = await parentAgain(f);
+// The owner (11 Sep 2026) chose v2's crew line: a child sees each crew member's nickname and fuel on the Family Rocket. The
+// projection carries exactly those and whether the minimum is met — no one's id — and still no sibling's reward eligibility.
+test('child game projections do not disclose sibling reward eligibility or any child id; the Rocket crew is nicknames and fuel only', async () => {
+  const f = fixture(), k = await f.childSession('parentA', 2); await earn(f, k, 1000, 1000); const parent = await parentAgain(f);
+  const sibling = (await f.child(parent.ctx, 'Wolf')).child;
   await f.game.setRewards(parent.ctx, { rewards: [{ id: 'private-eligibility', emoji: '🎁', name: 'Prize', cost: 100, hidden: false, cap: 0, childIds: [k.child.id] }] });
-  await f.game.rocket(parent.ctx, { action: 'build', prize: { emoji: '🍦', name: 'Ice cream' }, currency: 'gc', goal: 500, minEach: 50, crewChildIds: [k.child.id] });
+  const built = await f.game.rocket(parent.ctx, { action: 'build', prize: { emoji: '🍦', name: 'Ice cream' }, currency: 'gc', goal: 500, minEach: 50, crewChildIds: [k.child.id, sibling.id] });
+  await f.game.fuel(k.childCtx, { rocketId: built.rocket.id, amount: 50, operationId: randomUUID() });
   const state = await f.game.state(k.childCtx);
   assert.equal(state.rewards[0].childIds, undefined);
   assert.equal(state.rocket.crewChildIds, undefined); assert.equal(state.rocket.fuel, undefined);
-  assert.equal(state.rocket.isCrew, true); assert.equal(state.rocket.myFuel, 0);
+  assert.equal(state.rocket.isCrew, true); assert.equal(state.rocket.myFuel, 50);
+  assert.deepEqual(state.rocket.crew, [{ nickname: 'Fox', fuel: 50, metMin: true }, { nickname: 'Wolf', fuel: 0, metMin: false }], 'each crew member in the crew\'s order');
+  for (const member of state.rocket.crew) assert.deepEqual(Object.keys(member).sort(), ['fuel', 'metMin', 'nickname']);
+  assert.deepEqual(Object.keys(state.rocket).sort(), ['createdAt', 'crew', 'currency', 'goal', 'id', 'isCrew', 'launchedAt', 'minEach', 'myFuel', 'prize', 'status', 'totalFuel']);
+  const sent = JSON.stringify(state); for (const id of [k.child.id, sibling.id]) assert.ok(!sent.includes(id), 'no child id reaches the child\'s view');
+});
+
+// S2 (port plan section 4): the home's streak note reads the live run of pass days from the server. The fixture's clock is
+// 6 Sep 2026, 18:00 in Singapore, the family's default time zone.
+test('S2: the child\'s game state counts the live run of consecutive pass days, and a streak shield\'s day bridges a gap', async () => {
+  const f = fixture(), k = await f.childSession();
+  const run = async (passDays, shieldDays = []) => { const p = freshProgress(); p.passDays = passDays; p.wallet.shieldDays = shieldDays; await f.store.put(progPath(k), p); return (await f.game.state(k.childCtx)).liveRun; };
+  assert.equal(await run([]), 0);
+  assert.equal(await run(['2026-09-04', '2026-09-05', '2026-09-06']), 3, 'three days in a row, today included');
+  assert.equal(await run(['2026-09-04', '2026-09-05']), 2, 'a run through yesterday is still alive today');
+  assert.equal(await run(['2026-09-03', '2026-09-05']), 1, 'a missed day breaks the run');
+  assert.equal(await run(['2026-09-03', '2026-09-05'], ['2026-09-04']), 3, 'the shield\'s day bridges it');
+  assert.equal(await run(['2026-09-01', '2026-09-02', '2026-09-03']), 0, 'a run that ended before yesterday is over');
 });
 
 test('S3-F1: once the 24-hour operation receipt is gone, a reused operation id is refused by the ledger and no side effect lands twice', async () => {
@@ -141,4 +162,19 @@ test('S3-F1: once the 24-hour operation receipt is gone, a reused operation id i
   assert.equal((await f.game.state(k.childCtx)).wallet.gc, fueled.wallet.gc);
   // a different item under the old id is not a replay but a conflict
   await assert.rejects(f.game.buy(k.childCtx, { itemId: 'fit_hat', operationId: op }), rejected('LEDGER_CONFLICT'));
+});
+
+test('the heatmap\'s pace sets time against the allowance only where both were logged (a row carried over from v2 has none), and a scan\'s questions without their own sector are left out, as v2 left them', () => {
+  const p = freshProgress(), qs = (n, q) => Array.from({ length: n }, () => ({ ...q }));
+  p.history = [
+    { track: 'engine', mode: 'paper', level: 1, qlog: qs(10, { t: 1, l: 1, track: 'engine', s: 5, a: 30, ok: 1 }) },
+    { track: 'engine', mode: 'paper', level: 1, qlog: qs(5, { t: 1, s: 40, ok: 1 }) }, // carried over from v2: seconds, no allowance
+    { track: 'engine', mode: 'scan', level: 1, qlog: qs(5, { t: 2, s: 9, ok: 0 }) }, // a v2 scan: which sector each question came from is unknown
+  ];
+  const cells = heatmap(p); assert.equal(cells.length, 1, 'the scan\'s questions are not put in a tier of Sector B');
+  const [c] = cells;
+  assert.deepEqual({ levelId: c.levelId, tier: c.tier, attempts: c.attempts, correct: c.correct, timed: c.timed, allowed: c.allowed, accuracy: c.accuracy, avgSeconds: c.avgSeconds, pace: c.pace },
+    { levelId: 'B', tier: 1, attempts: 15, correct: 15, timed: 10, allowed: 300, accuracy: 100, avgSeconds: 16.7, pace: 0.17 }, 'quick where it was timed: the v2 seconds do not count against the v3 allowance');
+  assert.ok(!('timedSecs' in c));
+  assert.equal(heatmap({ history: [{ track: 'nav', mode: 'paper', level: 0, qlog: qs(6, { t: 1, s: 20, ok: 1 }) }] })[0].pace, null, 'no allowance logged at all: no pace to judge');
 });

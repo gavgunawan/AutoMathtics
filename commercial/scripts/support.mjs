@@ -8,6 +8,10 @@
 //   node scripts/support.mjs reprocess FAMILY_UUID                   server-side reprocessing of waiting events
 //   node scripts/support.mjs reconcile-intent PROVIDER OPERATION_UUID OUTCOME "what was established at the provider"
 //        OUTCOME: no_provider_change | provider_reverted | applied_by_operator | refunded
+//   node scripts/support.mjs incident open SEVERITY "one line" [systems=a,b] [families=N] [sweep=SWEEP_UUID]
+//   node scripts/support.mjs incident note INCIDENT_ID "what you did or found"
+//   node scripts/support.mjs incident close INCIDENT_ID "how it ended" [follow-ups="one; two"]
+//   node scripts/support.mjs incident list [open|closed|all]          the log, newest first (read-only)
 //   node scripts/support.mjs export FAMILY_UUID                      the family's data as JSON (stdout)
 //   node scripts/support.mjs delete FAMILY_UUID                      execute a deletion the parent requested and whose 14 days have passed
 //   node scripts/support.mjs delete-account PARENT_UID               delete the sign-in account of a parent with no family (retry after a provider failure)
@@ -63,6 +67,20 @@ switch (command) {
   case 'cancel-recovery': out(await support.cancelRecovery(rest[0], actor, rest.slice(1).join(' '))); break;
   case 'sweep': { const r = await support.inspectAll({ operator: actor, batch: Number(rest[0]) || 100 }); out(r); if (r.counts.findings) process.exitCode = 2; break; } // non-zero: a scheduled run fails visibly
   case 'resolve-event': out(await support.resolveEvent(rest[0], rest[1], { operator: actor, outcome: rest[2], note: rest.slice(3).join(' ') })); break;
+  case 'incident': {
+    // Typed on a phone while something is on fire: `key=value` arguments in any order, everything else positional,
+    // and an unquoted summary is rejoined rather than truncated (INCIDENTS.md).
+    const [verb, ...args] = rest, options = {}, positional = [];
+    for (const a of args) { const m = /^(systems|families|sweep|follow-ups)=([\s\S]*)$/.exec(a); if (m) options[m[1]] = m[2]; else positional.push(a); }
+    const split = (value, separator) => (value || '').split(separator).map((s) => s.trim()).filter(Boolean);
+    const words = positional.slice(1).join(' ');
+    if (verb === 'open') out(await support.openIncident({ operator: actor, severity: Number(positional[0]), summary: words, systems: split(options.systems, ','), familiesAffected: Number(options.families || 0), sweepId: options.sweep || null }));
+    else if (verb === 'note') out(await support.noteIncident(positional[0], { operator: actor, note: words }));
+    else if (verb === 'close') out(await support.closeIncident(positional[0], { operator: actor, resolution: words, followUps: split(options['follow-ups'], ';') }));
+    else if (verb === 'list') out(await support.listIncidents(positional[0] || 'open'));
+    else { console.error('Usage: node scripts/support.mjs incident open SEVERITY "one line" [systems=a,b] [families=N] [sweep=SWEEP_UUID] | note ID "what you did" | close ID "how it ended" [follow-ups="one; two"] | list [open|closed|all]'); process.exit(1); }
+    break;
+  }
   case 'export': { const family = await store.get(`families/${rest[0]}`); if (!family) throw Error('FAMILY_NOT_FOUND'); out(await store.transaction((tx) => support.collect(tx, family, actor), { readOnly: true })); break; }
   case 'delete': {
     if (process.env.CONFIRM_DELETION !== rest[0]) throw Error('Set CONFIRM_DELETION to the exact family id to execute a deletion.');
@@ -72,5 +90,5 @@ switch (command) {
     if (process.env.CONFIRM_DELETION !== rest[0]) throw Error('Set CONFIRM_DELETION to the exact parent uid to delete a sign-in account.');
     out(await support.deleteAccountFor(rest[0], actor)); break;
   }
-  default: console.error('Usage: node scripts/support.mjs family|customer|inbox|reprocess|reconcile-intent|reconcile-provider|resolve-event|cancel-recovery|sweep|export|delete|delete-account ...'); process.exit(1);
+  default: console.error('Usage: node scripts/support.mjs family|customer|inbox|reprocess|reconcile-intent|reconcile-provider|resolve-event|cancel-recovery|sweep|incident|export|delete|delete-account ...'); process.exit(1);
 }

@@ -45,6 +45,14 @@ test('a clean sheet passes: five papers on, ⚡50 🏆100, a history row, no act
   assert.equal(nav.started.session.count, 15); assert.equal(nav.last.summary.passed, true);
   const st2 = await f.learning.state(k.childCtx); assert.equal(st2.nav.paper, 6); assert.equal(st2.engine.paper, 6); assert.equal(st2.wallet.gc, 100);
 });
+// S3 (port plan section 4): the summary says how long the run took, the same seconds its history row keeps
+test('S3: the summary carries the session\'s time, equal to its history row\'s secs, pass or not', async () => {
+  const f = fixture(); const k = await f.childSession();
+  const { last } = await play(f, k, 'engine');
+  assert.equal(last.summary.secs, (await f.learning.state(k.childCtx)).history[0].secs); assert.equal(last.summary.secs, 75, 'twenty-five answers, three seconds apart');
+  const missed = await play(f, k, 'engine', { wrongAt: 3 });
+  assert.equal(missed.last.summary.passed, false); assert.equal(missed.last.summary.secs, (await f.learning.state(k.childCtx)).history[0].secs);
+});
 test('one wrong answer fails the session: no paper, no coins, but the row is kept', async () => {
   const f = fixture(); const k = await f.childSession();
   const { last } = await play(f, k, 'engine', { wrongAt: 7 });
