@@ -2213,10 +2213,17 @@ function joinScreen() {
     event?.preventDefault?.();
     return run(async () => {
       csrf = (await bootstrap()).csrf; // this screen skips the app's own boot, so it holds no token until it needs one
-      await api('/waitlist', { email: address.input.value.trim(), consent: tick.checked === true, source: joinSource() });
-      const done = panel('AUTOMATHTICS · MATH GRID', 'You are on the list.',
-        `We will write to ${address.input.value.trim()} on ${TRIAL.opensWords}, the morning the grid opens. Nothing else happens until then.`, 'w460 join', { back: false, page: 'join' });
-      done.append(el('p', 'If you change your mind, every email we send has an unsubscribe link in it.', 'join-words'));
+      const to = address.input.value.trim();
+      const said = await api('/waitlist', { email: to, consent: tick.checked === true, source: joinSource() });
+      // Which of the two happened, in words: someone who joins twice and is told nothing assumes it is broken and joins again
+      // (the owner, 13 Sep 2026). Spam is named, because that is where a first note usually is when it seems not to have come.
+      const done = panel('AUTOMATHTICS · MATH GRID', said.repeat ? 'You are already on the list.' : 'You are on the list.',
+        said.repeat
+          ? `${to} was already waiting. ${said.mailed ? 'We have just sent the note again.' : 'We wrote to it already — if you cannot find that note, look in your spam folder.'}`
+          : `We have sent a note to ${to}. We will write again on ${TRIAL.opensWords}, the morning the grid opens.`,
+        'w460 join', { back: false, page: 'join' });
+      document.documentElement?.setAttribute('data-mode', 'join');
+      done.append(el('p', 'Every email we send has an unsubscribe link in it.', 'join-words'));
     });
   };
   box.append(form);

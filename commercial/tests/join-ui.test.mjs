@@ -36,6 +36,7 @@ test('the address goes to the waiting list with its permission and the tag the p
   h.nodes('FORM')[0].onsubmit({ preventDefault() {} }); await h.idle();
   assert.deepEqual(h.requests.filter((r) => r.path === '/api/waitlist').map((r) => r.body), [{ email: 'Parent@Example.test', consent: true, source: 'ig' }]);
   assert.ok(text(h).includes('You are on the list.'));
+  assert.ok(text(h).includes('We have sent a note to'), 'it says a note went, so silence is never the only answer');
   assert.ok(text(h).includes('Parent@Example.test'), 'it repeats the address, so a typo is visible while it can still be fixed');
   assert.ok(text(h).includes('unsubscribe'), 'and says how to get off the list again');
 });
@@ -55,4 +56,18 @@ test('after it ends the page stops promising a trial and simply opens an account
   assert.ok(text(h).includes('The opening trial has finished.'));
   assert.ok(!text(h).includes('No card, nothing to cancel.'), 'nothing that is no longer true');
   assert.equal(h.nodes('INPUT').length, 0);
+});
+
+// The owner's report of 13 Sep 2026: joining twice with the same address said the same thing both times, so it read as broken.
+test('an address already waiting is told so, and told where to look for the note it was sent', async (t) => {
+  const h = await uiFixture(t, {
+    signedIn: false, family: false, clock: () => WIB_BEFORE, recordBodies: ['/api/waitlist'],
+    location: { pathname: '/join', search: '', hash: '', href: 'https://automathtics.net/join' },
+  });
+  await h.f.waitlist.join(h.f.waitlist.parse({ email: 'parent@example.test', consent: true })); // already waiting
+  const [address, agree] = h.nodes('INPUT');
+  address.value = 'parent@example.test'; agree.checked = true;
+  h.nodes('FORM')[0].onsubmit({ preventDefault() {} }); await h.idle();
+  assert.ok(text(h).includes('You are already on the list.'), 'not the same words as a first join');
+  assert.ok(text(h).includes('parent@example.test'));
 });
