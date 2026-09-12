@@ -35,9 +35,10 @@ export function refusalSeconds(error) {
   return wait && Number(wait[1]) > 0 ? Math.min(Number(wait[1]), Math.max(...SMS_LADDER_MS) / SECOND) : null; // never past the longest rung
 }
 /**
- * A failed send that may be the ladder's refusal with its seconds lost on the way, or a send the ladder allowed
- * that the provider then failed (a rung spent there all the same): a relayed resource-exhausted, or the provider's
- * internal error with nothing readable in it — auth/internal-error, or auth/internal-error-encountered. of 10 Sep.
+ * A failed send that may be the ladder's refusal with its seconds lost on the way, or a send the ladder allowed that
+ * the provider then failed: a relayed resource-exhausted, or the provider's internal error with nothing readable in
+ * it — auth/internal-error, or auth/internal-error-encountered. of 10 Sep. Either way no code reached the parent, so
+ * the caller holds the shortest rung rather than spending one: the function keeps the count that decides.
  */
 export function possibleRefusal(error) {
   const code = String(error?.code || ''), message = String(error?.message || '');

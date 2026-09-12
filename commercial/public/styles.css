@@ -87,6 +87,10 @@ button:disabled{opacity:.6;cursor:not-allowed}
 .text-button{background:none;border:0;padding:6px 4px;font-family:var(--ui);font-size:14px;letter-spacing:.04em;color:var(--muted);text-transform:none}
 .text-button:hover{color:var(--ink)}
 .row-buttons{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin:14px 0 0}
+/* every adult screen's Back, above the kicker and left of it: small and quiet, so it never competes with the screen's
+   own primary action, and away from the action row at the foot where a mistap would be expensive */
+.panel-back{display:flex;justify-content:flex-start;margin:0 0 14px}
+.panel-back button{font-size:11px;padding:6px 12px;letter-spacing:.12em}
 /* the parent's three steps as v2's step dots (its guide, 2556-2558): the step you are on is the long magenta one */
 .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;max-width:420px;margin:12px auto 6px}
 .steps span{display:flex;flex-direction:column;align-items:center;gap:7px;font:700 9px/1.35 var(--display);letter-spacing:.12em;color:var(--dim);text-align:center}

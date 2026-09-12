@@ -63,11 +63,11 @@ export async function resendEmail() {
 // One record per destination, under an HMAC of it keyed on this device (below): the typed E.164 number when
 // enrolling or changing the number, the enrolled factor's uid (or its masked hint) on a sign-in challenge. Nothing
 // here leaves the device.
-// A send is recorded once the provider has accepted it — and also when it fails in a way that may be the ladder
-// (sms-schedule.js possibleRefusal): the function refused without its seconds reaching this page, so the server is
-// at least a rung ahead of this device, or the function allowed it and the provider failed, so the server spent a
-// rung. Either way the device steps one rung too, so the Send button has a real time to count down to instead of
-// a sentence; each further refusal steps it again until it has caught up. Storage can be missing or throw (a
+// A send is recorded only once the provider has accepted it. A send that FAILED is not a code anyone received, so
+// it never steps this device's run: the device holds the shortest rung (30 seconds) and lets the function, which is
+// the authority, refuse again with its own seconds if it means to. Stepping a rung on a failure instead — what this
+// did until 12 Sep 2026 — counted codes that never went out: one unreadable refusal put the parent on two minutes
+// and every retry climbed again (a quarter of an hour, four times over, on 11 Sep). Storage can be missing or throw (a
 // private window, a browser blocking site data): then there is simply no record and the function alone decides.
 // The function counts every code to a number in one run, but a sign-in challenge is recorded under the factor: so
 // when a number is enrolled its codes are copied to the new factor, and the challenge right after counts them.
@@ -185,9 +185,12 @@ function providerError(error, key) {
     return Object.assign(Error('Too many codes were sent to this number recently. Try again when the countdown on the Send button reaches zero.'), { waitSeconds: seconds });
   }
   if (!key || !ladder.possibleRefusal(error)) return error;
-  recorded(key);
-  const left = Math.ceil((ladder.nextSendAt(readSends(key), Date.now()) - Date.now()) / 1000);
-  return left > 0 ? Object.assign(Error('No code was sent. Codes to one number are spaced out: try again when the countdown on the Send button reaches zero. If it keeps happening, tell the operator.'), { waitSeconds: left }) : error;
+  // No code went out, so no rung is spent here: a failed send used to be written into this device's run, which
+  // counted a code nobody received and sent the countdown up the ladder on retries alone. Hold the shortest rung
+  // and ask again; the function keeps the real count and refuses with its own seconds when it can.
+  writeHold(key, Date.now() + ladder.SMS_LADDER_MS[0]);
+  const left = Math.ceil((Math.max(ladder.nextSendAt(readSends(key), Date.now()), readHold(key)) - Date.now()) / 1000);
+  return left > 0 ? Object.assign(Error('No code was sent. Try again when the countdown on the Send button reaches zero. If it keeps happening, tell the operator.'), { waitSeconds: left }) : error;
 }
 // Stage 4 review: a parent whose old phone still works changes the number here — a code to the new number, the new factor
 // enrolled first, then every other one removed, so the account is never without a second factor (RECOVERY.md). Needs the

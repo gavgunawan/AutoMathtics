@@ -100,3 +100,15 @@ test('Approvals: the requests waiting from every child in one list with the chil
   assert.equal((await h.f.store.get(`families/${h.a.familyId}/learning/${allison.id}`)).wallet.redemptions[0].status, 'approved');
   assert.ok(h.root.textContent.includes('no pending redemptions'));
 });
+
+// The owner's request of 12 Sep 2026: a Back on every page where adults are. A parent inside a home-screen shortcut, or
+// on a phone whose browser hides its chrome while scrolling, had no visible way out of a parent sub-screen; the browser's
+// Back already knew where to go (onBack), so the button simply runs it.
+test('every adult screen carries a Back that goes where the browser\'s Back goes; the workspace, which is what they go back to, carries none', async (t) => {
+  const { h } = await family(t);
+  assert.equal(find(h, 'panel-back').length, 0, 'Mission Control is the bottom of the parents\' stack');
+  await h.click('Game & progress');
+  assert.equal(find(h, 'panel-back').length, 1, 'the screen above it offers the way out');
+  await h.click('\u2190 Back');
+  assert.ok(h.root.textContent.includes('MISSION CONTROL'), 'which lands on the workspace');
+});
