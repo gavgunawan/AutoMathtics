@@ -138,6 +138,9 @@ loopback emulator ports. It tests a real emulator-issued SMS MFA token, Firestor
 - `emailPrefs/{uid}`: the parent account's email choices and their history, the consent record (no address).
 - `reports/{familyId}:{week}`: whether a week's report was sent or skipped, and why; no content; TTL 400 days.
 - `outbox/{id}`: the fake email provider's rendered emails, for the staging preview; TTL 14 days.
+- `feedback/{id}`: *Send feedback* notes under the page's own operation id: the words, the screen and the release; the parent and
+  family when sent signed in, an address to answer when one was given signed out; TTL 400 days.
+- `feedbackDays/{YYYY-MM-DD}`: the day's feedback counts behind the caps on signed-out notes and on the owner's copies; TTL 8 days.
 
 A parent session lasts at most 30 minutes. Selector/child mode lasts at most 12 hours,
 but revocation, membership, PIN version and entitlement are rechecked at use. A parent

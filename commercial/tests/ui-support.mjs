@@ -78,7 +78,7 @@ export async function uiFixture(t, { family = true, signedIn = true, clock = nul
     setTimeout: (fn) => { fn(); return 0; },
     ...(clock ? { Date: class extends Date { static now() { return clock(); } } } : {}) });
   const api = await vm.runInContext(`(async()=>{ ${source}\nreturn { addChildScreen, familySetup, resetPinScreen, signInScreen, refresh, hms,
-    getModel:()=>model, isWorking:()=>working, setAuth:x=>{authModule=x;} }; })()`, context);
+    getModel:()=>model, isWorking:()=>working, setWorking:x=>{working=x;}, setAuth:x=>{authModule=x;} }; })()`, context); // setWorking: a request in flight, held for as long as a test needs
   const idle = async () => { for (let i = 0; i < 1000 && api.isWorking(); i++) await new Promise(r => setTimeout(r, 2)); assert.equal(api.isWorking(), false); };
   const setAuth = (uid = 'parentA', extra = {}) => api.setAuth({ signIn: async () => ({ stage: 'ready', idToken: f.token(uid) }), clear: async () => {}, ...extra });
   const submitLogin = async () => {

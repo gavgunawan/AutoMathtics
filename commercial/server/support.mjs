@@ -39,7 +39,8 @@ export const RETENTION = Object.freeze({
   'sweeps/*': 'the routine invariant sweep: counts and findings; expires by TTL 90 days after each run',
   'emailPrefs/{uid}': 'the parent account\'s email choices and their history (the consent record): the sign-in account outlives the family; deleted with that account',
   'reports/*': 'weekly report status per family and week (sent or skipped, attempts, provider message id; no content); expires by TTL 400 days after each week',
-  'feedback/* (sent signed out)': 'notes from the sign-in screen name no family and no account, so no deletion can find them; they expire by TTL 400 days after each (a parent\'s own notes go with the family or the sign-in account)',
+  'feedback/* (sent signed out)': 'notes from the sign-in screen name no family and no account, so no export carries them and no deletion finds them, even one with an address to answer; they expire by TTL 400 days after each (a parent\'s own notes go with the family or the sign-in account)',
+  'feedback copies (the owner\'s mailbox, Resend\'s log)': 'the emailed copy of a note, its words and the parent\'s address as Reply-To, lives outside this service: in the owner\'s mailbox for as long as the owner keeps it and in Resend\'s log for its own retention; no family or account deletion reaches it',
 });
 export const DELETION_BATCH = 300; // comfortably under Firestore's 500 writes per transaction
 const ACCESS = new Set(['trial', 'active', 'grace']);

@@ -44,6 +44,9 @@ test('a token is signed with its own key and read back only unchanged, only with
     { a: 'focus', v: 'yes' }, { a: 'unsub', v: 'progress' }, { a: 'unsub', c: undefined, v: 'news' }, { e: base.e + DAY }, { e: now + 14 * DAY }, { w: '2026-W36' }]) bad(signEmailToken(secret, { ...base, ...p }));
   // an action is an own property of the table: nothing Object.prototype carries passes for one
   for (const a of ['constructor', 'toString', '__proto__', 'hasOwnProperty', 'valueOf']) { bad(signEmailToken(secret, { ...base, a })); bad(signEmailToken(secret, { a, u: 'parentA', f: base.f, v: 'progress', w: WEEK, e: linkExpiry('unsub', WEEK) })); }
+  // a child, the value a stop link takes and an expiry the week gives (a real number): every other check passes this one, and only
+  // Object.hasOwn keeps 'constructor' out of the table (a lookup like LINK_ACTIONS[a] finds Object's constructor, and the value branch reads it as a stop link)
+  bad(signEmailToken(secret, { a: 'constructor', u: 'parentA', f: base.f, c: randomUUID(), v: 'progress', w: WEEK, e: linkExpiry('pace', WEEK) }));
   assert.equal(readEmailToken(secret, signEmailToken(secret, { ...base, a: 'focus', v: false }), now).v, false);
   assert.equal(readEmailToken(secret, signEmailToken(secret, { a: 'unsub', u: 'parentA', f: base.f, v: 'progress', w: WEEK, e: linkExpiry('unsub', WEEK) }), now).a, 'unsub');
   // alive until its expiry, dead from it

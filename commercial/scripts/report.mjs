@@ -7,7 +7,7 @@
 // (server/feedback.mjs), with the address to answer when one was given, since answering is the point; it signs nothing and sends
 // nothing, so it needs neither SESSION_SECRET nor the mail settings.
 //
-//   node scripts/report.mjs send [--week YYYY-Www] [--family FAMILY_UUID] [--dry-run]   exit 2 when any send failed
+//   node scripts/report.mjs send [--week YYYY-Www] [--family FAMILY_UUID] [--dry-run]   exit 2 when a family failed or was busy
 //   node scripts/report.mjs preview FAMILY_UUID [--week YYYY-Www]                         the HTML on stdout, links inert; never sends
 //   node scripts/report.mjs feedback [--days N]                                           the notes of the last N days (7), newest first
 //
@@ -61,13 +61,13 @@ if (reading) {
   const { Feedback } = await import('../server/feedback.mjs');
   for (const note of await new Feedback({ store }).recent(args.days)) console.log(JSON.stringify(note));
 } else {
-  const { Reports } = await import('../server/report.mjs');
+  const { Reports, runFailed } = await import('../server/report.mjs');
   const mailer = createMailer({ ...mail, store: mail.provider === 'fake' ? store : null });
   const reports = new Reports({ store, identity: new FirebaseIdentity(getAuth(app)), mailer, secret: env.SESSION_SECRET, origin, operator, log: (line) => console.log(JSON.stringify(line)) });
   if (args.command === 'preview') process.stdout.write((await reports.preview(args.positional[0], args.week)).html);
   else {
     const r = await reports.run({ week: args.week, familyId: args.familyId, dryRun: args.dryRun });
     console.log(JSON.stringify({ event: 'weekly_report_run', week: r.week, provider: mail.provider, dryRun: args.dryRun, sent: r.sent, unconfirmed: r.unconfirmed, skipped: r.skipped, failed: r.failed, already: r.already, busy: r.busy, wouldSend: r.wouldSend }));
-    if (r.failed) process.exitCode = 2; // a scheduled run fails visibly; a rerun retries what failed
+    if (runFailed(r)) process.exitCode = 2; // a family failed, or another run still held one: the scheduled run shows red, and a rerun finishes it
   }
 }

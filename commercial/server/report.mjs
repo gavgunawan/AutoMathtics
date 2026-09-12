@@ -135,13 +135,16 @@ export const REPORT_TIME_ZONE = 'Asia/Singapore', REPORT_CLAIM_MS = 15 * 60_000,
 const FINAL = new Set(['sent', 'sent_unconfirmed', 'skipped']);
 const codeOf = (error) => (typeof error?.code === 'string' && /^[A-Z][A-Z0-9_]{2,40}$/.test(error.code) ? error.code : 'ERROR'); // a code for the record, never a message
 const notFound = (error) => error?.code === 'auth/user-not-found' || error?.errorInfo?.code === 'auth/user-not-found';
+/** A run to show red (the CLI's exit 2): a family failed, or another run still held one (busy), so a rerun has work left either way. */
+export const runFailed = (r) => r.failed > 0 || r.busy > 0;
 export class Reports {
   constructor({ store, identity, mailer, secret, origin, operator = 'report-job', now = Date.now, batch = 50, log = () => {} }) {
     this.store = store; this.identity = identity; this.mailer = mailer; this.secret = secret; this.origin = origin; this.operator = operator; this.now = now; this.batch = batch; this.log = log;
   }
-  /** Every family in pages (or the one named); one outcome each, one audit row for the run. `failed` makes the CLI exit 2. */
+  /** Every family in pages (or the one named); one outcome each, one audit row for the run. A family failed or busy makes the CLI exit 2 (runFailed). */
   async run({ week = null, familyId = null, dryRun = false } = {}) {
     if (week !== null && weekStart(week) === null) fail(400, 'WEEK_INVALID');
+    if (week !== null && linkExpiry('unsub', week) <= this.now()) fail(400, 'WEEK_TOO_OLD'); // its stop-the-report link would be dead: never mailed
     const runWeek = week || lastWeek(this.now(), REPORT_TIME_ZONE), results = [];
     // one family's failure is that family's: recorded as well as it can be (one()), and the run goes on to the next
     const visit = async (id, family) => {
@@ -170,7 +173,8 @@ export class Reports {
       const links = this.links(ready.uid, familyId, ready.report), mail = renderReport(ready.report, links);
       const sent = await this.mailer.send({ to, ...mail, familyId, idempotencyKey: `report:${familyId}:${week}`, tags: [{ name: 'kind', value: 'weekly_report' }, { name: 'week', value: week }],
         headers: { 'List-Unsubscribe': `<${links.oneClick}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' } }); // RFC 8058 one-click
-      // Resend refused the key as reused with another body, or as still in flight: an email under it reached Resend already
+      // Resend refused the key as reused with another body: an email under it reached Resend already (a key still in flight is
+      // PROVIDER_IN_FLIGHT, thrown by the mailer: failed below, and the next run retries it)
       return await (sent.unconfirmed ? end('sent_unconfirmed', { reason: sent.unconfirmed }) : end('sent', { providerId: sent.id }));
     } catch (error) {
       // Whatever broke (the store, the provider, a bug in rendering), the family is recorded as failed if the store lets us; if not,
@@ -238,18 +242,21 @@ export class Reports {
    * request log); the app shows what the button does and waits for a tap. The List-Unsubscribe URL alone carries its token in the
    * query, because RFC 8058's one-click POST needs a URL the mailbox provider can post to. Every
    * expiry follows from the report week (email.mjs linkExpiry) and nothing else in the email moves with the clock, so rendering a
-   * family-week again gives the same bytes: what Resend's Idempotency-Key needs to answer a retry as the same email.
+   * family-week again gives the same bytes: what Resend's Idempotency-Key needs to answer a retry as the same email. The one
+   * exception is a past week's report (send --week) sent after its buttons ran out, 14 days after the week: it draws no dead
+   * button and says so instead (`expired`, report-email.mjs); a retry across that very line would render differently, and
+   * Resend's 409 then records it as sent_unconfirmed. A week whose stop-the-report link has died is refused before (run()).
    */
   links(uid, familyId, report) {
     const app = `${this.origin}/`, token = (payload) => signEmailToken(this.secret, { ...payload, u: uid, f: familyId, w: report.week, e: linkExpiry(payload.a, report.week) });
-    const unsub = token({ a: 'unsub', v: 'progress' }), children = {};
+    const unsub = token({ a: 'unsub', v: 'progress' }), live = linkExpiry('pace', report.week) > this.now(), children = {}; // pace and focus share their expiry
     for (const c of report.children) {
       const b = buttonsFor(c), l = {};
-      if (b.pace !== null) l.pace = `${app}#email=${token({ a: 'pace', c: c.childId, v: b.pace })}`;
-      if (b.focus !== null) l.focus = `${app}#email=${token({ a: 'focus', c: c.childId, v: b.focus })}`;
+      if (live && b.pace !== null) l.pace = `${app}#email=${token({ a: 'pace', c: c.childId, v: b.pace })}`;
+      if (live && b.focus !== null) l.focus = `${app}#email=${token({ a: 'focus', c: c.childId, v: b.focus })}`;
       children[c.childId] = l;
     }
-    return { app, settings: app, unsubscribe: `${app}#email=${unsub}`, oneClick: `${this.origin}/api/email/unsubscribe?t=${unsub}`, children };
+    return { app, settings: app, unsubscribe: `${app}#email=${unsub}`, oneClick: `${this.origin}/api/email/unsubscribe?t=${unsub}`, children, ...(live ? {} : { expired: true }) };
   }
   /** The operator's look at a family's email: rendered with inert links whatever the switches say; it never claims and never sends. */
   async preview(familyId, week = null) {

@@ -63,7 +63,7 @@ function htmlBlock(x) {
 const row = (inner, pad = '20px 24px') => `<tr><td style="padding:${pad};border-top:1px solid ${C.line};">${inner}</td></tr>`;
 
 /**
- * renderReport(data, links) → { subject, html, text }. `links`: { app, settings, unsubscribe, children: { [childId]: { pace?, focus? } } },
+ * renderReport(data, links) → { subject, html, text }. `links`: { app, settings, unsubscribe, children: { [childId]: { pace?, focus? } }, expired? },
  * every one a full URL; a button shows only when it is due (buttonsFor) and its link was given.
  */
 export function renderReport(data, links) {
@@ -72,6 +72,8 @@ export function renderReport(data, links) {
   const summary = `${data.weekLabel} · ${count(t.sessions, 'mission')} · ${pct(t.accuracy)} right across ${count(t.questions, 'question')}`;
   // true of every account, the owner's included, which predates the sign-up boxes: the switch is what sends it
   const why = 'You get this email because weekly reports are switched on for your AutoMathtics parent account. They come every Monday until you switch them off.';
+  // a past week's report sent after its buttons ran out (report.mjs links): none is drawn, and one line points to the app instead
+  const late = links.expired ? 'This report’s buttons have expired: they work for 14 days after its week. To change a pace or the scan focus, open the app.' : null;
   const sender = `AutoMathtics · Mission Control for parents · ${host}`;
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark light"><title>${esc(subject)}</title></head>`
     + `<body style="margin:0;padding:0;background:${C.navy};"><div style="display:none;max-height:0;overflow:hidden;">${esc(summary)}</div>`
@@ -81,10 +83,11 @@ export function renderReport(data, links) {
     + `<h1 style="margin:0 0 8px;font:700 26px/1.25 ${FONT};color:${C.ink};">Your family’s week</h1>${p(summary, 'margin:0;')}</td></tr>`
     + played.map((c) => row(childBlocks(c, links).map(htmlBlock).join(''))).join('')
     + (quiet.length ? row(quiet.map((c) => p(quietLine(c))).join('')) : '')
+    + (late ? row(`${p(late)}<p style="margin:0;font:600 15px/1.5 ${FONT};"><a href="${esc(links.app)}" style="color:${C.cyan};">Open AutoMathtics</a></p>`) : '')
     + row(`${p(why, `font-size:13px;color:${C.dim};`)}<p style="margin:0 0 10px;font:14px/1.5 ${FONT};"><a href="${esc(links.unsubscribe)}" style="color:${C.cyan};">Stop weekly reports</a> <span style="color:${C.dim};">·</span> <a href="${esc(links.settings)}" style="color:${C.cyan};">Email settings</a></p>${p(sender, `margin:0;font-size:12px;color:${C.dim};`)}`, '18px 24px 24px')
     + '</table></td></tr></table></body></html>';
   const textBlock = (x) => (x.kind === 'name' ? `\n${x.text.toUpperCase()}` : x.kind === 'button' ? `  ${x.label}: ${x.href}` : x.kind === 'list' ? [x.title, ...x.items.map((i) => `  - ${i.label} — ${i.detail}`)].join('\n') : x.text);
-  const text = ['AUTOMATHTICS · WEEKLY REPORT', 'Your family’s week', summary, ...played.flatMap((c) => childBlocks(c, links).map(textBlock)), ...(quiet.length ? ['', ...quiet.map(quietLine)] : []),
+  const text = ['AUTOMATHTICS · WEEKLY REPORT', 'Your family’s week', summary, ...played.flatMap((c) => childBlocks(c, links).map(textBlock)), ...(quiet.length ? ['', ...quiet.map(quietLine)] : []), ...(late ? ['', late, `Open AutoMathtics: ${links.app}`] : []),
     '', '—', why, `Stop weekly reports: ${links.unsubscribe}`, `Email settings: ${links.settings}`, sender, ''].join('\n');
   return { subject, html, text };
 }

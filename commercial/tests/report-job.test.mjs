@@ -1,7 +1,8 @@
 // The weekly report job (email-v1): one email per family for the run's week, to the owner's verified address, with signed buttons
 // and the one-click unsubscribe headers; the claim that keeps it to one under any overlap; the skip rules; failures that fail the
 // run and are retried (an identity outage among them) while one family's error never ends the run; retries that Resend's
-// Idempotency-Key recognises; the dry run and the preview that send nothing; the CLI's strict arguments and its guards; block G;
+// Idempotency-Key recognises, a key still in flight retried; a family left busy failing the run; a past week mailed without the
+// buttons that have run out; the dry run and the preview that send nothing; the CLI's strict arguments and its guards; block G;
 // and the fake provider's copies going with a deleted family.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -13,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { fixture, secret } from './support.mjs';
 import { grantEntitlement } from '../server/service.mjs';
 import { freshProgress } from '../server/progress.mjs';
-import { Reports, REPORT_CLAIM_MS, REPORT_TTL_MS, REPORT_TIME_ZONE } from '../server/report.mjs';
+import { Reports, REPORT_CLAIM_MS, REPORT_TTL_MS, REPORT_TIME_ZONE, runFailed } from '../server/report.mjs';
 import { createMailer, OUTBOX_TTL_MS } from '../server/mailer.mjs';
 import { linkExpiry } from '../server/email.mjs';
 import { Fault } from '../server/security.mjs';
@@ -128,8 +129,10 @@ test('a failed send is recorded and fails the run, and the next run retries it; 
   // a run that died mid-send left its claim 'sending': left alone for 15 minutes, then taken over under the same idempotency key
   const b = await home(f, 'parentB'), key = `reports/${b.familyId}:${WEEK}`;
   await f.store.put(key, { familyId: b.familyId, week: WEEK, status: 'sending', claimId: 'run-that-died', claimedAt: f.now() - 5 * 60_000, attempts: 1, providerId: null, reason: null, createdAt: f.now(), updatedAt: f.now(), expireAt: f.now() + REPORT_TTL_MS });
-  assert.deepEqual((await reports.run({ familyId: b.familyId })).results.map((x) => [x.status, x.reason]), [['busy', 'claimed_by_another_run']]); assert.equal(fake.sent.length, 1);
-  f.advance(REPORT_CLAIM_MS); assert.deepEqual((await reports.run({ familyId: b.familyId })).results.map((x) => x.status), ['sent']);
+  const held = await reports.run({ familyId: b.familyId });
+  assert.deepEqual(held.results.map((x) => [x.status, x.reason]), [['busy', 'claimed_by_another_run']]); assert.equal(fake.sent.length, 1);
+  assert.deepEqual([held.busy, held.failed, runFailed(held)], [1, 0, true], 'a family left busy fails the run (exit 2): a rerun has it to finish');
+  f.advance(REPORT_CLAIM_MS); const done = await reports.run({ familyId: b.familyId }); assert.deepEqual(done.results.map((x) => x.status), ['sent']); assert.equal(runFailed(done), false);
   assert.equal((await f.store.get(key)).attempts, 2); assert.equal(fake.sent[1].idempotencyKey, `report:${b.familyId}:${WEEK}`, 'the provider sees the dead run\'s key: one email');
   // a newer run took this claim over while the older was still sending: the older's outcome does not overwrite it
   const c = await home(f, 'parentC'), ck = `reports/${c.familyId}:${WEEK}`;
@@ -152,7 +155,7 @@ test('one family\'s error never ends the run: the family is recorded as failed w
   const again = await reports.run(); assert.equal(again.sent, 2); assert.equal(again.failed, 0); assert.equal(again.already, 1);
 });
 
-test('a retry renders the same bytes, so Resend\'s Idempotency-Key answers it as the same email; an email that changed under its key, or one still in flight, is sent but unconfirmed and never sent again', async () => {
+test('a retry renders the same bytes, so Resend\'s Idempotency-Key answers it as the same email; an email that changed under its key is sent but unconfirmed and never sent again; a key still in flight is a failure the next run retries', async () => {
   const f = fixture(), resend = resendLike(), mailer = createMailer({ provider: 'resend', apiKey: KEY, fetch: resend.fetch }), { reports } = job(f, { mailer });
   const a = await home(f, 'parentA');
   resend.drop(); let r = await reports.run();
@@ -166,8 +169,12 @@ test('a retry renders the same bytes, so Resend\'s Idempotency-Key answers it as
   r = await reports.run({ familyId: b.familyId });
   assert.deepEqual(r.results.map((x) => [x.status, x.reason]), [['sent_unconfirmed', 'invalid_idempotent_request']]); assert.equal(r.failed, 0); assert.equal(r.unconfirmed, 1); assert.equal(resend.delivered.length, 2);
   assert.deepEqual((await reports.run({ familyId: b.familyId })).results.map((x) => [x.status, x.reason]), [['already', 'sent_unconfirmed']], 'final: never sent again');
-  const c = await home(f, 'parentC'); resend.keys.set(`report:${c.familyId}:${WEEK}`, { pending: true }); // another run's request under this key is still in flight
-  assert.deepEqual((await reports.run({ familyId: c.familyId })).results.map((x) => [x.status, x.reason]), [['sent_unconfirmed', 'concurrent_idempotent_requests']]);
+  const c = await home(f, 'parentC'), ck = `report:${c.familyId}:${WEEK}`; resend.keys.set(ck, { pending: true }); // another run's request under this key is still in flight
+  r = await reports.run({ familyId: c.familyId });
+  assert.deepEqual(r.results.map((x) => [x.status, x.reason]), [['failed', 'PROVIDER_IN_FLIGHT']], 'nothing is known yet: a failure, not sent_unconfirmed'); assert.equal(runFailed(r), true);
+  assert.equal((await f.store.get(`reports/${c.familyId}:${WEEK}`)).status, 'failed', 'so the next run retries it');
+  resend.keys.delete(ck); // the first request is done with (this fake forgets it; Resend would answer the retry with the first email)
+  assert.deepEqual((await reports.run({ familyId: c.familyId })).results.map((x) => x.status), ['sent']);
 });
 
 test('a dry run decides every family and claims, sends and audits nothing; the week is Singapore\'s last complete one for every family, each family\'s answers counted by its own dates; one family or one week can be named; nonsense is refused', async () => {
@@ -194,6 +201,21 @@ test('the operator\'s preview renders with inert links whatever the switches say
   await assert.rejects(reports.preview(a.familyId, 'soon'), (e) => e.code === 'WEEK_INVALID'); await assert.rejects(reports.preview(randomUUID()), (e) => e.code === 'FAMILY_NOT_FOUND');
 });
 
+test('a past week (send --week) is mailed without the buttons that have run out: a line says so and points to the app, the stop link still works; a week whose stop link would be dead is refused', async () => {
+  const f = fixture(), a = await home(f, 'parentA', [['Allison', [...played('2026-07-22'), ...played('2026-08-26')]]]), { mailer, reports } = job(f);
+  assert.ok(linkExpiry('pace', '2026-W30') < f.now() && linkExpiry('unsub', '2026-W30') > f.now(), 'week 30: its buttons gone, its stop link alive');
+  const r = await reports.run({ week: '2026-W30' }); assert.deepEqual(r.results.map((x) => [x.familyId, x.week, x.status]), [[a.familyId, '2026-W30', 'sent']]);
+  const [m] = mailer.sent, line = 'This report’s buttons have expired: they work for 14 days after its week. To change a pace or the scan focus, open the app.';
+  assert.ok(m.text.includes('the goldilocks pace is 75%'), 'the pace is still suggested'); assert.ok(!/pace to|System Scan on these|scan focus off/.test(m.html + m.text), 'but no button is drawn');
+  assert.ok(!m.html.split('You get this email because')[0].includes('#email=v1.'), 'no token anywhere before the footer and its stop link');
+  assert.ok(m.html.includes(line) && m.text.includes(`${line}\nOpen AutoMathtics: ${ORIGIN}/`) && m.html.includes(`<a href="${ORIGIN}/" style="color:#35E0FF;">Open AutoMathtics</a>`));
+  assert.equal(decode(m.headers['List-Unsubscribe'].match(/t=(v1\.[^>]+)>/)[1]).e, linkExpiry('unsub', '2026-W30'), 'the stop link lives a year');
+  await reports.run(); const fresh = mailer.sent[1]; // the week just gone: its buttons live, and no such line
+  assert.ok(fresh.html.includes('Set Allison’s pace to 75%') && !fresh.text.includes('have expired'));
+  await assert.rejects(reports.run({ week: '2025-W30' }), (e) => e.code === 'WEEK_TOO_OLD', 'a year and a month ago: its stop link would be dead');
+  await assert.rejects(reports.run({ week: '2025-W30', dryRun: true }), (e) => e.code === 'WEEK_TOO_OLD'); assert.equal(mailer.sent.length, 2);
+});
+
 test('a family\'s deletion takes the fake provider\'s copies of its reports with it; another family\'s stay', async () => {
   const f = fixture(), a = await home(f, 'parentA'), b = await home(f, 'parentB');
   await job(f).reports.run(); assert.equal((await f.store.list('outbox')).length, 2);
@@ -204,11 +226,12 @@ test('a family\'s deletion takes the fake provider\'s copies of its reports with
 
 const execFileP = promisify(execFile), CLI = fileURLToPath(new URL('../scripts/report.mjs', import.meta.url));
 const cli = (env, args = ['send']) => execFileP(process.execPath, [CLI, ...args], { env: { PATH: process.env.PATH, SYSTEMROOT: process.env.SYSTEMROOT || '', ...env } }).then(() => ({ code: 0, err: '' }), (e) => ({ code: e.code, err: String(e.stderr) }));
-test('the CLI reads its arguments strictly and first (exit 64, never a wider run), then its guards before any SDK loads; a failed send exits 2', async () => {
+test('the CLI reads its arguments strictly and first (exit 64, never a wider run), then its guards before any SDK loads; a failed or busy family exits 2', async () => {
   const src = await readFile(CLI, 'utf8');
   assert.ok(src.indexOf('const args = parse(process.argv.slice(2))') < src.indexOf('const env = process.env'), 'the arguments come first');
   assert.ok(src.indexOf("await import('firebase-admin/app')") > src.indexOf('mailerConfig(env)'), 'the settings are checked before the SDK loads');
-  for (const s of ['send: {', 'preview: {', "'--dry-run'", "'--week'", "'--family'", 'process.exit(64)', 'process.exitCode = 2', 'CONFIRM_PROJECT', 'OPERATOR_ID', 'SESSION_SECRET', 'APP_ORIGIN']) assert.ok(src.includes(s), s);
+  for (const s of ['send: {', 'preview: {', "'--dry-run'", "'--week'", "'--family'", 'process.exit(64)', 'if (runFailed(r)) process.exitCode = 2', 'CONFIRM_PROJECT', 'OPERATOR_ID', 'SESSION_SECRET', 'APP_ORIGIN']) assert.ok(src.includes(s), s);
+  assert.deepEqual([runFailed({ failed: 1, busy: 0 }), runFailed({ failed: 0, busy: 1 }), runFailed({ failed: 0, busy: 0 })], [true, true, false]);
   for (const args of [['send', '--family'], ['send', '--week'], ['send', '--weekly', '2026-W36'], ['send', 'everyone'], ['send', '--dry-run', '--dry-run'], ['send', '--family', '--dry-run'],
     ['send', '--week', '2026-W36', '--week', '2026-W35'], ['preview'], ['preview', 'one', 'two'], ['preview', 'one', '--family', 'two'], ['bogus'], []]) {
     const r = await cli({}, args); assert.equal(r.code, 64, args.join(' ') || '(nothing)'); assert.match(r.err, /Usage: node scripts\/report\.mjs send/);

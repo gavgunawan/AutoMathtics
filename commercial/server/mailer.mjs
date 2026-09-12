@@ -2,10 +2,11 @@
 //  • fake: records the rendered email instead of sending it, in memory (`sent`, for tests) and, when a store is given, in
 //    outbox/{id} for 14 days by TTL: the staging preview until the owner has a Resend account (only the owner can open one).
 //  • resend: POST https://api.resend.com/emails with the account key as a bearer token and an Idempotency-Key, within 10 seconds.
-//    Resend keeps a key for 24 hours: the same key with the same body gets the first answer back (no second email); the same key
-//    with another body is refused (409 invalid_idempotent_request), and so is one still being handled (409
-//    concurrent_idempotent_requests). Either 409 means an email under that key reached Resend already, so it comes back as sent
-//    but unconfirmed, never as a failure to retry. A network failure or the timeout is PROVIDER_UNREACHABLE, any other refusal
+//    Resend keeps a key for 24 hours: the same key with the same body gets the first answer back (no second email). The same key
+//    with another body is refused (409 invalid_idempotent_request): an email under that key reached Resend already, so it comes
+//    back as sent but unconfirmed, never as a failure to retry. A key whose first request is still being handled (409
+//    concurrent_idempotent_requests) says nothing yet: PROVIDER_IN_FLIGHT, a failure the next run retries, by when Resend answers
+//    with the first email (review of 12 Sep 2026). A network failure or the timeout is PROVIDER_UNREACHABLE, any other refusal
 //    PROVIDER_ERROR with the provider's status and error name; none carries the key, the address or the email (the pattern of
 //    gateways/stripe.mjs api()).
 import { randomUUID } from 'node:crypto';
@@ -21,7 +22,7 @@ const FROM = /^(?:[^<>\r\n"]{1,80} <[^\s@<>"]{1,64}@[^\s@<>"]{1,190}\.[^\s@<>"]{
 /** a.parent@example.com → a…@example.com: enough to tell two parents apart in a log line, never the address itself. */
 export const maskAddress = (to) => { const [local, domain] = String(to || '').split('@'); return local && domain ? `${local.slice(0, 1)}…@${domain}` : '…'; };
 
-/** The job's mailer settings, from its environment (the web service itself never sends). */
+/** Mail settings from an environment: the report job's, and the web service's for the owner's feedback copies when FEEDBACK_TO is set (config.mjs). */
 export function mailerConfig(env = process.env) {
   const provider = env.EMAIL_PROVIDER || 'fake', from = env.EMAIL_FROM || DEFAULT_FROM;
   if (!['fake', 'resend'].includes(provider)) throw Error('EMAIL_PROVIDER must be "fake" or "resend".');
@@ -55,7 +56,8 @@ export function createMailer({ provider = 'fake', apiKey = null, from = DEFAULT_
         body: JSON.stringify({ from, to: [to], subject, html, text, headers, tags, ...(replyTo ? { reply_to: replyTo } : {}) }) }); // no reply_to, no change: the report's bytes stay the same
     } catch { fail(502, 'PROVIDER_UNREACHABLE'); }
     const json = await res.json().catch(() => ({}));
-    if (res.status === 409 && ['invalid_idempotent_request', 'concurrent_idempotent_requests'].includes(json?.name)) return { id: null, provider, unconfirmed: json.name };
+    if (res.status === 409 && json?.name === 'concurrent_idempotent_requests') fail(502, 'PROVIDER_IN_FLIGHT'); // the first is still being handled: nothing known yet
+    if (res.status === 409 && json?.name === 'invalid_idempotent_request') return { id: null, provider, unconfirmed: json.name }; // an email under the key is there
     if (!res.ok || typeof json?.id !== 'string') { const e = new Fault(502, 'PROVIDER_ERROR'); e.provider = { status: res.status, name: typeof json?.name === 'string' ? json.name.slice(0, 64) : null }; throw e; }
     return { id: json.id, provider };
   }
