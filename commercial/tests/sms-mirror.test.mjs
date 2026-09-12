@@ -83,13 +83,22 @@ test('a refusal that names its seconds is kept for that number: the count surviv
   s.advance(SECOND); s.state.verify = async () => 'verification-id'; await s.mod.sendCode(NUMBER, true);
 });
 
-test('a failure that may be the ladder without its seconds steps one rung; a plain provider error records nothing', async () => {
+// The owner's report of 12 Sep 2026: thirty seconds after a code, the Send button refused and then counted down from
+// two minutes, for a code that was never sent. A failed send was being written into this device's run, so every retry
+// climbed a rung it had not spent. It now holds the shortest rung and asks again; the function keeps the real count.
+test('a failure that may be the ladder holds the shortest rung and never climbs it, however often it repeats; only codes that went out are counted; a plain provider error records nothing', async () => {
   const s = await load(); const t0 = s.now();
   await s.mod.sendCode(NUMBER, true);
   s.advance(40 * SECOND);
   s.state.verify = async () => { throw Object.assign(new Error('Firebase: Error (auth/internal-error-encountered.).'), { code: 'auth/internal-error-encountered.' }); };
   await assert.rejects(s.mod.sendCode(NUMBER, true), refusedWith(30));
-  assert.equal(await s.mod.nextSendAt(NUMBER), t0 + 70 * SECOND, 'counted as a second code, so the next waits another 30 seconds');
+  assert.equal(await s.mod.nextSendAt(NUMBER), t0 + 70 * SECOND, 'a send that failed is held off for the shortest rung');
+  s.advance(30 * SECOND);
+  await assert.rejects(s.mod.sendCode(NUMBER, true), refusedWith(30));
+  assert.equal(await s.mod.nextSendAt(NUMBER), t0 + 100 * SECOND, 'and a second failure is another 30 seconds, not the two minutes a spent rung used to cost');
+  s.advance(30 * SECOND); s.state.verify = async () => 'verification-id';
+  await s.mod.sendCode(NUMBER, true);
+  assert.equal(await s.mod.nextSendAt(NUMBER), t0 + 130 * SECOND, 'the run holds the two codes that went out, so this is still the second rung');
   const other = await load();
   other.state.verify = async () => { throw Object.assign(new Error('Firebase: Error (auth/invalid-phone-number).'), { code: 'auth/invalid-phone-number' }); };
   await assert.rejects(other.mod.sendCode(NUMBER, true), (e) => e.code === 'auth/invalid-phone-number');

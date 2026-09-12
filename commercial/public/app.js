@@ -136,12 +136,17 @@ function setMode() {
 }
 // variant: one of v2's narrower cards (narrow 420px, w460, w520) or a screen's own class; play: a question session is on screen,
 // so a newer release's bar waits for its end (Update now); page: the name a note from this screen reports (Send feedback)
-function panel(kicker, title, subtitle, variant = '', { play = false, page = null } = {}) {
+function panel(kicker, title, subtitle, variant = '', { play = false, page = null, back = true } = {}) {
   authModule?.resetCaptcha?.(); // the robot check belongs to the screen that built it; one left behind strands its frame
   stopSendClock(); stopTimer(); screenId++; onBack = null; // the same for the Send countdown and a question's clock, and Back is each screen's to set again
   root.replaceChildren(); setMode(); root.setAttribute('aria-live', 'polite'); // a session turns it off while it plays
   const box = el('section', null, variant ? `panel ${variant}` : 'panel');
   box.append(el('p', kicker, 'kicker'), el('h1', title), el('p', subtitle, 'intro muted'));
+  // Every adult screen carries the way out the browser's Back already takes: the screen's own onBack, set the moment
+  // this returns, so the button reads it when it is pressed rather than now. Only the two screens with nothing above
+  // them opt out (back: false) — the sign-in screen and Mission Control. A parent on a phone whose browser hides its
+  // chrome, or inside a home-screen shortcut that has none, had no way back at all: the owner's report of 12 Sep 2026.
+  if (back && !kidMode) putFirst(box, backRow());
   root.append(box);
   if (!kidMode) root.append(feedbackFoot(page || kicker)); // under the sign-in screen and every parent screen; never in kid mode
   inPlay = play; showUpdate(); // a newer release's bar goes on every screen but a running question session (playView)
@@ -149,6 +154,13 @@ function panel(kicker, title, subtitle, variant = '', { play = false, page = nul
 }
 // The DOM a test runs this page in has no prepend or insertBefore: a node goes first by rebuilding the list.
 const putFirst = (box, node) => box.replaceChildren(node, ...box.children);
+// The adult screens' Back, above the kicker. It runs whatever the screen gave the browser's Back; a screen that gave it
+// nothing falls back to the workspace, so the button is never a dead end.
+function backRow() {
+  const row = el('div', null, 'panel-back');
+  row.append(button('← Back', () => (onBack || refresh)(), 'ghost')); // button() already runs it: a second run() inside would be dropped as re-entry
+  return row;
+}
 // a phone or tablet: the on-screen keypad is the keyboard, so the system one is not opened over it
 const coarse = () => Boolean(window.matchMedia?.('(pointer: coarse)')?.matches);
 // one key of v2's keypad (st.key 3769): it edits a field, it never submits a form by itself
@@ -394,7 +406,8 @@ function signInScreen(signup = false, afterReady = null, reauth = false) {
     reauth ? 'Confirm it\u2019s you.' : (signup ? 'A new crew starts here.' : 'Big futures. Small steps.'),
     reauth ? 'This sensitive parent action needs a fresh password and SMS check.' :
       (signup ? 'Create your adult account first. Then build a private grid for your explorers.' : 'One secure parent account. A personal learning grid for every child.'), 'w460',
-    { page: reauth ? 'parent-verification' : signup ? 'sign-up' : 'sign-in' }); // the page a note sent from here reports
+    // the page a note sent from here reports; the plain sign-in screen is the bottom of the stack, so it shows no Back
+    { page: reauth ? 'parent-verification' : signup ? 'sign-up' : 'sign-in', back: reauth || signup });
   if (!reauth) box.append(rail(1));
   if (reauth) onBack = cancelVerification; else if (signup) onBack = () => signInScreen();
   const form = el('form', null, 'auth-form');
@@ -687,7 +700,8 @@ async function parentScreen() {
   const family = model.family, e = family.entitlement || { status: 'inactive', seatLimit: 0, accessUntil: 0 };
   const billing = await api('/billing'); // plans, trial eligibility and the payment reference come from the server, never guessed from /me
   const active = e.status === 'active' && e.accessUntil > Date.now(); // Display only; API is authoritative.
-  const box = panel('MISSION CONTROL', family.label, 'Your explorers, your grid. Hand the device over when it’s time to play; parent access stays locked until you sign in again.', 'admin');
+  const box = panel('MISSION CONTROL', family.label, 'Your explorers, your grid. Hand the device over when it’s time to play; parent access stays locked until you sign in again.', 'admin',
+    { back: false }); // the workspace every other parent screen goes back TO
   // 🔐 Account & security, as v2's ADMIN GATE block (2617-2627): red while a finished recovery request waits for the parent (Stage 4.4)
   const r = model.recovery, alert = Boolean(r && r.status !== 'pending' && !r.acknowledgedAt);
   const account = adminSection('🔐 Account & security', alert ? 'c-red' : 'c-dim'), gate = el('div', null, alert ? 'gate alert' : 'gate');
