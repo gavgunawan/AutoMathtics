@@ -50,11 +50,14 @@ export function createMailer({ provider = 'fake', apiKey = null, from = DEFAULT_
       return { id, provider };
     }
     let res;
+    // A plain timer holds the event loop open while the provider is slow; AbortSignal.timeout does not on
+    // Node 22 (the runner CI uses), where a send awaiting a slow answer never settled at all.
+    const control = new AbortController(), bell = setTimeout(() => control.abort(), deadline);
     try {
-      res = await fetch(RESEND_API, { method: 'POST', signal: AbortSignal.timeout(deadline),
+      res = await fetch(RESEND_API, { method: 'POST', signal: control.signal,
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}) },
         body: JSON.stringify({ from, to: [to], subject, html, text, headers, tags, ...(replyTo ? { reply_to: replyTo } : {}) }) }); // no reply_to, no change: the report's bytes stay the same
-    } catch { fail(502, 'PROVIDER_UNREACHABLE'); }
+    } catch { fail(502, 'PROVIDER_UNREACHABLE'); } finally { clearTimeout(bell); }
     const json = await res.json().catch(() => ({}));
     if (res.status === 409 && json?.name === 'concurrent_idempotent_requests') fail(502, 'PROVIDER_IN_FLIGHT'); // the first is still being handled: nothing known yet
     if (res.status === 409 && json?.name === 'invalid_idempotent_request') return { id: null, provider, unconfirmed: json.name }; // an email under the key is there
