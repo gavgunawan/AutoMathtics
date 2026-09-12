@@ -3,7 +3,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { rejected } from './support.mjs';
+import { fixture, rejected, webhookSecret } from './support.mjs';
+import { signWebhook } from '../server/payments.mjs';
 import { LEAVING_REASONS, LEAVING_ACTIONS, OFFER_KINDS, OFFER_WINDOW_MS, OFFERS_MAX, FREE_TEXT_MAX, LEAVING_TTL_MS, PAUSE_MONTHS, EMAIL_CADENCES,
   monthKey, monthRange, monthsBefore, monthsAfter, cohortOf, smallerPlan, fewestSeatsPlan, offersFor, offerAllowed,
   readLeavingInput, leavingRecord, lastOffersAt, volumeOf, summariseLeaving } from '../server/leaving.mjs';
@@ -162,4 +163,57 @@ test('the monthly sums: volume, each as a share of the active families at the mo
   // no active family at the month's start: a share of nothing is nothing to report, not a division by zero
   const none = summariseLeaving({ month: '2026-08', records: [rec({})], activeAtStart: 0 });
   assert.deepEqual(none.rate, { cancellations: null, pauses: null, downgrades: null, emailOptOuts: null });
+});
+
+// ---- the flow as a service: the same rules, over the store, through the routes that own each action
+const MS_DAY = 86_400_000;
+async function subscribed(f, uid = 'parentA', plan = 'big') {
+  const a = await f.family(uid, 0);
+  const co = await f.payments.checkout(a.ctx, { plan, operationId: randomUUID() });
+  const ev = { id: `evt_${randomUUID()}`, type: 'checkout.completed', at: f.now(), customer: co.customerRef, data: { price: `price_fake_${plan}`, periodEnd: f.now() + 30 * MS_DAY, checkoutId: co.checkoutId } };
+  const raw = Buffer.from(JSON.stringify(ev));
+  assert.equal((await f.payments.receive('fake', raw, { 'x-webhook-signature': signWebhook(webhookSecret, raw, f.now()), 'content-type': 'application/json' })).status, 'applied');
+  return a;
+}
+const rows = async (f, familyId) => (await f.store.entries(`families/${familyId}/leaving`)).map(([, r]) => r);
+const ctxOf = async (f, uid = 'parentA') => (await f.login(uid)).ctx;
+
+test('the 90-day cap over the store: offers once, then the plain choices until the window has passed', async () => {
+  const f = fixture(), a = await subscribed(f);
+  const first = await f.leaving.offers(a.ctx, { reason: 'too_expensive' });
+  assert.deepEqual(first.offers.map((o) => o.kind), ['downgrade', 'seats']);
+  assert.deepEqual([first.capped, first.plan, first.planName, first.seats, first.state, first.cadence], [false, 'big', 'Big family', 6, 'active', 'weekly']);
+  await f.leaving.submit(a.ctx, { reason: 'too_expensive', action: 'keep', operationId: randomUUID() });
+  const capped = await f.leaving.offers(a.ctx, { reason: 'taking_a_break' });
+  assert.deepEqual([capped.offers, capped.capped], [[], true], 'offered once this quarter: not again');
+  const rec = await f.leaving.submit(a.ctx, { reason: 'taking_a_break', action: 'keep', operationId: randomUUID() });
+  assert.deepEqual(rec.offersShown, [], 'and the record says none was shown');
+  await assert.rejects(f.leaving.submit(a.ctx, { reason: 'taking_a_break', action: 'pause', months: 1, offerAccepted: 'pause', operationId: randomUUID() }), rejected('OFFER_NOT_OFFERED'));
+  f.advance(OFFER_WINDOW_MS + 1000); // and the paid period with it: the email offers do not need a live subscription
+  const later = await f.leaving.offers(await ctxOf(f), { reason: 'too_many_emails' });
+  assert.deepEqual([later.offers.map((o) => o.kind), later.capped], [['email_monthly', 'email_off'], false], 'the window has passed');
+  assert.equal((await rows(f, a.familyId)).length, 2);
+});
+
+test('a submitted flow is one record and one action however many times the tap is repeated; a child and a stale sign-in are refused', async () => {
+  const f = fixture(), a = await subscribed(f, 'parentA', 'family'), id = randomUUID();
+  const body = { reason: 'not_using', action: 'pause', months: 1, offerAccepted: 'pause', freeText: 'back in the new year', operationId: id };
+  const first = await f.leaving.submit(a.ctx, body);
+  assert.deepEqual([first.ok, first.action, first.outcome, first.months], [true, 'pause', 'done', 1]);
+  const again = await f.leaving.submit(a.ctx, body);
+  assert.deepEqual(again, first, 'the same operation id answers the same');
+  assert.equal((await rows(f, a.familyId)).length, 1, 'one record');
+  assert.equal(f.gateway.calls.filter((c) => c[0] === 'pauseCollection').length, 1, 'and the provider was told once');
+  const sub = (await f.store.get(`families/${a.familyId}`)).subscription;
+  assert.equal(sub.pause.months, 1);
+  const row = (await f.store.list('audit')).find((x) => x.action === 'leaving.recorded');
+  assert.deepEqual([row.familyId, row.uid, row.leavingId, row.childId], [a.familyId, 'parentA', id, null], 'the audit row carries ids and nothing else: no reason, no words');
+  await assert.rejects(f.leaving.submit(a.ctx, { ...body, action: 'cancel', operationId: id }), rejected('IDEMPOTENCY_CONFLICT'), 'the same id for another action is never answered as the first');
+  const k = await f.childSession('parentB');
+  await assert.rejects(f.leaving.offers(k.childCtx, { reason: 'not_using' }), rejected('PARENT_REQUIRED'));
+  await assert.rejects(f.leaving.submit(k.childCtx, { reason: 'not_using', action: 'keep', operationId: randomUUID() }), rejected('PARENT_REQUIRED'));
+  f.advance(6 * 60_000);
+  await assert.rejects(f.leaving.submit(a.ctx, { reason: 'not_using', action: 'keep', operationId: randomUUID() }), rejected('REAUTHENTICATE'), 'the flow can change money: a fresh sign-in');
+  const looking = await f.leaving.offers(a.ctx, { reason: 'not_using' });
+  assert.equal(looking.reason, 'not_using', 'but looking at the page needs only the session');
 });

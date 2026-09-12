@@ -11,6 +11,7 @@ import { Support } from './support.mjs';
 import { Recovery } from './recovery.mjs';
 import { Email } from './email.mjs';
 import { Feedback } from './feedback.mjs';
+import { LeavingFlow } from './leaving.mjs';
 import { createMailer } from './mailer.mjs';
 import { VERSION } from './version.mjs';
 import { createApp } from './http.mjs';
@@ -36,7 +37,9 @@ const email = new Email({ foundation: service, store, identity, secret: cfg.secr
 // Send feedback: kept in Firestore; copied to the owner only with FEEDBACK_TO and Resend (config.mjs). The fake provider emails nothing.
 const feedback = new Feedback({ foundation: service, store, mailer: cfg.feedback.mail?.provider === 'resend' ? createMailer(cfg.feedback.mail) : null, to: cfg.feedback.to,
   release: cfg.releaseSha || VERSION, log: (event) => console.error(JSON.stringify(event)) });
-const server = createApp(service, cfg, { reportError: (event) => console.error(JSON.stringify(event)), learning, game, billing, payments, support, recovery, email, feedback });
+// Leaving (12 Sep 2026): the cancel-or-pause flow, which does its work through the billing, payment and email routes above
+const leaving = new LeavingFlow({ foundation: service, store, billing, payments, email });
+const server = createApp(service, cfg, { reportError: (event) => console.error(JSON.stringify(event)), learning, game, billing, payments, support, recovery, email, feedback, leaving });
 server.listen(cfg.port, cfg.emulator ? '127.0.0.1' : '0.0.0.0', () => {
   console.log(JSON.stringify({ event: 'foundation_ready', mode: cfg.mode, port: cfg.port }));
 });

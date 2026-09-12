@@ -10,7 +10,8 @@
 // The id is the flow's own operation id, so a retried tap is one record. It holds no name, no address and no child: the audit
 // row beside it carries ids only. Kept 400 days by TTL, like the audit trail and the feedback notes (PRIVACY.md).
 import { fail, object, text } from './security.mjs';
-import { PLANS, PAUSE_MONTHS, monthsAfter } from './subscription.mjs';
+import { PLANS, PAUSE_MONTHS, monthsAfter, deriveState, entitlementFor } from './subscription.mjs';
+import { prefsOf, prefsPath } from './email.mjs';
 
 export { PAUSE_MONTHS, monthsAfter }; // the pause's own facts live with the state machine; the rules and the report read them here
 
@@ -86,8 +87,10 @@ export function offersFor({ reason, state = 'none', plan = null, cancelAtPeriodE
     if (paid && state === 'active' && !cancelAtPeriodEnd && !paused) offers.push({ kind: 'pause', months: [...PAUSE_MONTHS] });
   } else if (reason === 'too_expensive') {
     if (paid && ['active', 'grace'].includes(state)) {
+      // The smaller plan only while every seated child still fits it: this flow never takes a seat away without being asked.
+      // When they do not fit, the offer that does is the other one — the smallest plan that seats exactly the children there are.
       const down = smallerPlan(plan), fewer = fewestSeatsPlan(plan, seatedChildren);
-      if (down) offers.push({ kind: 'downgrade', plan: down, seats: PLANS[down].seats });
+      if (down && PLANS[down].seats >= seatedChildren) offers.push({ kind: 'downgrade', plan: down, seats: PLANS[down].seats });
       if (fewer && fewer !== down) offers.push({ kind: 'seats', plan: fewer, seats: PLANS[fewer].seats });
     }
   } else if (reason === 'technical') {
@@ -128,6 +131,82 @@ export function leavingRecord({ id, at, input, offersShown, plan, seats, state, 
 }
 /** The newest moment this family was shown offers, from its own records; null when it never was. */
 export const lastOffersAt = (records) => records.reduce((max, r) => ((r.offersShown || []).length && Number.isSafeInteger(r.at) && r.at > max ? r.at : max), 0) || null;
+
+// ---- the flow itself
+/**
+ * One page, two doors (Mission Control's Plan and seats, and an email's unsubscribe link). Nothing here decides anything a
+ * subscription route does not already own: `offers()` reads and answers, `submit()` records the reason, does what the parent asked
+ * through the existing route — email preferences, pause, plan change, cancel at period end — and then writes the one record.
+ *
+ * The order matters: the action first, the record after, both under the flow's own operation id. A record therefore never claims
+ * something that did not happen, and a retried tap is one record and one action (the routes are idempotent under that same id).
+ */
+export class LeavingFlow {
+  constructor({ foundation, store, billing, payments = null, email = null, now = Date.now, audit = null }) {
+    this.foundation = foundation; this.store = store; this.billing = billing; this.payments = payments; this.email = email; this.now = now;
+    this.audit = audit || ((tx, action, actor, familyId, extra) => foundation.audit(tx, action, actor, familyId, null, extra));
+  }
+  path(familyId, id) { return `families/${familyId}/leaving/${id}`; }
+  async records(tx, familyId) { return (await tx.entries(`families/${familyId}/leaving`, 50)).map(([, r]) => r); }
+  /** What the rules need to know about the family, and what the page needs to show. */
+  facts(family, prefs, records, now) {
+    const sub = family.subscription || null, state = sub ? deriveState(sub, now) : 'none', e = sub ? entitlementFor(sub, now) : null;
+    return { rules: { state, plan: sub?.plan ?? null, cancelAtPeriodEnd: !!sub?.cancelAtPeriodEnd, paused: !!sub?.pause, cadence: prefs.cadence, seatedChildren: (family.activeChildIds || []).length, lastOffersAt: lastOffersAt(records), now },
+      view: { state, plan: sub?.plan ?? null, planName: sub ? PLANS[sub.plan]?.name || sub.plan : null, seats: sub?.seats ?? null, seatedChildren: (family.activeChildIds || []).length,
+        cadence: prefs.cadence, periodEnd: sub?.periodEnd ?? null, accessUntil: e?.accessUntil ?? null, cancelAtPeriodEnd: !!sub?.cancelAtPeriodEnd, pause: e?.pause ?? null, reasons: [...LEAVING_REASONS] } };
+  }
+  /** Read-only: the reasons, what this family is, and the offers this reason earns. Nothing is recorded by looking. */
+  async offers(ctx, body) {
+    object(body, ['reason']);
+    if (!LEAVING_REASONS.includes(body.reason)) fail(400, 'LEAVING_REASON_REQUIRED');
+    return this.store.transaction(async (tx) => {
+      const { s, family } = await this.billing.parent(tx, ctx, false); // nothing changes here, so no fresh sign-in is demanded yet
+      const prefs = prefsOf(await tx.get(prefsPath(s.uid)));
+      const f = this.facts(family, prefs, await this.records(tx, s.familyId), this.now());
+      return { reason: body.reason, ...offersFor({ ...f.rules, reason: body.reason }), ...f.view };
+    }, { readOnly: true });
+  }
+  /** The answer the page gets, from the record: what happened, and nothing about anybody. */
+  answer(rec) { return { ok: true, action: rec.action, reason: rec.reason, offerAccepted: rec.offerAccepted, offersShown: rec.offersShown, cadence: rec.cadence, months: rec.months, plan: rec.toPlan, outcome: rec.outcome, at: rec.at }; }
+  /** The same operation id must be the same flow: a retried tap replays, anything else is a conflict, as everywhere else money is decided. */
+  static same(rec, input) {
+    return rec.reason === input.reason && rec.action === input.action && (rec.offerAccepted ?? null) === (input.offerAccepted ?? null)
+      && (rec.cadence ?? null) === (input.cadence ?? null) && (rec.months ?? null) === (input.months ?? null) && (rec.toPlan ?? null) === (input.plan ?? null);
+  }
+  async submit(ctx, body) {
+    const input = readLeavingInput(body), operationId = this.billing.eventId(body);
+    const prepared = await this.store.transaction(async (tx) => {
+      const { s, family } = await this.billing.parent(tx, ctx, true); // a money decision: a fresh sign-in, as cancel and pause demand
+      const seen = await tx.get(this.path(s.familyId, operationId));
+      if (seen) { if (!LeavingFlow.same(seen, input)) fail(409, 'IDEMPOTENCY_CONFLICT'); return { replay: seen }; }
+      const prefs = prefsOf(await tx.get(prefsPath(s.uid)));
+      const f = this.facts(family, prefs, await this.records(tx, s.familyId), this.now());
+      const decided = offersFor({ ...f.rules, reason: input.reason });
+      // the browser may only accept an offer this server decided to show: never one it invented, and never one the 90-day cap withheld
+      if (!offerAllowed(decided.offers, input.offerAccepted)) fail(409, 'OFFER_NOT_OFFERED');
+      return { familyId: s.familyId, uid: s.uid, offers: decided.offers, plan: f.view.plan, seats: f.view.seats, state: f.view.state, cohort: cohortOf(family) };
+    }, { readOnly: true });
+    if (prepared.replay) return this.answer(prepared.replay);
+    const done = await this.act(ctx, input, operationId);
+    const record = leavingRecord({ id: operationId, at: this.now(), input, offersShown: prepared.offers, plan: prepared.plan, seats: prepared.seats, state: prepared.state, cohort: prepared.cohort, outcome: done });
+    await this.store.transaction(async (tx) => {
+      const path = this.path(prepared.familyId, operationId);
+      if (await tx.get(path)) return; // two taps of one operation: one record
+      tx.set(path, record);
+      this.audit(tx, 'leaving.recorded', prepared.uid, prepared.familyId, { leavingId: operationId }); // ids only: the reason and the words live on the record, which expires
+    });
+    return this.answer(record);
+  }
+  /** What the parent asked for, through the route that already owns it. 'noop' when the answer is that nothing changes. */
+  async act(ctx, input, operationId) {
+    if (input.action === 'keep') return 'noop';
+    if (input.action === 'reduce_email') { if (!this.email) fail(503, 'EMAIL_UNAVAILABLE'); await this.email.setPrefs(ctx, { cadence: input.cadence }); return 'done'; }
+    if (input.action === 'pause') { await (this.payments ? this.payments.pause(ctx, { months: input.months, operationId }) : this.billing.pause(ctx, { months: input.months, operationId })); return 'done'; }
+    if (input.action === 'downgrade') { if (!this.payments) fail(503, 'PROVIDER_UNAVAILABLE'); await this.payments.changePlan(ctx, { plan: input.plan, operationId }); return 'done'; }
+    await (this.payments ? this.payments.cancel(ctx, { operationId }) : this.billing.cancel(ctx, { operationId })); // cancel at the period end: the existing route, with its own confirmation and audit
+    return 'done';
+  }
+}
 
 // ---- the monthly report's arithmetic (server/leaving-report.mjs renders it; scripts/report.mjs runs it)
 const COUNTED = Object.freeze({ cancel: 'cancellations', pause: 'pauses', downgrade: 'downgrades', reduce_email: 'emailOptOuts' });

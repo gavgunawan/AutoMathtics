@@ -149,7 +149,9 @@ test('UI: an email button opens a panel that says exactly what it will do; Cance
   await g.click('Confirm'); assert.equal((await prog(g.f, a)).pacePercent, 75); assert.ok(g.message.textContent.includes('Allison’s question time is now 75%.'), g.message.textContent);
   const u = await uiFixture(t, { signedIn: false, location: async (f) => ({ search: '', hash: `#email=${unsubToken(f, await f.family('parentA', 2))}`, pathname: '/' }) });
   assert.ok(u.root.textContent.includes('Stop the weekly progress report for p…@example.test. Account and security emails still come.'), u.root.textContent.slice(0, 300));
-  await u.click('Confirm'); assert.equal((await u.f.store.get('emailPrefs/parentA')).progress, false); assert.ok(u.root.textContent.includes('Sign in as parent'), 'back at sign-in, signed out as before');
+  // the unsubscribe panel offers monthly before off (the leaving flow, 12 Sep 2026): "No, stop the report" is what Confirm was
+  assert.ok(u.root.textContent.includes('Once a month may be enough'), u.root.textContent.slice(0, 400));
+  await u.click('No, stop the report'); assert.equal((await u.f.store.get('emailPrefs/parentA')).progress, false); assert.ok(u.root.textContent.includes('Sign in as parent'), 'back at sign-in, signed out as before');
   const d = await uiFixture(t, { location: async (f, parent) => ({ search: '', hash: `#email=${unsubToken(f, parent, { w: '2025-W30' })}`, pathname: '/' }) }); // a year and a week ago: expired
   assert.ok(d.root.textContent.includes('This link no longer works.') && d.root.textContent.includes('work for 14 days')); await d.click('Close'); assert.ok(d.root.textContent.includes('Email updates'));
   const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8'), boot = app.slice(app.indexOf("if (fragment?.get('email'))"));
