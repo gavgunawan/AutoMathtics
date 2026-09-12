@@ -61,6 +61,19 @@ end of the run. Nothing here requires code; every failure is a ticket for the ne
 | D2 | Request deletion; cancel; request again | the 14-day notice; cancel restores; the operator can force-execute on staging and the tombstone remains |
 | D3 | After deletion, delete the sign-in account | refused before the family is gone; then the provider account disappears; the trial cannot be taken again on the same phone |
 
+## Operator dashboard (staging, from the operator's own machine)
+
+Run once, not per device: the dashboard is a command and a file, not a page on the site.
+
+| # | Do | Expect |
+|---|---|---|
+| O1 | With the operator environment set (`DEPLOY_V3.md` section 6b), run `node scripts/dashboard.mjs --out dashboard.html` | one file written where `--out` said; the console summary names counts and no family; the project gains exactly one `audit` row, `operator.dashboard`, and nothing else |
+| O2 | Turn the network off and open the file | it renders completely - styles, tables and the sparkline - with nothing pending in the browser's network tab; `view-source` shows no `<script>`, no `<link>` and no `http` address |
+| O3 | Search the file for a child's nickname, the family label and the family reference from `scripts/support.mjs family` | none of the three is anywhere in it; the header and the footer both say *operator only - aggregated family data* |
+| O4 | Read the header with fewer than five families in the project | it states how many families and tombstones the report covers, and says plainly that nearly every number below is a dash because it came from fewer than five families - no number that did is printed anywhere, and none is in the `--json` file either |
+| O5 | Run it again with `--min-cell 1 --json dashboard.json --by age` | numbers appear where the dashes were, the matrix columns are ages instead of year levels, and the JSON holds the same numbers and still no id or name; a typo in a flag (`--dayz 30`) prints the usage line and exits non-zero without reading the project |
+| O6 | After a family plays both tracks, compare a matrix cell with `scripts/support.mjs family` for that family | the cell's median and session count are consistent with the history rows; a cell with fewer than five families behind it is a dash, however much that one family played |
+
 ## Failure states
 
 | # | Do | Expect |

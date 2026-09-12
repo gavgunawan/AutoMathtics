@@ -120,6 +120,14 @@ actions are the ones below, and each writes an audit row with the operator's ide
 | `export FAMILY_UUID` | the same export the parent gets |
 | `delete FAMILY_UUID` | execute a requested deletion (above) |
 
+There is one more operator command, in its own file because it answers a different question and touches
+nothing: `node scripts/dashboard.mjs` writes a private HTML page of **aggregates** — households, the two
+speed matrices with their difficulty flags, rewards and the shop — with every number computed from fewer
+than five families left out, no identifying value anywhere, and one `operator.dashboard` audit row per run.
+It is deliberately not a route on the site: there is no operator login in this release, and no browser route
+is a generic admin surface. `DEPLOY_V3.md` section 6b says how to run it and what it holds; `PRIVACY.md` has
+the report's inventory row.
+
 Superseded checkouts and superseded/stale/creating intents appear in the report. With Stripe (Stage
 4.1/4.2) a superseded hosted session is expired at the provider, a superseded checkout never returns
 its URL again, and a late payment on it is refused by the inbox and refunded by the operator in the

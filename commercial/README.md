@@ -45,6 +45,11 @@ from the old project directly. The commercial server explicitly refuses the lega
   Reward Store approvals, Family Rocket, parent credits, per-child pace, map/fluency view and Navigator read-aloud.
 - A guarded dry-run-first v2 JSON migration tool maps reviewed historical progress/wallet/config into v3 without
   ever connecting to the old Firebase project.
+- An operator dashboard as a COMMAND, not a page: `node scripts/dashboard.mjs` writes one self-contained private
+  HTML file (inline CSS and SVG, no script, opens offline) with households, the Engine and Navigator speed
+  matrices and their difficulty flags, and the rewards and shop aggregates. No browser route, no operator login,
+  read-only, one `operator.dashboard` audit row per run, and any number computed from fewer than five families is
+  left out of the HTML and the JSON alike (`DEPLOY_V3.md` section 6b, `PRIVACY.md`).
 
 ## Not implemented yet (Stage 3+)
 
