@@ -13,7 +13,7 @@ const row = (f, email) => f.store.get(`waitlist/${sha256(email.toLowerCase())}`)
 
 test('an address and its permission are kept once, under a hash of the address, with the tag its link carried and a 400-day expiry', async () => {
   const f = fixture(), w = make(f), at = f.now();
-  assert.deepEqual(await w.join(w.parse({ email: ' Parent@Example.test ', consent: true, source: 'ig' })), { ok: true, repeat: false });
+  assert.deepEqual(await w.join(w.parse({ email: ' Parent@Example.test ', consent: true, source: 'ig' })), { ok: true, repeat: false, mailed: false, mailedAt: null }, 'no mailer on this list: listed all the same');
   const kept = await row(f, 'parent@example.test');
   assert.equal(kept.email, 'Parent@Example.test', 'the address as it was typed, which is what an email is sent to');
   assert.equal(kept.source, 'ig'); assert.equal(kept.consentAt, at); assert.equal(kept.joinedAt, at);
@@ -26,7 +26,7 @@ test('the same address again is one row: it keeps the tag and the day it first a
   const f = fixture(), w = make(f), first = f.now();
   await w.join(w.parse({ email: 'parent@example.test', consent: true, source: 'ig' }));
   f.advance(3 * 86_400_000);
-  assert.deepEqual(await w.join(w.parse({ email: 'PARENT@example.test', consent: true, source: 'tiktok' })), { ok: true, repeat: true });
+  assert.deepEqual((await w.join(w.parse({ email: 'PARENT@example.test', consent: true, source: 'tiktok' }))).repeat, true);
   const kept = await row(f, 'parent@example.test');
   assert.equal((await f.store.list('waitlist')).length, 1, 'one address, one row, whatever its capitalisation');
   assert.equal(kept.source, 'ig', 'the post it actually came from');
@@ -51,9 +51,9 @@ test('a day holds only so many addresses never seen before; the day after is its
   const f = fixture(), w = make(f);
   for (let i = 0; i < WAITLIST_A_DAY; i++) await w.join(w.parse({ email: `p${i}@example.test`, consent: true }));
   await assert.rejects(w.join(w.parse({ email: 'one-too-many@example.test', consent: true })), rejected('WAITLIST_BUSY'));
-  assert.deepEqual(await w.join(w.parse({ email: 'p0@example.test', consent: true })), { ok: true, repeat: true }, 'an address already on the list costs nothing');
+  assert.equal((await w.join(w.parse({ email: 'p0@example.test', consent: true }))).repeat, true, 'an address already on the list costs nothing');
   f.advance(86_400_000);
-  assert.deepEqual(await w.join(w.parse({ email: 'one-too-many@example.test', consent: true })), { ok: true, repeat: false });
+  assert.equal((await w.join(w.parse({ email: 'one-too-many@example.test', consent: true }))).repeat, false);
 });
 
 // The owner's report of 12 Sep 2026: joining the list in silence feels broken. A new address gets one email back at once,
@@ -71,8 +71,9 @@ test('a new address gets one email back, with an unsubscribe that works, and a r
   assert.equal(sent.headers['List-Unsubscribe-Post'], 'List-Unsubscribe=One-Click');
   const url = sent.headers['List-Unsubscribe'].replace(/^<|>$/g, '');
   assert.ok(sent.text.includes(url) && sent.html.includes(url), 'the same link a reader can click is the one the provider posts to');
-  await w.join(w.parse({ email: 'PARENT@example.test', consent: true }));
-  assert.equal(f.waitlistMail.length, 1, 'a second Join from someone already listed is a double tap, not a second person');
+  const again = await w.join(w.parse({ email: 'PARENT@example.test', consent: true }));
+  assert.equal(f.waitlistMail.length, 1, 'a second Join within the day is a double tap, not a second person');
+  assert.deepEqual([again.repeat, again.mailed], [true, false], 'and the page is told so, rather than left to guess');
   const token = new URL(url).searchParams.get('t');
   assert.deepEqual(await w.leave(token), { ok: true });
   assert.equal(await w.size(), 0, 'and the link takes that address off');
@@ -94,7 +95,32 @@ test('a provider that fails does not unlist anyone: the address is kept and the 
   const f = fixture(), lines = [];
   f.waitlist.log = (event) => lines.push(event);
   f.waitlist.mailer = { send: async () => { throw Object.assign(Error('down'), { code: 'PROVIDER_UNREACHABLE' }); } };
-  assert.deepEqual(await f.waitlist.join(f.waitlist.parse({ email: 'parent@example.test', consent: true })), { ok: true, repeat: false });
+  assert.deepEqual(await f.waitlist.join(f.waitlist.parse({ email: 'parent@example.test', consent: true })), { ok: true, repeat: false, mailed: false, mailedAt: null }, 'the send failed; the address is listed regardless');
   assert.equal(await f.waitlist.size(), 1);
   assert.ok(lines.some((l) => l.event === 'waitlist_confirm_failed'), 'the failure is a line in the log, not the parent\u2019s problem');
+});
+
+// The owner's report of 13 Sep 2026: they joined with the same address again and again and heard nothing, because the note
+// only ever went to an address never seen before — and theirs had gone on the list before the note existed. An address that
+// has never actually had the note gets it whenever it joins; one that has waits a day, so a second Join is never a way to
+// mail-bomb somebody else's address.
+test('an address listed before the note existed still gets one; after that a rejoin waits a day', async () => {
+  const f = fixture(), w = f.waitlist;
+  w.mailer = null; // the list as it was before it could write to anyone
+  await w.join(w.parse({ email: 'parent@example.test', consent: true }));
+  assert.equal((await f.store.get(`waitlist/${sha256('parent@example.test')}`)).mailedAt, undefined, 'nothing was sent, and nothing pretends otherwise');
+
+  w.mailer = { send: async (m) => { f.waitlistMail.push(m); return { id: 'fake', provider: 'fake' }; } };
+  const caught = await w.join(w.parse({ email: 'parent@example.test', consent: true }));
+  assert.deepEqual([caught.repeat, caught.mailed], [true, true], 'the address was already listed, and now it hears about it');
+  assert.equal(f.waitlistMail.length, 1);
+
+  const soon = await w.join(w.parse({ email: 'parent@example.test', consent: true }));
+  assert.deepEqual([soon.repeat, soon.mailed], [true, false], 'a third Join minutes later sends nothing');
+  assert.equal(soon.mailedAt, caught.mailedAt, 'and still names when the note did go');
+
+  f.advance(86_400_000);
+  const tomorrow = await w.join(w.parse({ email: 'parent@example.test', consent: true }));
+  assert.deepEqual([tomorrow.repeat, tomorrow.mailed], [true, true], 'a parent who lost it can ask again the next day');
+  assert.equal(f.waitlistMail.length, 2);
 });

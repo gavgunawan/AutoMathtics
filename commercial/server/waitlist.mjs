@@ -65,13 +65,26 @@ export class Waitlist {
       tx.set(`waitlist/${id}`, {
         email: input.email, source: seen?.source ?? input.source, consentAt: seen?.consentAt ?? now,
         joinedAt: seen?.joinedAt ?? now, lastAt: now, release: this.release, expireAt: now + WAITLIST_TTL_MS,
+        // carried, not dropped: a row is replaced whole here, and losing this would send the note again on every Join
+        ...(seen?.mailedAt ? { mailedAt: seen.mailedAt } : {}),
       });
       return Boolean(seen);
     });
-    // Only a new address is written to: a second Join from someone already listed is a double tap, not a second person.
-    if (!repeat) await this.confirm(id, input.email);
-    this.log({ event: 'waitlist_join', source: input.source, repeat });
-    return { ok: true, repeat };
+    // A new address is written to at once. An address already listed is written to again only if it has never actually had
+    // the note — the list existed before the note did — or if a day has passed, which keeps a second Join from being a way to
+    // mail-bomb somebody else's address while still letting a parent who lost it ask again tomorrow.
+    const already = await this.store.get(`waitlist/${id}`);
+    const mailedAt = already?.mailedAt ?? null;
+    const due = !repeat || !mailedAt || now - mailedAt >= DAY;
+    const mailed = due ? (await this.confirm(id, input.email)).sent : false;
+    if (mailed) await this.store.transaction(async (tx) => {
+      const row = await tx.get(`waitlist/${id}`); if (row) tx.set(`waitlist/${id}`, { ...row, mailedAt: now });
+    });
+    this.log({ event: 'waitlist_join', source: input.source, repeat, mailed });
+    // The page says which of the two happened, and when the note went, so a parent who joins twice is told rather than left
+    // guessing (the owner's report of 13 Sep 2026). A waiting list is not an account: that someone is on it discloses only
+    // that they asked about a maths app, and saying nothing costs more confusion than that is worth (PRIVACY.md).
+    return { ok: true, repeat, mailed, mailedAt: mailed ? now : mailedAt };
   }
   /** The one email back. Never throws: the address is listed whether or not the provider answered. */
   async confirm(id, email) {
