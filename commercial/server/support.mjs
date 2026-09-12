@@ -11,7 +11,7 @@
 // the financial records that PR #17 made durable stay, with the personal linkage they need
 // reduced to a tombstone (RETENTION below says what and why).
 import { randomUUID } from 'node:crypto';
-import { fail, object, uuid, text } from './security.mjs';
+import { Fault, fail, object, uuid, text } from './security.mjs';
 import { normalizeProgress, freshProgress } from './progress.mjs';
 import { reconcile } from './ledger.mjs';
 import { deriveState, effectiveEntitlement } from './subscription.mjs';
@@ -47,7 +47,7 @@ const ACCESS = new Set(['trial', 'active', 'grace']);
 const flagged = (docs, key, values) => docs.filter((d) => values.includes(d[key]));
 // What an operator can establish about an inbox row the server could not apply (Stage 4.2), after acting at the provider.
 export const EVENT_OUTCOMES = Object.freeze(['refunded_at_provider', 'cancelled_at_provider', 'applied_by_operator', 'no_action_needed']);
-const OPEN_EVENT = new Set(['reconciliation_required', 'rejected']);
+const OPEN_EVENT = new Set(['reconciliation_required', 'rejected', 'requires_action']); // requires_action: waiting on a server-side action that may never come (a checkout abandoned) — resolvable, and taken off the customer's pending list
 
 // The audit collection is every family's, TTL 400 days; one family writes a few rows a day, so the cap is years of rows.
 const AUDIT_PAGE = 1000, AUDIT_CAP = 50_000;
@@ -100,18 +100,20 @@ export class Support {
       family: { id: f, label: family.label, createdAt: family.createdAt, timeZone: family.timeZone || null, activeChildIds: family.activeChildIds || [], deletion: family.deletion || null },
       entitlement: effectiveEntitlement(family, this.now()), subscription: family.subscription || null, billing, gameConfig: config || null, children, emailPrefs, feedback, audit, auditTruncated: trail.truncated };
   }
-  /** Every audit row of one family, oldest first, read in pages under the reader given (a transaction or the store); `truncated` only past the cap. */
-  async familyAudit(reader, familyId) {
+  /** The rows of one collection with `field` equal to `value`, read in pages under the reader given (a transaction or the store); `truncated` only past the cap — and then the rows kept are the first by document id, not by time (the cap is years of use; SUPPORT.md). Never a whole collection: one family's rows cost one family's reads (fifth round). */
+  async pagedBy(reader, collection, field, value) {
     const rows = []; let after = null, truncated = false;
     for (;;) {
-      const page = await reader.queryAfter('audit', 'familyId', familyId, after, this.auditPage);
+      const page = await reader.queryAfter(collection, field, value, after, this.auditPage);
       for (const [, a] of page) rows.push(a);
+      if (rows.length > this.auditCap) { truncated = true; break; } // strictly past the cap: exactly the cap is every row
       if (page.length < this.auditPage) break;
-      if (rows.length >= this.auditCap) { truncated = true; break; }
       after = page.at(-1)[0];
     }
-    return { rows: rows.slice(0, this.auditCap).sort((a, b) => a.at - b.at), truncated };
+    return { rows: rows.slice(0, this.auditCap), truncated };
   }
+  /** Every audit row of one family, oldest first. */
+  async familyAudit(reader, familyId) { const r = await this.pagedBy(reader, 'audit', 'familyId', familyId); return { rows: r.rows.sort((a, b) => a.at - b.at), truncated: r.truncated }; }
   /** The parent asks for the family to be deleted. Nothing changes for 14 days; the parent can take it back. */
   async requestDeletion(ctx, body) {
     object(body, ['operationId']); const operationId = uuid(body?.operationId ?? (fail(400, 'OPERATION_ID_REQUIRED')));
@@ -215,16 +217,17 @@ export class Support {
       const mapping = await this.store.get(`billingCustomers/${provider}:${ref}`);
       customers.push({ provider, ref, mapping: mapping ? { lastEventAt: mapping.lastEventAt, lastEventId: mapping.lastEventId, pending: mapping.pending || [], aliasOf: mapping.aliasOf || null } : null });
     }
-    const refs = new Set(customers.map((c) => c.ref));
-    const inbox = (await this.store.list('billingEvents')).filter((e) => refs.has(e.customer)).sort((a, b) => a.at - b.at)
+    const refs = new Set(customers.map((c) => c.ref)), truncated = [], paged = async (collection, field, value) => { const r = await this.pagedBy(this.store, collection, field, value); if (r.truncated && !truncated.includes(collection)) truncated.push(collection); return r.rows; }; // the family's rows only, never the whole collection (fifth round)
+    const inboxRows = []; for (const ref of refs) inboxRows.push(...(await paged('billingEvents', 'customer', ref)));
+    const inbox = inboxRows.sort((a, b) => (a.at - b.at) || ((a.receivedAt || 0) - (b.receivedAt || 0)) || (a.providerEventId < b.providerEventId ? -1 : a.providerEventId > b.providerEventId ? 1 : 0)) // deterministic: time, receipt, then id
       .map((e) => ({ id: e.providerEventId, provider: e.provider, type: e.type, at: e.at, attempts: e.attempts, outcome: e.outcome }));
-    const intents = (await this.store.list('billingChangeIntents')).filter((i) => i.familyId === familyId).sort((a, b) => a.createdAt - b.createdAt)
-      .map((i) => ({ operationId: i.operationId, provider: i.provider, kind: i.kind, fromPlan: i.fromPlan, toPlan: i.toPlan, status: i.status, providerOperationRef: i.providerOperationRef || null, reconciliation: i.reconciliation || null, createdAt: i.createdAt }));
-    const checkouts = (await this.store.list('checkouts')).filter((c) => c.familyId === familyId).sort((a, b) => a.createdAt - b.createdAt)
-      .map((c) => ({ checkoutId: c.checkoutId, provider: c.provider, plan: c.plan, status: c.status, providerCheckoutRef: c.providerCheckoutRef || null, supersededBy: c.supersededBy || null, createdAt: c.createdAt }));
+    const intents = (await paged('billingChangeIntents', 'familyId', familyId)).sort((a, b) => a.createdAt - b.createdAt)
+      .map((i) => ({ operationId: i.operationId, provider: i.provider, kind: i.kind, fromPlan: i.fromPlan, toPlan: i.toPlan, status: i.status, providerOperationRef: i.providerOperationRef || null, providerAnsweredAt: i.providerAnsweredAt || null, reconciliation: i.reconciliation || null, createdAt: i.createdAt }));
+    const checkouts = (await paged('checkouts', 'familyId', familyId)).sort((a, b) => a.createdAt - b.createdAt)
+      .map((c) => ({ checkoutId: c.checkoutId, provider: c.provider, plan: c.plan, status: c.status, providerCheckoutRef: c.providerCheckoutRef || null, supersededBy: c.supersededBy || null, expiredByDeletion: c.expiredByDeletion || null, createdAt: c.createdAt }));
     const billing = (await this.store.list(`families/${familyId}/billing`)).sort((a, b) => a.at - b.at).map((e) => ({ id: e.id, type: e.type, plan: e.plan, at: e.at, actor: e.actor, state: e.result?.state || null }));
     const trail = await this.familyAudit(this.store, familyId), audit = trail.rows.map((a) => ({ action: a.action, uid: a.uid, at: a.at, childId: a.childId || null })), auditTruncated = trail.truncated; // every row, in pages (fourth round)
-    const reconciliations = (await this.store.list('billingReconciliations')).filter((r) => r.familyId === familyId);
+    const reconciliations = await paged('billingReconciliations', 'familyId', familyId);
     const providerChecks = reconciliations.filter((r) => r.kind === 'provider_state').sort((a, b) => b.at - a.at);
     const members = family.deleted ? [] : await this.store.entries(`families/${familyId}/members`), recoveries = []; // Stage 4.4: the parents' recovery requests
     for (const [uid] of members) { const r = await this.store.get(`recoveries/${uid}`); if (r) recoveries.push({ uid, status: r.status, requestedAt: r.requestedAt, readyAt: r.readyAt, cancelledBy: r.cancelledBy || null }); }
@@ -246,7 +249,7 @@ export class Support {
     };
     return { familyId, deleted: family.deleted === true, label: family.deleted ? null : family.label, createdAt: family.createdAt, phoneKey: family.phoneKey || null, timeZone: family.timeZone || null,
       entitlement: effectiveEntitlement(family, now), subscription: sub ? { ...sub, state: deriveState(sub, now) } : null, manualGrant: family.entitlement || null,
-      children, customers, inbox, intents, checkouts, billing, reconciliations, recoveries, audit, auditTruncated, attention };
+      children, customers, inbox, intents, checkouts, billing, reconciliations, recoveries, audit, auditTruncated, truncated, attention };
   }
   /** Provider customer reference → family. */
   async customerLookup(provider, ref) {
@@ -271,7 +274,7 @@ export class Support {
     const id = randomUUID(), startedAt = this.now();
     await this.store.transaction(async (tx) => { tx.set(`supportOperations/${id}`, { id, action: 'reprocess', operator, familyId, startedAt, status: 'running', results: null, finishedAt: null }); this.audit(tx, 'support.reprocess_started', operator, familyId, { operationId: id }); });
     const results = [];
-    for (const [provider, ref] of [...Object.entries(family.billing || {}), ...Object.entries(family.providerCustomer || {})]) for (const r of await this.payments.reprocess(provider, ref)) results.push({ provider, ...r });
+    for (const provider of new Set([...Object.keys(family.billing || {}), ...Object.keys(family.providerCustomer || {})])) for (const r of await this.payments.reprocessFamily(provider, familyId)) results.push({ provider, ...r });
     await this.store.transaction(async (tx) => {
       const row = await tx.get(`supportOperations/${id}`);
       tx.set(`supportOperations/${id}`, { ...row, status: 'done', results: results.map((r) => ({ provider: r.provider, id: r.id, status: r.status, reason: r.reason || null })), finishedAt: this.now() });
@@ -327,9 +330,24 @@ export class Support {
       if ((await this.store.query('sessions', 'familyId', id, 1)).length) add('TOMBSTONE_RESIDUE', id, 'a session remains');
       const pc = f.deletion?.providerCancellation || null, hadProvider = !!f.subscription && f.subscription.plan !== 'trial' && !!f.subscription.provider && !!f.billing?.[f.subscription.provider];
       if (pc?.status === 'failed' || (hadProvider && !pc)) add('DELETED_FAMILY_PROVIDER_LIVE', id, pc ? 'the provider subscription was not ended at deletion: reconcile-provider, then cancel at the provider' : 'the deletion never asked the provider to end the subscription: reconcile-provider, then cancel at the provider');
+      for (const c of (await this.pagedBy(this.store, 'checkouts', 'familyId', id)).rows) { // a session the deletion could not expire, a subscription made beyond the record it could not end
+        if (!['superseded', 'superseded_by_deletion'].includes(c.status)) continue;
+        const gw = this.payments?.gateways && Object.hasOwn(this.payments.gateways, c.provider) ? this.payments.gateways[c.provider] : null, ref = c.providerCheckoutRef || c.lateSessionRef || null;
+        if (c.expiredByDeletion && c.expiredByDeletion.expired !== true && c.expiredByDeletion.reason !== 'SESSION_COMPLETED') {
+          // asked again each night: a provider back, or a session the operator expired by hand, settles the record
+          let settled = false;
+          if (gw && ref && typeof gw.cancelCheckout === 'function') { try { const o = await gw.cancelCheckout(ref); if (o.expired === true) { settled = true; await this.store.transaction(async (tx) => { const cur = await tx.get(`checkouts/${c.provider}:${c.checkoutId}`); if (cur) tx.set(`checkouts/${c.provider}:${c.checkoutId}`, { ...cur, expiredByDeletion: { ...o, at: this.now() } }); }); } } catch { /* named below */ } }
+          if (!settled) add('DELETED_FAMILY_PROVIDER_LIVE', id, `the hosted session of checkout ${c.checkoutId} could not be expired at deletion (${c.expiredByDeletion.reason || 'no reason'}): expire it at the provider`);
+        }
+        const made = c.paymentPending?.subscriptionRef || (c.expiredByDeletion?.reason === 'SESSION_COMPLETED' ? c.expiredByDeletion.subscriptionRef : null) || null;
+        if (made && !(c.endedByDeletion?.cancelled === true)) add('DELETED_FAMILY_PROVIDER_LIVE', id, `checkout ${c.checkoutId} made subscription ${made} (paid on a superseded session, or its payment clearing) and it was not ended at deletion: cancel it at the provider`);
+      }
       return;
     }
     counts.families++;
+    // a refusal on the provider's truth (two live subscriptions, a subscription the family does not know) marked the family: the
+    // operator resolves it at the provider and reconcile-provider clears the mark once the provider is clean
+    if (f.providerAttention && f.providerAttention.at > now - 7 * DAY) { counts.providerAttention = (counts.providerAttention || 0) + 1; add('PROVIDER_ATTENTION', id, `${f.providerAttention.code} on ${new Date(f.providerAttention.at).toISOString()}: reconcile-provider, resolve at the provider, reconcile again`); }
     const active = f.activeChildIds || [], childIds = f.childIds || [], e = effectiveEntitlement(f, now), live = !!e && e.status === 'active' && e.accessUntil > now;
     counts.children += childIds.length; counts.activeChildren += active.length;
     if (live && active.length > e.seatLimit) add('SEAT_OVERFLOW', id, `${active.length} active children for ${e.seatLimit} seats`);
@@ -409,7 +427,7 @@ export class Support {
     const wantsProvider = !!sub && sub.plan !== 'trial' && ['active', 'grace', 'past_due'].includes(state) && !gone; // the family's record says a provider subscription should be live
     const providers = [];
     for (const [provider, ref] of Object.entries(family.billing || {})) {
-      const st = this.payments ? await this.payments.providerState(provider, ref) : { provider, available: false };
+      const st = this.payments ? await this.payments.providerState(provider, ref, family.providerCustomer?.[provider] || null) : { provider, available: false };
       const findings = [], add = (code, detail) => findings.push({ code, detail }), relevant = local.provider === provider, ps = st.subscription || null, live = ps?.live === true;
       if (!st.available) add('PROVIDER_STATE_UNAVAILABLE', 'this adapter cannot report provider state');
       else if (st.error) add('PROVIDER_UNREACHABLE', st.error);
@@ -425,16 +443,20 @@ export class Support {
         if (ps.periodEnd && local.periodEnd && Math.abs(ps.periodEnd - local.periodEnd) > 60_000) add('PERIOD_END_MISMATCH', `provider ${new Date(ps.periodEnd).toISOString()}; family ${new Date(local.periodEnd).toISOString()}`);
         if (ps.cancelAtPeriodEnd !== local.cancelAtPeriodEnd) add('CANCEL_FLAG_MISMATCH', `provider cancel at period end ${ps.cancelAtPeriodEnd}; family ${local.cancelAtPeriodEnd}`);
       }
-      providers.push({ provider, ref, available: st.available, simulated: st.simulated === true, error: st.error || null, customer: st.customer || null, subscription: ps, liveCount: st.liveCount ?? null, findings });
+      providers.push({ provider, ref, available: st.available, simulated: st.simulated === true, error: st.error || null, customer: st.customer || null, customerDeleted: st.customerDeleted === true, subscription: ps, liveCount: st.liveCount ?? null, findings });
     }
     const target = (i) => (i.kind === 'clear' ? i.fromPlan : i.toPlan);
     const intents = (await this.store.query('billingChangeIntents', 'familyId', familyId, 100)).map(([, i]) => i).filter((i) => ['creating', 'awaiting_payment', 'stale', 'superseded', 'frozen_by_deletion'].includes(i.status)).sort((a, b) => a.createdAt - b.createdAt)
       .map((i) => { const p = providers.find((x) => x.provider === i.provider), ps = p?.subscription; return { operationId: i.operationId, provider: i.provider, kind: i.kind, fromPlan: i.fromPlan, toPlan: i.toPlan, status: i.status, providerOperationRef: i.providerOperationRef || null,
-        providerEvidence: !p || !p.available || p.simulated || p.error ? 'unknown' : !ps?.live ? 'no_live_provider_subscription' : ps.plan === target(i) ? 'provider_on_target_plan' : 'provider_on_other_plan' }; });
+        providerEvidence: !p || !p.available || p.simulated || p.error ? 'unknown' : (p.liveCount || 0) > 1 ? 'ambiguous_multiple_subscriptions' : !ps?.live ? 'no_live_provider_subscription' : ps.plan === target(i) ? 'provider_on_target_plan' : 'provider_on_other_plan' }; });
     const findings = providers.flatMap((p) => p.findings.map((x) => ({ provider: p.provider, ...x }))), compared = providers.some((p) => p.available && !p.simulated && !p.error);
     const id = randomUUID(), record = { id, kind: 'provider_state', familyId, deleted: family.deleted === true, operator, at: now, local, providers, intents, findings, match: compared ? findings.length === 0 : null };
-    await this.store.transaction(async (tx) => { tx.set(`billingReconciliations/${id}`, record); this.audit(tx, 'support.provider_reconciled', operator, familyId, { reconciliationId: id, findings: findings.map((x) => x.code), match: record.match }); });
-    return record;
+    await this.store.transaction(async (tx) => {
+      const current = await tx.get(`families/${familyId}`);
+      if (current?.providerAttention && record.match === true) tx.set(`families/${familyId}`, { ...current, providerAttention: null }); // the provider is clean again: the mark goes
+      tx.set(`billingReconciliations/${id}`, record); this.audit(tx, 'support.provider_reconciled', operator, familyId, { reconciliationId: id, findings: findings.map((x) => x.code), match: record.match });
+    });
+    return { ...record, attentionCleared: record.match === true };
   }
   /**
    * Stage 4.2: close an inbox row the server could not apply — a late event on a deleted family
@@ -450,7 +472,9 @@ export class Support {
       const r = await tx.get(path); if (!r) fail(404, 'EVENT_NOT_FOUND');
       if (!OPEN_EVENT.has(r.outcome?.status)) fail(409, 'EVENT_NOT_OPEN');
       if (r.outcome.resolution) fail(409, 'EVENT_ALREADY_RESOLVED');
+      const mappingPath = r.outcome.status === 'requires_action' && r.customer ? `billingCustomers/${provider}:${r.customer}` : null, mapping = mappingPath ? await tx.get(mappingPath) : null;
       const id = randomUUID(), now = this.now();
+      if (mapping && (mapping.pending || []).includes(eventId)) tx.set(mappingPath, { ...mapping, pending: mapping.pending.filter((x) => x !== eventId) }); // a resolved event is never processed again
       const record = { id, kind: 'event', provider, eventId, familyId: r.familyId || null, eventType: r.type, previousOutcome: r.outcome.status, reason: r.outcome.reason || null, outcome, note, operator, at: now };
       tx.set(`billingReconciliations/${id}`, record);
       tx.set(path, { ...r, outcome: { ...r.outcome, resolution: { id, outcome, operator, at: now } } });
@@ -540,7 +564,35 @@ export class Support {
       return next;
     });
     if (family.deleted) return await this.store.get(`deletions/${familyId}`);
-    // phase 0b — the subscription ends as a recorded financial event, now that nothing can revive it (a rerun finds it ended).
+    // phase 0b — first the hosted sessions the freeze superseded are expired at the provider (best effort, recorded on each
+    // checkout; a rerun finds the ones not yet done): a page still open in the parent's browser must not buy a subscription for a
+    // family that is being deleted (fifth round). Then the subscription ends as a recorded financial event, now that nothing can
+    // revive it (a rerun finds it ended).
+    const endings = []; // subscriptions made beyond the family's record — by a session that completed while its payment cleared, or paid on a superseded session — ended here
+    const endFor = async (gw, id, c, subscriptionRef) => {
+      let r; try { r = await gw.cancelSubscription({ idempotencyKey: `deletion:${family.deletion.executionId}:${c.checkoutId}`, customerRef: c.customerRef, customerId: family.providerCustomer?.[c.provider] || null, subscriptionRef }); }
+      catch (error) { if (!(error instanceof Fault)) throw error; r = { cancelled: false, reason: error.code }; }
+      const ended = { cancelled: r.cancelled === true, already: r.already === true, reason: r.reason || null, providerOperationRef: r.providerOperationRef || subscriptionRef, subscriptionRef, at: this.now() };
+      await this.store.transaction(async (tx) => { const cur = await tx.get(`checkouts/${id}`); if (cur && !(cur.endedByDeletion?.cancelled === true)) tx.set(`checkouts/${id}`, { ...cur, endedByDeletion: ended }); }); // a recorded ending is never downgraded by a concurrent run's fault
+      endings.push({ provider: c.provider, status: ended.cancelled ? 'cancelled' : 'failed', already: ended.already, providerOperationRef: ended.providerOperationRef, reason: ended.reason, checkoutId: c.checkoutId, at: ended.at });
+    };
+    for (const c of (await this.pagedBy(this.store, 'checkouts', 'familyId', familyId)).rows) { // every checkout of the family, in pages: never the first hundred
+      const id = `${c.provider}:${c.checkoutId}`, closed = ['superseded', 'superseded_by_deletion'].includes(c.status), ref = c.providerCheckoutRef || c.lateSessionRef || null;
+      if (!closed) continue;
+      const gw = this.payments?.gateways && Object.hasOwn(this.payments.gateways, c.provider) ? this.payments.gateways[c.provider] : null;
+      if (!gw) { if (ref || c.paymentPending) await this.store.transaction(async (tx) => { const cur = await tx.get(`checkouts/${id}`); if (cur && !cur.expiredByDeletion) tx.set(`checkouts/${id}`, { ...cur, expiredByDeletion: { expired: false, reason: 'PROVIDER_NOT_CONFIGURED', at: this.now() } }); }); continue; } // named by the sweep, never skipped silently
+      // every session of the family's that may still be payable — the one the freeze superseded, the ones earlier clicks superseded whose
+      // best-effort expiry may have faulted, a session that arrived late — is expired; a record that says expired is never downgraded by
+      // a rerun's refusal, and a record that says faulted is asked again by a rerun
+      let completedRef = c.expiredByDeletion?.reason === 'SESSION_COMPLETED' ? c.expiredByDeletion.subscriptionRef || null : null;
+      if (ref && !(c.expiredByDeletion?.expired === true) && !completedRef && typeof gw.cancelCheckout === 'function') {
+        let outcome; try { outcome = await gw.cancelCheckout(ref); } catch (error) { if (!(error instanceof Fault)) throw error; outcome = { expired: false, reason: error.code }; }
+        if (outcome.reason === 'SESSION_COMPLETED' && outcome.subscriptionRef) completedRef = outcome.subscriptionRef; // paid on a superseded session: a subscription made, ended below
+        await this.store.transaction(async (tx) => { const cur = await tx.get(`checkouts/${id}`); if (cur && !(cur.expiredByDeletion?.expired === true)) tx.set(`checkouts/${id}`, { ...cur, expiredByDeletion: { ...outcome, at: this.now() } }); });
+      }
+      const made = c.paymentPending?.subscriptionRef || completedRef || null;
+      if (made && made !== family.subscription?.providerSubscriptionRef && !(c.endedByDeletion?.cancelled === true) && typeof gw.cancelSubscription === 'function') await endFor(gw, id, c, made);
+    }
     // The provider is told whatever the local state — a past_due family is still being dunned there, a refunded one may still be
     // live (Stage 4 review, third round); the machine records `terminate` only where access still existed.
     if (family.subscription) {
@@ -549,6 +601,9 @@ export class Support {
       if (ACCESS.has(deriveState(family.subscription, this.now()))) await this.billing.apply(familyId, { id: randomUUID(), type: 'terminate' }, operator);
       await this.store.transaction(async (tx) => { const f = await tx.get(`families/${familyId}`); if (f && !f.deleted) tx.set(`families/${familyId}`, { ...f, deletion: { ...f.deletion, providerCancellation } }); });
     }
+    // what the deletion ended beyond the record stands as its provider cancellation when the record itself had none to end (no
+    // subscription, a trial, an operator's grant): a failed ending is the one the operator reads
+    if (endings.length) await this.store.transaction(async (tx) => { const f = await tx.get(`families/${familyId}`); if (!f || f.deleted) return; const pc = f.deletion?.providerCancellation || null; const chosen = endings.find((e) => e.status === 'failed') || endings.at(-1); tx.set(`families/${familyId}`, { ...f, deletion: { ...f.deletion, providerCancellation: !pc || pc.status === 'not_applicable' ? chosen : pc, otherEndings: endings } }); });
     // phase 1 — login sessions of the family and of its parents (nobody could use them: authorize and login refuse an executing family)
     const members = await this.store.entries(`families/${familyId}/members`), uids = members.map(([uid]) => uid);
     await this.sweepWhere('sessions', 'familyId', familyId, batch, familyId, 'loginSessions');

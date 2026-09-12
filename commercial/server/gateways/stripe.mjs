@@ -20,6 +20,8 @@ import { Fault, fail, equal, sha256 } from '../security.mjs';
 export const STRIPE_TOLERANCE_MS = 5 * 60_000;
 const PLAN_KEYS = ['starter', 'family', 'big'];
 const LIVE = new Set(['active', 'trialing', 'past_due', 'unpaid']); // Stripe subscription statuses that still bill or await payment
+const ENDED = new Set(['canceled', 'incomplete_expired']); // the statuses that can never bill again; anything else (`paused`, `incomplete` too) is ended by a DELETE
+const PAID = new Set(['active', 'trialing']); // paid and current: never ended for a new checkout while our record says otherwise
 // form-encode nested objects the way Stripe expects: a[b][c]=v
 export function form(obj, prefix = '') {
   const out = [];
@@ -81,14 +83,14 @@ export class StripeGateway {
     return json;
   }
   /** The Stripe Customer that carries our customer reference in its metadata; created once per reference. */
-  async customer(customerRef, familyId) {
-    const found = await this.api('GET', `/v1/customers/search?query=${encodeURIComponent(`metadata['customerRef']:'${customerRef}'`)}&limit=1`);
-    if (found.data?.[0]) return found.data[0];
-    return this.api('POST', '/v1/customers', { metadata: { customerRef, familyId } }, `customer:${customerRef}`);
+  async customer(customerRef, familyId, customerId = null) {
+    const { customer } = await this.resolveCustomer({ customerRef, customerId }); // the recorded id first: a search that lags must not mint a second customer (fifth round)
+    if (customer) return customer;
+    return this.api('POST', '/v1/customers', { metadata: { customerRef, familyId } }, `customer:${customerRef}:${customerId || 'first'}`); // keyed by the customer it replaces: a re-mint after a deletion is never Stripe's replay of the deleted one
   }
-  async createCheckout({ checkoutId, idempotencyKey, customerRef, plan, familyId }) {
+  async createCheckout({ checkoutId, idempotencyKey, customerRef, customerId = null, plan, familyId }) {
     const price = this.priceFor(plan.id); if (!price) fail(400, 'INVALID_PLAN');
-    const cus = await this.customer(customerRef, familyId);
+    const cus = await this.customer(customerRef, familyId, customerId);
     const session = await this.api('POST', '/v1/checkout/sessions', {
       mode: 'subscription', customer: cus.id, client_reference_id: checkoutId,
       line_items: [{ price, quantity: 1 }],
@@ -100,12 +102,35 @@ export class StripeGateway {
   /** A superseded hosted session is expired at Stripe so it can no longer be paid (already expired or completed: nothing to do). */
   async cancelCheckout(providerCheckoutRef) {
     try { await this.api('POST', `/v1/checkout/sessions/${providerCheckoutRef}/expire`, {}, `expire:${providerCheckoutRef}`); return { expired: true }; }
-    catch (error) { if (error instanceof Fault && [400, 404].includes(error.provider?.status)) return { expired: false, reason: error.provider.code }; throw error; }
+    catch (error) {
+      if (!(error instanceof Fault && [400, 404].includes(error.provider?.status))) throw error;
+      // a session no longer open — expired before (a rerun, a concurrent run), or completed — refuses the expiry: that is its settled
+      // state, answered as such and never recorded as a failure (fifth round); a session Stripe cannot show is the refusal it gave
+      let session = null; try { session = await this.api('GET', `/v1/checkout/sessions/${providerCheckoutRef}`); } catch { /* answered below as the refusal */ }
+      const status = session?.status || null;
+      if (status === 'complete') return { expired: false, reason: 'SESSION_COMPLETED', status, subscriptionRef: typeof session.subscription === 'string' ? session.subscription : session.subscription?.id || null }; // paid: a subscription made, which the caller ends
+      if (status && status !== 'open') return { expired: true, already: true, status };
+      return { expired: false, reason: error.provider.code };
+    }
   }
   /** The customer carrying our reference, without creating one: a change, a cancellation or a check never mints a customer. */
   async findCustomer(customerRef) {
     const found = await this.api('GET', `/v1/customers/search?query=${encodeURIComponent(`metadata['customerRef']:'${customerRef}'`)}&limit=1`);
     return found.data?.[0] || null;
+  }
+  /**
+   * The family's customer at Stripe: by the id this server recorded when its checkout completed — the record's own fact, which a
+   * dashboard edit of the metadata cannot move and a search index that lags cannot hide — and by the customerRef search only for a
+   * customer this server never recorded (fifth round). A recorded customer Stripe reports `deleted` is answered as such: Stripe ends
+   * every subscription of a deleted customer, so a debt against one is settled by that fact. An id Stripe never held (404) is not
+   * a deletion — nothing is presumed about it.
+   */
+  async resolveCustomer({ customerRef, customerId = null }) {
+    if (customerId) {
+      try { const cus = await this.api('GET', `/v1/customers/${customerId}`); return cus.deleted === true ? { customer: null, deleted: true } : { customer: cus, deleted: false }; }
+      catch (error) { if (!(error instanceof Fault && error.provider?.status === 404)) throw error; }
+    }
+    return { customer: await this.findCustomer(customerRef), deleted: false };
   }
   /** Every subscription of a customer, the live ones apart. */
   async subscriptionsOf(cusId) {
@@ -123,15 +148,17 @@ export class StripeGateway {
     if (live.length > 1) fail(409, 'MULTIPLE_PROVIDER_SUBSCRIPTIONS');
     return live[0] || all[0] || null;
   }
-  async liveSubscription(customerRef) {
-    const cus = await this.findCustomer(customerRef); if (!cus) fail(409, 'NO_PROVIDER_SUBSCRIPTION');
+  /** The live subscription a change or a cancellation acts on. With `subscriptionRef` — the one the family's record names — a live one that is not it is never touched (fifth round). */
+  async liveSubscription(customerRef, { customerId = null, subscriptionRef = null } = {}) {
+    const { customer: cus } = await this.resolveCustomer({ customerRef, customerId }); if (!cus) fail(409, 'NO_PROVIDER_SUBSCRIPTION');
     const sub = await this.subscriptionOf(cus.id); if (!sub || !LIVE.has(sub.status) || !sub.items?.data?.[0]) fail(409, 'NO_PROVIDER_SUBSCRIPTION');
+    if (subscriptionRef && sub.id !== subscriptionRef) fail(409, 'PROVIDER_SUBSCRIPTION_LIVE'); // a live subscription the family's record does not know: the operator's, never changed on the family's behalf
     return sub;
   }
   /** Stripe's subscription in the shape the reconciliation compares (RECONCILIATION.md); nothing secret in it. */
   describe(sub) {
     const price = sub.items?.data?.[0]?.price?.id || null;
-    return { ref: sub.id, status: sub.status, live: LIVE.has(sub.status), price, plan: this.planFor(price), periodEnd: periodEndOf(sub), cancelAtPeriodEnd: sub.cancel_at_period_end === true, canceledAt: sub.canceled_at ? sub.canceled_at * 1000 : null };
+    return { ref: sub.id, status: sub.status, live: LIVE.has(sub.status), ended: ENDED.has(sub.status), price, plan: this.planFor(price), periodEnd: periodEndOf(sub), cancelAtPeriodEnd: sub.cancel_at_period_end === true, canceledAt: sub.canceled_at ? sub.canceled_at * 1000 : null, checkoutId: sub.metadata?.checkoutId || null }; // checkoutId: the checkout of ours that made it (createCheckout stamps it), null for one the dashboard made
   }
   /**
    * Move the customer's live subscription to the new price; the prorated difference is invoiced now.
@@ -139,9 +166,9 @@ export class StripeGateway {
    * subscription carries `pending_update` and the answer says `pending` (Stage 4 review: a failed or unfinished upgrade
    * charge must never grant the bigger plan). A card charged on the spot answers `applied`.
    */
-  async changePlan({ idempotencyKey, customerRef, to }) {
+  async changePlan({ idempotencyKey, customerRef, customerId = null, subscriptionRef = null, to }) {
     const price = this.priceFor(to); if (!price) fail(400, 'INVALID_PLAN');
-    const sub = await this.liveSubscription(customerRef);
+    const sub = await this.liveSubscription(customerRef, { customerId, subscriptionRef });
     const updated = await this.api('POST', `/v1/subscriptions/${sub.id}`, { items: [{ id: sub.items.data[0].id, price }], proration_behavior: 'always_invoice', payment_behavior: 'pending_if_incomplete', expand: ['latest_invoice'], metadata: { lastChange: idempotencyKey } }, idempotencyKey);
     const invoice = updated.latest_invoice && typeof updated.latest_invoice === 'object' ? updated.latest_invoice : null;
     const invoiceId = invoice ? invoice.id : typeof updated.latest_invoice === 'string' ? updated.latest_invoice : null;
@@ -150,32 +177,57 @@ export class StripeGateway {
       providerOperationRef: `${updated.id}:${invoiceId || ''}`, applied, pending: !applied, invoiceRef: invoiceId, invoiceUrl: invoice?.hosted_invoice_url || null, simulated: false };
   }
   /** A scheduled change: the new price without proration, so the next invoice carries it and the current period stays as paid. */
-  async schedulePlan({ idempotencyKey, customerRef, to }) {
+  async schedulePlan({ idempotencyKey, customerRef, customerId = null, subscriptionRef = null, to }) {
     const price = this.priceFor(to); if (!price) fail(400, 'INVALID_PLAN');
-    const sub = await this.liveSubscription(customerRef);
+    const sub = await this.liveSubscription(customerRef, { customerId, subscriptionRef });
     const updated = await this.api('POST', `/v1/subscriptions/${sub.id}`, { items: [{ id: sub.items.data[0].id, price }], proration_behavior: 'none', metadata: { lastChange: idempotencyKey } }, idempotencyKey);
     return { providerOperationRef: updated.id, effectiveAt: periodEndOf(updated), simulated: false };
   }
   /** The parent's cancel-at-period-end, or its undo, on the provider's subscription. */
-  async setCancelAtPeriodEnd({ idempotencyKey, customerRef, cancel }) {
-    const sub = await this.liveSubscription(customerRef);
+  async setCancelAtPeriodEnd({ idempotencyKey, customerRef, customerId = null, subscriptionRef = null, cancel }) {
+    const sub = await this.liveSubscription(customerRef, { customerId, subscriptionRef });
     const updated = await this.api('POST', `/v1/subscriptions/${sub.id}`, { cancel_at_period_end: cancel === true }, idempotencyKey);
     return { providerOperationRef: updated.id, cancelAtPeriodEnd: updated.cancel_at_period_end === true, simulated: false };
   }
-  /** End the subscription now (a family's deletion). Already ended at Stripe: nothing to do. Refunds are the operator's decision in the dashboard. */
-  async cancelSubscription({ customerRef }) {
-    const cus = await this.findCustomer(customerRef), sub = cus ? await this.subscriptionOf(cus.id) : null;
+  /**
+   * End the subscription now (a family's deletion, a returning checkout). Already ended at Stripe: nothing to do. Refunds are the
+   * operator's decision in the dashboard. With `subscriptionRef` — the subscription the family's record names — only that one is
+   * ended: a different live one is a checkout completing (just paid for) and is answered, never ended (fourth round).
+   */
+  async cancelSubscription({ customerRef, customerId = null, subscriptionRef = null, unlessPaid = false }) {
+    const { customer: cus, deleted } = await this.resolveCustomer({ customerRef, customerId });
+    if (deleted) return { cancelled: true, already: true, reason: 'CUSTOMER_DELETED', providerOperationRef: subscriptionRef, simulated: false }; // Stripe ended every subscription with the customer
+    if (!cus) return { cancelled: false, reason: 'NO_PROVIDER_SUBSCRIPTION', simulated: false };
+    const { live, all } = await this.subscriptionsOf(cus.id);
+    if (live.length > 1) fail(409, 'MULTIPLE_PROVIDER_SUBSCRIPTIONS');
+    if (subscriptionRef && live[0] && live[0].id !== subscriptionRef) return { cancelled: false, reason: 'ANOTHER_SUBSCRIPTION_LIVE', liveRef: live[0].id, liveCheckoutId: live[0].metadata?.checkoutId || null, simulated: false }; // liveCheckoutId: the checkout of ours that made the live one, when it was ours
+    let sub = subscriptionRef ? all.find((x) => x.id === subscriptionRef) || null : live[0] || all[0] || null; // a named subscription is never substituted by another of the customer's (fifth round)
+    // the named subscription absent from this customer's list — the family's customer moved on after a deletion, a record older than the
+    // customer it names — is asked for by its own id: Stripe keeps an ended subscription retrievable, and one it never held settles nothing
+    if (!sub && subscriptionRef) sub = await this.subscriptionById(subscriptionRef);
     if (!sub) return { cancelled: false, reason: 'NO_PROVIDER_SUBSCRIPTION', simulated: false };
-    if (!LIVE.has(sub.status)) return { cancelled: true, already: true, providerOperationRef: sub.id, simulated: false };
-    try { await this.api('DELETE', `/v1/subscriptions/${sub.id}`); return { cancelled: true, providerOperationRef: sub.id, simulated: false }; }
-    catch (error) { if (error instanceof Fault && [400, 404].includes(error.provider?.status)) return { cancelled: true, already: true, providerOperationRef: sub.id, reason: error.provider.code, simulated: false }; throw error; }
+    // read once more right before the ending: the list above may be seconds old and a payment that landed meanwhile must be seen — the
+    // window is this one call, not search + list + delete; what the subscription looked like travels on the answer, for the record
+    const fresh = (await this.subscriptionById(sub.id)) || sub, seen = { status: fresh.status, periodEnd: periodEndOf(fresh), cancelAtPeriodEnd: fresh.cancel_at_period_end === true };
+    if (ENDED.has(fresh.status)) return { cancelled: true, already: true, providerOperationRef: fresh.id, ...seen, simulated: false }; // `paused` and `incomplete` can bill again: they are ended below
+    // paid and current at Stripe (and not winding down) while the family's record says otherwise: the record is behind — its invoice.paid
+    // still on its way — and a subscription just paid for is never ended for a new checkout (fifth round); the caller marks the family
+    if (unlessPaid && PAID.has(fresh.status) && fresh.cancel_at_period_end !== true) return { cancelled: false, reason: 'SUBSCRIPTION_PAID', providerOperationRef: fresh.id, ...seen, simulated: false };
+    try { await this.api('DELETE', `/v1/subscriptions/${fresh.id}`); return { cancelled: true, providerOperationRef: fresh.id, ...seen, simulated: false }; }
+    catch (error) { if (error instanceof Fault && [400, 404].includes(error.provider?.status)) return { cancelled: true, already: true, providerOperationRef: fresh.id, reason: error.provider.code, ...seen, simulated: false }; throw error; }
+  }
+  /** One subscription by its id; null when Stripe never held it. */
+  async subscriptionById(id) {
+    try { return await this.api('GET', `/v1/subscriptions/${id}`); }
+    catch (error) { if (error instanceof Fault && error.provider?.status === 404) return null; throw error; }
   }
   /** What Stripe holds for this customer, for the reconciliation report. Read-only. */
-  async inspect(customerRef) {
-    const cus = await this.findCustomer(customerRef);
-    if (!cus) return { provider: this.name, customer: null, subscription: null, liveCount: 0, multiple: false, simulated: false };
-    const { live, all } = await this.subscriptionsOf(cus.id), sub = live[0] || all[0] || null; // read-only: two live ones are reported, never chosen between
-    return { provider: this.name, customer: { id: cus.id }, subscription: sub ? this.describe(sub) : null, liveCount: live.length, multiple: live.length > 1, subscriptions: live.map((s) => this.describe(s)), simulated: false };
+  async inspect(customerRef, { customerId = null } = {}) {
+    const { customer: cus, deleted } = await this.resolveCustomer({ customerRef, customerId });
+    if (!cus) return { provider: this.name, customer: null, customerDeleted: deleted, subscription: null, liveCount: 0, openCount: 0, multiple: false, simulated: false };
+    const { live, all } = await this.subscriptionsOf(cus.id), sub = live.length === 1 ? live[0] : live.length === 0 ? all[0] || null : null; // read-only: two live ones are reported, never chosen between
+    const open = all.filter((s) => !ENDED.has(s.status)); // live, or able to bill again (`paused`, `incomplete`)
+    return { provider: this.name, customer: { id: cus.id }, customerDeleted: false, subscription: sub ? this.describe(sub) : null, liveCount: live.length, openCount: open.length, multiple: live.length > 1, subscriptions: open.map((s) => this.describe(s)), simulated: false };
   }
   /** Signature first, then Stripe's event → the inbox shape. Async: a completed checkout is resolved against the subscription Stripe holds. */
   async verify(rawBody, headers, nowMs) {
@@ -187,12 +239,16 @@ export class StripeGateway {
     const o = ev.data.object, at = ev.created * 1000, base = { id: ev.id, at, seq: null, fingerprint: sha256(JSON.stringify({ id: ev.id, type: ev.type, created: ev.created, object: typeof o.id === 'string' ? o.id : null })) };
     if (at > nowMs + STRIPE_TOLERANCE_MS) fail(400, 'EVENT_IN_FUTURE'); // a far-future timestamp would make every later event stale
     const customer = typeof o.customer === 'string' ? o.customer : o.customer?.id || null;
-    if (ev.type === 'checkout.session.completed') {
+    const passthrough = (type) => ({ ...base, type, customer: customer || 'none', data: { ...NONE } }); // recorded and ignored by the inbox
+    if (ev.type === 'checkout.session.async_payment_failed') return { ...base, type: 'checkout.payment_failed', customer: customer || 'none', data: { ...NONE, familyId: o.metadata?.familyId || null, checkoutId: o.client_reference_id || o.metadata?.checkoutId || null, subscriptionRef: typeof o.subscription === 'string' ? o.subscription : o.subscription?.id || null } }; // the debit failed: the checkout is released for a new click
+    if (ev.type === 'checkout.session.completed' || ev.type === 'checkout.session.async_payment_succeeded') {
       if (!customer || !o.subscription) fail(400, 'INVALID_REQUEST');
+      // a session is paid only when Stripe says so: one completed with a delayed-notification method (a bank debit) says `unpaid` and
+      // grants nothing; its `async_payment_succeeded` — the same session, now paid — is the completion (fifth round)
+      if (o.payment_status !== 'paid' && o.payment_status !== 'no_payment_required') return { ...base, type: 'checkout.payment_pending', customer, data: { ...NONE, familyId: o.metadata?.familyId || null, checkoutId: o.client_reference_id || o.metadata?.checkoutId || null, subscriptionRef: typeof o.subscription === 'string' ? o.subscription : o.subscription?.id || null, ref: o.payment_status || 'unknown' } }; // ignored by the machine, remembered on the checkout: its async success completes it
       const sub = await this.api('GET', `/v1/subscriptions/${typeof o.subscription === 'string' ? o.subscription : o.subscription.id}`); // provider state, not our own metadata
       return { ...base, type: 'checkout.completed', customer, data: { ...NONE, price: sub.items?.data?.[0]?.price?.id || null, periodEnd: periodEndOf(sub), familyId: o.metadata?.familyId || null, checkoutId: o.client_reference_id || o.metadata?.checkoutId || null, subscriptionRef: typeof sub.id === 'string' ? sub.id : null } };
     }
-    const passthrough = (type) => ({ ...base, type, customer: customer || 'none', data: { ...NONE } }); // recorded and ignored by the inbox
     if (ev.type === 'invoice.paid' || ev.type === 'invoice.payment_failed') {
       const details = o.parent?.subscription_details || o.subscription_details || null; // basil moved it under parent
       const subId = typeof details?.subscription === 'string' ? details.subscription : typeof o.subscription === 'string' ? o.subscription : null;
@@ -210,23 +266,27 @@ export class StripeGateway {
       const chargeId = typeof o.charge === 'string' ? o.charge : o.charge?.id; if (!chargeId || typeof o.id !== 'string') fail(400, 'INVALID_REQUEST');
       const charge = await this.api('GET', `/v1/charges/${chargeId}`);
       const cust = typeof charge.customer === 'string' ? charge.customer : charge.customer?.id || null; if (!cust) fail(400, 'INVALID_REQUEST');
-      return { charge, cust, full: charge.refunded === true || (Number.isSafeInteger(charge.amount_refunded) && Number.isSafeInteger(charge.amount) && charge.amount_refunded >= charge.amount) };
+      // the subscription the charge paid for, through its invoice: a refund of the previous subscription's last invoice — goodwill for an
+      // unused dunning month — must not end the one the family pays for now (fifth round); a charge with no invoice names none
+      const invoiceId = typeof charge.invoice === 'string' ? charge.invoice : charge.invoice?.id || null; let subscriptionRef = null;
+      if (invoiceId) { const inv = await this.api('GET', `/v1/invoices/${invoiceId}`), d = inv.parent?.subscription_details || inv.subscription_details || null; subscriptionRef = typeof d?.subscription === 'string' ? d.subscription : typeof inv.subscription === 'string' ? inv.subscription : null; }
+      return { charge, cust, subscriptionRef, full: charge.refunded === true || (Number.isSafeInteger(charge.amount_refunded) && Number.isSafeInteger(charge.amount) && charge.amount_refunded >= charge.amount) };
     };
     if (ev.type === 'refund.created' || ev.type === 'refund.updated') {
       // the per-refund object (Stage 4 review): its own id and amount, never the charge's running total. A refund counts from
       // the moment it exists — pending or succeeded — because the owner's policy is that access ends as soon as a refund is
       // approved; one that later fails is recorded as refund.failed for the operator (RECONCILIATION.md). The refund id is the
       // ref, so created-then-updated is one refund, not two.
-      const { cust, full } = await chargeOf();
-      if (o.status === 'failed' || o.status === 'canceled') return { ...passthrough('refund.failed'), customer: cust, data: { ...NONE, amountCents: Number.isSafeInteger(o.amount) ? o.amount : null, ref: o.id } };
+      const { cust, full, subscriptionRef } = await chargeOf();
+      if (o.status === 'failed' || o.status === 'canceled') return { ...passthrough('refund.failed'), customer: cust, data: { ...NONE, amountCents: Number.isSafeInteger(o.amount) ? o.amount : null, ref: o.id, subscriptionRef } };
       if (o.status !== 'pending' && o.status !== 'succeeded') return { ...passthrough(`stripe.${ev.type}:${o.status || 'unknown'}`), customer: cust };
-      return { ...base, type: 'refund.created', customer: cust, data: { ...NONE, amountCents: Number.isSafeInteger(o.amount) ? o.amount : null, full, ref: o.id } };
+      return { ...base, type: 'refund.created', customer: cust, data: { ...NONE, amountCents: Number.isSafeInteger(o.amount) ? o.amount : null, full, ref: o.id, subscriptionRef } };
     }
     if (ev.type === 'charge.dispute.created' || ev.type === 'charge.dispute.funds_withdrawn') {
       // a card dispute takes the money back the moment it is opened: for the family it is a full refund (access ends now);
       // the dispute id is the ref, so funds_withdrawn after created is the same dispute, not a second one
-      const { cust } = await chargeOf();
-      return { ...base, type: 'dispute.opened', customer: cust, data: { ...NONE, amountCents: Number.isSafeInteger(o.amount) ? o.amount : null, full: true, ref: o.id } };
+      const { cust, subscriptionRef } = await chargeOf();
+      return { ...base, type: 'dispute.opened', customer: cust, data: { ...NONE, amountCents: Number.isSafeInteger(o.amount) ? o.amount : null, full: true, ref: o.id, subscriptionRef } };
     }
     if (ev.type === 'charge.dispute.closed' || ev.type === 'charge.dispute.funds_reinstated') {
       // won: the money came back — recorded for the operator, who may restore access by hand; lost: nothing more to do

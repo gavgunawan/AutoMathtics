@@ -86,7 +86,7 @@ test('disputes end access the moment they open; a pending refund already counts;
   const support = new Support({ foundation: f.service, store: f.store, billing: f.billing, payments, now: f.now });
   const a = await f.family('parentA', 0);
   const chk = await payments.checkout(a.ctx, { plan: 'family', ...op() }); account.activate(PRICES.family);
-  const done = event(f, 'checkout.session.completed', { object: 'checkout.session', customer: account.state.customer.id, subscription: 'sub_1', client_reference_id: chk.checkoutId, metadata: { familyId: a.familyId } });
+  const done = event(f, 'checkout.session.completed', { object: 'checkout.session', payment_status: 'paid', customer: account.state.customer.id, subscription: 'sub_1', client_reference_id: chk.checkoutId, metadata: { familyId: a.familyId } });
   let s = signed(f, done); assert.equal((await payments.receive('stripe', s.raw, s.headers)).status, 'applied');
   account.state.charge = { id: 'ch_1', customer: account.state.customer.id, amount: 900, amount_refunded: 0, refunded: false };
   // a pending partial refund counts at once; its later success is the same refund
@@ -98,7 +98,7 @@ test('disputes end access the moment they open; a pending refund already counts;
   // a refund the provider could not complete: recorded, counted, nothing applied
   const failed = event(f, 'refund.updated', { object: 'refund', id: 're_2', charge: 'ch_1', amount: 100, status: 'failed' });
   s = signed(f, failed); assert.equal((await payments.receive('stripe', s.raw, s.headers)).reason, 'UNSUPPORTED_EVENT');
-  let report = await support.familyReport(a.familyId); assert.equal(report.attention.refundFailures, 1); assert.equal(report.inbox.at(-1).type, 'refund.failed');
+  let report = await support.familyReport(a.familyId); assert.equal(report.attention.refundFailures, 1); assert.ok(report.inbox.some((e) => e.type === 'refund.failed'));
   // a dispute: access ends the moment it opens; funds_withdrawn is the same dispute
   const opened = event(f, 'charge.dispute.created', { object: 'dispute', id: 'dp_1', charge: 'ch_1', amount: 900, status: 'needs_response' });
   s = signed(f, opened); assert.equal((await payments.receive('stripe', s.raw, s.headers)).state, 'cancelled');
@@ -111,6 +111,6 @@ test('disputes end access the moment they open; a pending refund already counts;
   s = signed(f, won); assert.equal((await payments.receive('stripe', s.raw, s.headers)).reason, 'UNSUPPORTED_EVENT');
   report = await support.familyReport(a.familyId); assert.equal(report.attention.disputesWon, 1); assert.equal((await f.store.get(`families/${a.familyId}`)).subscription.state, 'cancelled');
   const lost = event(f, 'charge.dispute.closed', { object: 'dispute', id: 'dp_2', charge: 'ch_1', amount: 900, status: 'lost' });
-  s = signed(f, lost); assert.equal((await payments.receive('stripe', s.raw, s.headers)).reason, 'UNSUPPORTED_EVENT'); assert.equal((await support.familyReport(a.familyId)).inbox.at(-1).type, 'dispute.lost');
+  s = signed(f, lost); assert.equal((await payments.receive('stripe', s.raw, s.headers)).reason, 'UNSUPPORTED_EVENT'); assert.ok((await support.familyReport(a.familyId)).inbox.some((e) => e.type === 'dispute.lost'));
   const sweep = await support.inspectAll({ operator: OPERATOR }); assert.deepEqual(sweep.findings, []);
 });

@@ -81,8 +81,8 @@ test('Blocker 1: a crash in the middle of a child sweep is resumed with the accu
   assert.equal((await f.store.get(`checkouts/fake:${co.checkoutId}`)).status, 'superseded_by_deletion'); assert.equal(mid.checkoutIntent, null);
   const record = await f.support.executeDeletion(a.familyId, { operator: 'ops@example.test' });
   assert.equal(record.counts.sessions, 2, 'both children\'s sessions are counted although two runs did the work'); assert.equal(record.counts.ledgerRows, 2); assert.equal(record.counts.children, 2);
-  // the frozen checkout can never complete the family
-  assert.deepEqual(await deliver(f, evt(f, co.customerRef, 'checkout.completed', { price: 'price_fake_starter', periodEnd: f.now() + 30 * DAY, checkoutId: co.checkoutId })), { status: 'rejected', reason: 'CHECKOUT_SUPERSEDED' });
+  // the frozen checkout can never complete the family: a payment on it is the deleted family's, recorded for the operator (fifth round)
+  assert.deepEqual(await deliver(f, evt(f, co.customerRef, 'checkout.completed', { price: 'price_fake_starter', periodEnd: f.now() + 30 * DAY, checkoutId: co.checkoutId })), { status: 'reconciliation_required', reason: 'FAMILY_DELETED' });
   assert.equal((await f.store.get(`families/${a.familyId}`)).subscription.state, 'cancelled');
 });
 test('Blocker 2: a child with more than 500 records is deleted in bounded batches — the store refuses a transaction that tries more', async () => {

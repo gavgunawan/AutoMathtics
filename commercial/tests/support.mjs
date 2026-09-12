@@ -24,11 +24,12 @@ export function assertFirestoreShape(value, path = '$', inArray = false) {
 }
 // Tests only: serializable copy-on-write transactions; rollback on throw;
 // disallow reads after writes to match the real Firestore adapter contract.
+const byId = (a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0); // Firestore's default order under a limit is the document id: the fixture must not hide an ordering-dependent consumer
 export class MemoryStore {
   data = new Map(); tail = Promise.resolve();
   async get(path) { return structuredClone(this.data.get(path) || null); }
   async list(collectionPath) { const prefix = `${collectionPath}/`; return [...this.data.entries()].filter(([k]) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/')).map(([, v]) => structuredClone(v)); }
-  async entries(collectionPath, limit) { const prefix = `${collectionPath}/`; const all = [...this.data.entries()].filter(([k]) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/')).map(([k, v]) => [k.slice(prefix.length), structuredClone(v)]); return limit ? all.slice(0, limit) : all; }
+  async entries(collectionPath, limit) { const prefix = `${collectionPath}/`; const all = [...this.data.entries()].filter(([k]) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/')).map(([k, v]) => [k.slice(prefix.length), structuredClone(v)]).sort(byId); return limit ? all.slice(0, limit) : all; }
   async query(collectionPath, field, value, limit) { return (await this.entries(collectionPath)).filter(([, v]) => v[field] === value).slice(0, limit); }
   async queryAfter(collectionPath, field, value, afterId, limit) { const all = (await this.entriesAfter(collectionPath, afterId, Number.MAX_SAFE_INTEGER)); return all.filter(([, v]) => v[field] === value).slice(0, limit); }
   async entriesAfter(collectionPath, afterId, limit) { const all = (await this.entries(collectionPath)).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)); const from = afterId ? all.findIndex(([id]) => id > afterId) : 0; return from < 0 ? [] : all.slice(from, from + limit); }
@@ -41,8 +42,8 @@ export class MemoryStore {
       const result = await fn({
         get: async (p) => { if (written) throw Error('Read after write'); return structuredClone(working.get(p) || null); },
         list: async (c) => { if (written) throw Error('Read after write'); const prefix = `${c}/`; return [...working.entries()].filter(([k]) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/')).map(([, v]) => structuredClone(v)); },
-        entries: async (c, limit) => { if (written) throw Error('Read after write'); const prefix = `${c}/`; const all = [...working.entries()].filter(([k]) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/')).map(([k, v]) => [k.slice(prefix.length), structuredClone(v)]); return limit ? all.slice(0, limit) : all; },
-        query: async (c, field, value, limit) => { if (written) throw Error('Read after write'); const prefix = `${c}/`; return [...working.entries()].filter(([k, v]) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/') && v[field] === value).slice(0, limit).map(([k, v]) => [k.slice(prefix.length), structuredClone(v)]); },
+        entries: async (c, limit) => { if (written) throw Error('Read after write'); const prefix = `${c}/`; const all = [...working.entries()].filter(([k]) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/')).map(([k, v]) => [k.slice(prefix.length), structuredClone(v)]).sort(byId); return limit ? all.slice(0, limit) : all; },
+        query: async (c, field, value, limit) => { if (written) throw Error('Read after write'); const prefix = `${c}/`; return [...working.entries()].filter(([k, v]) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/') && v[field] === value).sort(byId).slice(0, limit).map(([k, v]) => [k.slice(prefix.length), structuredClone(v)]); },
         queryAfter: async (c, field, value, afterId, limit) => { if (written) throw Error('Read after write'); const prefix = `${c}/`; const all = [...working.entries()].filter(([k, v]) => k.startsWith(prefix) && !k.slice(prefix.length).includes('/') && v[field] === value).map(([k, v]) => [k.slice(prefix.length), structuredClone(v)]).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)); const from = afterId ? all.findIndex(([id]) => id > afterId) : 0; return from < 0 ? [] : all.slice(from, from + limit); },
         set: (p, v) => { write(); assertFirestoreShape(v, p); working.set(p, structuredClone(v)); },
         delete: (p) => { write(); working.delete(p); },

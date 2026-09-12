@@ -82,7 +82,7 @@ test('the v2 import refuses play, not a document: a child created with a year le
 });
 test('the family export reads its own audit rows only', async () => {
   const src = await readFile(new URL('../server/support.mjs', import.meta.url), 'utf8');
-  assert.ok(!/list\('audit'\)/.test(src), 'no scan of the whole audit collection'); assert.match(src, /queryAfter\('audit', 'familyId'/);
+  assert.ok(!/list\('audit'\)/.test(src), 'no scan of the whole audit collection'); assert.match(src, /pagedBy\(reader, 'audit', 'familyId'/);
   const f = fixture(), a = await f.family('parentA', 1); await f.family('parentB', 1);
   const reads = []; const real = f.store.transaction.bind(f.store);
   f.store.transaction = (fn, opts) => real(async (tx) => { const q = tx.queryAfter.bind(tx); tx.queryAfter = (c, field, value, after, limit) => { reads.push([c, field, value]); return q(c, field, value, after, limit); }; return fn(tx); }, opts);
