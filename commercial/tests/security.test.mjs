@@ -55,3 +55,38 @@ test('real scrypt PIN hashes are salted, peppered and bound to family plus child
   assert.equal(await h.verify('family-a', 'child-a', '763829', 'scrypt-v1:broken'), false);
   await assert.rejects(h.hash('f', 'c', '1234'), rejected('PIN_MUST_BE_SIX_DIGITS'));
 });
+
+// The service reads its configuration before it listens, so a throw here is a container that never opens its port: on
+// 13 Sep 2026 a copied address pattern lost its backslashes on the way into the file, became [^s@<>"] — which excludes the
+// letter s — and refused support@automathtics.net, killing every deploy while the whole unit suite stayed green. So the
+// environment the deploy script actually writes is built here, exactly, and asserted to start.
+test('the environment the deploy writes is one the service can start from, addresses and all', () => {
+  const deployed = {
+    APP_MODE: 'staging', APP_ORIGIN: 'https://automathtics-v3-staging.web.app',
+    FIREBASE_PROJECT_ID: 'automathtics-v3-staging', FIREBASE_WEB_API_KEY: 'AIzaSyTest', FIREBASE_WEB_APP_ID: '1:1:web:1',
+    TRUSTED_PROXY_HOPS: '2', RELEASE_SHA: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef', PAYMENT_PROVIDER: 'stripe',
+    STRIPE_PRICE_STARTER: 'price_1UDktFEAg0w7lrNU8ixmQg6g', STRIPE_PRICE_FAMILY: 'price_1UDktZEAg0w7lrNU0kJdqUxK',
+    STRIPE_PRICE_BIG: 'price_1UDktlEAg0w7lrNUb4AwLnP3',
+    WAITLIST_FROM: 'AutoMathtics <no-reply@automathtics.net>', WAITLIST_REPLY_TO: 'support@automathtics.net',
+    FEEDBACK_TO: 'control.tower@automathtics.net', EMAIL_PROVIDER: 'resend',
+    EMAIL_FROM: 'AutoMathtics <control.tower@automathtics.net>',
+    SESSION_SECRET: 'a'.repeat(64), PIN_PEPPER: 'b'.repeat(64),
+    STRIPE_SECRET_KEY: `sk_test_${'x'.repeat(24)}`, WEBHOOK_SECRET_STRIPE: `whsec_${'y'.repeat(32)}`,
+    EMAIL_API_KEY: `re_${'z'.repeat(30)}`, PORT: '8080',
+  };
+  const cfg = config(deployed);
+  assert.equal(cfg.waitlist.mail.from, 'AutoMathtics <no-reply@automathtics.net>', 'the list writes as no-reply');
+  assert.equal(cfg.waitlist.replyTo, 'support@automathtics.net', 'and a person answers it');
+  assert.equal(cfg.feedback.to, 'control.tower@automathtics.net');
+  // every ordinary address shape the owner might set, and the ones that should still be refused
+  for (const good of ['a@b.co', 'support@automathtics.net', 'no.reply+list@sub.automathtics.net', 'SUPPORT@AUTOMATHTICS.NET'])
+    assert.ok(config({ ...deployed, WAITLIST_REPLY_TO: good }), good);
+  for (const bad of ['support@automathtics', 'two addresses@a.co b@c.co', '@automathtics.net', 'support@.net'])
+    assert.throws(() => config({ ...deployed, WAITLIST_REPLY_TO: bad }), bad);
+  // and without the list's own addresses the service still starts, writing as whatever EMAIL_FROM is
+  const plain = { ...deployed }; delete plain.WAITLIST_FROM; delete plain.WAITLIST_REPLY_TO;
+  assert.equal(config(plain).waitlist.mail.from, 'AutoMathtics <control.tower@automathtics.net>');
+  // a service that copies nothing needs no Resend key at all, and must not demand one
+  const quiet = { ...plain }; delete quiet.FEEDBACK_TO; delete quiet.EMAIL_PROVIDER; delete quiet.EMAIL_API_KEY;
+  assert.equal(config(quiet).waitlist.mail, null, 'nothing to send with, and nothing pretending otherwise');
+});
