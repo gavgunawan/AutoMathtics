@@ -179,6 +179,15 @@ input.pin-box.bad{border-style:solid;border-color:var(--red);box-shadow:0 0 16px
 .message{max-width:640px;margin:0 auto;padding:4px clamp(14px,2vw,28px) 10px;min-height:22px;text-align:center;font:700 13px/1.5 var(--ui);color:var(--gold);overflow-wrap:anywhere}
 .message.msg-ok{color:var(--mint)}.message.msg-bad{color:var(--red)}.message.msg-note{color:var(--gold)}
 .message:not(:empty){animation:screenIn .3s ease-out}
+/* While an action is in flight (run() sets aria-busy) the screen stops taking taps and, a quarter of a second later so
+   quick answers never flash it, a ring says the app is working. The owner's request of 12 Sep 2026: a child who taps a
+   track card again because nothing seems to be happening was starting a second paper each time. */
+#app[aria-busy=true]{pointer-events:none}
+#app[aria-busy=true]:after{content:'';position:fixed;left:50%;top:50%;width:46px;height:46px;margin:-23px 0 0 -23px;border-radius:50%;
+  border:3px solid rgba(255,255,255,.16);border-top-color:var(--cyan);opacity:0;z-index:40;
+  animation:busyIn .2s ease-out .25s forwards,busySpin .8s linear infinite}
+@keyframes busySpin{to{transform:rotate(360deg)}}
+@keyframes busyIn{to{opacity:1}}
 /* the provider's "I'm not a robot" box sits under the Send button it belongs to, centred like it */
 .captcha{display:flex;justify-content:center;margin:10px 0 4px;min-height:0}.captcha:empty{display:none}
 /* Send feedback under the card (never in kid mode): a quiet link, and once opened a small card of its own */
@@ -643,4 +652,5 @@ input.pace-range:focus-visible{outline:2px solid var(--accent);outline-offset:3p
 .auth-form .check{padding:10px 12px;border:1.5px solid var(--v2line);border-radius:12px;background:var(--void);font-size:13.5px;color:#C9D3F0}
 /* no motion: nothing animates, and neither the decor layer (static columns of symbols would only sit on the screen) nor a
    coin burst is drawn; the crate's prize shows at once */
-@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}html[data-mode] #decor,.splash{display:none}.crate-item,.crate-name{opacity:1}}
+/* the busy ring fades in and turns by animation alone, so without animation it would never be seen: show it at rest */
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}html[data-mode] #decor,.splash{display:none}.crate-item,.crate-name{opacity:1}#app[aria-busy=true]:after{opacity:1}}

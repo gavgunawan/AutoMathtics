@@ -22,6 +22,7 @@ const messages = {
   PIN_SERVICE_BUSY: 'Another PIN check is in progress. Please try again in a moment.',
   PIN_CHECK_EXPIRED: 'This PIN check expired. Please enter your PIN again.',
   TOO_MANY_ATTEMPTS: 'Too many attempts. Please pause before trying again.',
+  TOO_MANY_PAPERS: 'That is a lot of papers started in one hour. Take a short break — you can start again soon.',
   INCORRECT_PIN: 'That PIN did not match.', REAUTHENTICATE: 'Please sign in again for this parent action.',
   SIGN_IN_REQUIRED: 'Please sign in.', PARENT_REQUIRED: 'Return to parent sign-in to manage your family.',
   CHILD_SESSION_REVOKED: 'The child PIN changed. Select the child and enter the new PIN.',
