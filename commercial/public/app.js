@@ -2124,7 +2124,98 @@ channel?.addEventListener('message', () => {
 // a cookie over the one another tab has just rotated (a hand-over, a PIN, Switch child, a sign-in). A change of session reaches this
 // tab by the tabs' own signal above, sent once the change is done (review of 12 Sep 2026).
 document.addEventListener('visibilitychange', () => (document.visibilityState === 'visible' ? checkRelease() : undefined));
-await run(refresh);
+// ---- /join (the owner's request of 12 Sep 2026): the page a post on social media points at. Every other screen in this app
+// assumes you already know what AutoMathtics is; whoever arrives from a post does not, so this is the one screen that explains
+// itself before it asks for anything. It carries one action, and the date decides what that action is: before the doors open it
+// takes an address for the waiting list and nothing else — no account, no password, no mobile, no child — and from 19 September
+// it walks into the ordinary sign-up, where the email check and the mobile code live as they always have. The trial ends for
+// everyone at the same moment however late they joined, so the page can name one date and mean it.
+const TRIAL = Object.freeze({
+  opensAt: Date.UTC(2026, 8, 18, 17), // 19 Sep 2026, 00:00 in Jakarta — WIB is UTC+7, and the page speaks in WIB throughout
+  endsAt: Date.UTC(2026, 9, 10, 16, 59, 59), // 10 Oct 2026, 23:59 WIB
+  opensWords: '19 September 2026', endsWords: '10 October 2026, 23:59 WIB',
+});
+// The tag a post's link carried (/join?from=ig), kept to the shape the server accepts so a junk one is simply not sent
+const joinSource = () => {
+  try { const t = new URLSearchParams(location.search).get('from') || ''; return /^[a-z0-9][a-z0-9-]{0,23}$/.test(t) ? t : null; } catch { return null; }
+};
+const joinLine = (emoji, name, words) => {
+  const row = el('div', null, 'join-line'), said = el('span', null, 'join-words');
+  said.append(el('b', name), words ? ` ${words}` : ''); // built before it is placed: the DOM these run in has no lastChild
+  row.append(el('span', emoji, 'join-mark'), said);
+  return row;
+};
+function joinScreen() {
+  transientView = true;
+  const now = Date.now(), open = now >= TRIAL.opensAt && now <= TRIAL.endsAt, over = now > TRIAL.endsAt;
+  const box = panel('AUTOMATHTICS · MATH GRID', 'Maths practice they ask to do.',
+    open ? `Free for every family until ${TRIAL.endsWords}. No card, nothing to cancel.`
+      : over ? 'The opening trial has finished. Accounts are open as usual.'
+        : `The grid opens on ${TRIAL.opensWords}. Leave your email and we will write to you that morning.`,
+    'w520 join', { back: false, page: 'join' });
+
+  const what = el('div', null, 'join-block');
+  what.append(el('span', 'WHAT YOUR CHILD PLAYS', 'section-label'),
+    joinLine('⚙️', 'Engine.', 'Papers of 25 questions, through six sectors: addition to fractions. Every paper is 100% to pass — close is not passed.'),
+    joinLine('🧭', 'Navigator.', 'The same maths in words and pictures, where the work is reading the problem and choosing the method.'),
+    joinLine('⚡', 'Grid coins.', 'Earned by passing, spent in the shop on backgrounds, pets, rockets and a mystery egg.'),
+    joinLine('🏆', 'Reward points.', 'For rewards you set and you approve. A child never spends real money, and nothing in the shop costs any.'));
+  box.append(what);
+
+  const parent = el('div', null, 'join-block');
+  parent.append(el('span', 'WHAT YOU GET', 'section-label'),
+    joinLine('📧', 'A weekly email.', 'Which kinds of question your child gets right and fast, which are slow, and which keep going wrong.'),
+    joinLine('🎚', 'A pace you set.', 'Speed the questions up or slow them down, per child, whenever you like.'),
+    joinLine('🗒', 'Every session logged.', 'What was practised, how long it took, and what was earned.'));
+  box.append(parent);
+
+  const privacy = el('div', null, 'join-block');
+  privacy.append(el('span', 'WHAT WE NEVER ASK A CHILD FOR', 'section-label'),
+    el('p', 'No child email address, phone number, photo or full birth date — ever. A nickname, an age and a year level is everything a child profile holds. The account is yours, and it is protected by your password and a code to your mobile.', 'join-words'));
+  box.append(privacy);
+
+  const steps = el('div', null, 'join-block');
+  steps.append(el('span', 'SIGNING UP TAKES FOUR STEPS', 'section-label'),
+    joinLine('1', 'Your email and a password.', ''),
+    joinLine('2', 'Confirm the email.', 'We send a link.'),
+    joinLine('3', 'A code by SMS.', 'Your mobile becomes the second lock on the account. This is not on this page — it comes during sign-up.'),
+    joinLine('4', 'Name your crew,', 'and add your explorers.'));
+  box.append(steps);
+
+  if (open) {
+    box.append(el('p', `Free until ${TRIAL.endsWords}. If you want to keep going afterwards you can set a subscription up during the trial — it starts charging on 11 October and not a day sooner.`, 'join-offer'),
+      actionRow(button('Start the free trial ▶', () => signInScreen(true), 'primary')),
+      actionRow(button('I already have an account', () => signInScreen(), 'ghost')));
+    return box;
+  }
+  if (over) {
+    box.append(actionRow(button('Create an account ▶', () => signInScreen(true), 'primary')),
+      actionRow(button('I already have an account', () => signInScreen(), 'ghost')));
+    return box;
+  }
+  // Before the doors open: an address, and the permission to write to it. Nothing else is asked and nothing else is kept.
+  const form = el('form', null, 'auth-form'), address = field('Your email', 'email', { autocomplete: 'email', maxLength: 254 });
+  const agree = el('label', null, 'field check'), tick = el('input');
+  Object.assign(tick, { type: 'checkbox', required: true });
+  agree.append(tick, el('span', `Write to me when AutoMathtics opens on ${TRIAL.opensWords}, and about how my children are getting on once we start.`));
+  const send = button('Join the list ▶', null, 'primary'); send.type = 'submit';
+  form.append(address.wrap, agree, actionRow(send));
+  form.onsubmit = (event) => {
+    event?.preventDefault?.();
+    return run(async () => {
+      csrf = (await bootstrap()).csrf; // this screen skips the app's own boot, so it holds no token until it needs one
+      await api('/waitlist', { email: address.input.value.trim(), consent: tick.checked === true, source: joinSource() });
+      const done = panel('AUTOMATHTICS · MATH GRID', 'You are on the list.',
+        `We will write to ${address.input.value.trim()} on ${TRIAL.opensWords}, the morning the grid opens. Nothing else happens until then.`, 'w460 join', { back: false, page: 'join' });
+      done.append(el('p', 'If you change your mind, every email we send has an unsubscribe link in it.', 'join-words'));
+    });
+  };
+  box.append(form);
+  return box;
+}
+
+// The first screen: /join explains the app to a stranger and takes the trial or the list; every other path is the app itself.
+await run(() => (typeof location === 'object' && location?.pathname === '/join' ? joinScreen() : refresh()));
 setInterval(function releaseTick() { return document.visibilityState === 'visible' ? checkRelease() : undefined; }, RELEASE_CHECK_MS); // Update now: every five minutes in view
 // Back from a hosted checkout (Stage 4.1). The redirect proves nothing: the provider's signed webhook
 // is what changes the plan, so tell the parent what to expect and look again shortly.

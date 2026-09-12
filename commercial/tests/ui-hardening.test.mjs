@@ -133,7 +133,15 @@ test('UI Stage 2: a child starts a session, answers what the server asks, and ca
   await h.click('⚙️ Start Engine ▶'); assert.ok(h.root.textContent.includes('Paper 1 · 1/25'), h.root.textContent);
   const prog = await h.f.store.get(`families/${h.a.familyId}/learning/${kid.id}`);
   const stored = await h.f.store.get(`families/${h.a.familyId}/learning/${kid.id}/sessions/${prog.activeSession}`);
-  assert.ok(!h.root.textContent.includes(String(stored.questions[0].answer.v)) || stored.questions[0].display.layout !== 'stack');
+  // The stacked layout shows the operands and never its own answer. Checked structurally — the digits inside the stack
+  // are the two operands' and nobody else's — because searching the whole page for the answer's digits tripped on
+  // innocent text (a coin count, the paper counter) whenever the numbers happened to collide: the flake that blocked PR #51.
+  if (stored.questions[0].display.layout === 'stack') {
+    const stacks = nodes(h.root, 'DIV').filter((n) => /(^| )q-stack( |$)/.test(n.className || ''));
+    assert.equal(stacks.length, 1, 'one stacked question on screen');
+    assert.equal(stacks[0].textContent.replace(/[^0-9]/g, ''), `${stored.questions[0].display.top}${stored.questions[0].display.bottom}`.replace(/[^0-9]/g, ''),
+      'the stack holds the operands and never the answer');
+  }
   const form = h.nodes('FORM')[0]; h.nodes('INPUT')[0].value = String(stored.questions[0].answer.v); // the answer box is the only input on the play screen
   form.onsubmit({ preventDefault() {} }); await h.idle();
   assert.ok(h.root.textContent.includes('⭐ Correct!')); assert.ok(h.root.textContent.includes('Paper 1 · 2/25'));
