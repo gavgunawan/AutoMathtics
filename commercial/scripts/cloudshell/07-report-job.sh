@@ -32,7 +32,10 @@ for GROUP in reports outbox; do
   if [[ -n "$STATE" ]]; then echo "TTL $GROUP: $STATE"; else echo "WARNING: no TTL policy on $GROUP (rerun this block, or look under Firestore > Time-to-live)"; TTL_WARNINGS=$((TTL_WARNINGS + 1)); fi
 done
 # the sender's display name has a space and angle brackets, so the variables use | between them (gcloud topic escaping)
+# OWNER_EMAIL is where the monthly leaving report goes (FEEDBACK_TO wins when the service has one): the same Monday run that sends
+# the monthly family reports sends it, for the month just ended, so there is one schedule and not two (DEPLOY_V3.md → 5b).
 ENV_VARS="^|^APP_MODE=staging|FIREBASE_PROJECT_ID=$PROJECT_ID|CONFIRM_PROJECT=$PROJECT_ID|OPERATOR_ID=scheduler@$PROJECT_ID|APP_ORIGIN=https://$PROJECT_ID.web.app|EMAIL_PROVIDER=$EMAIL_PROVIDER|EMAIL_FROM=$EMAIL_FROM"
+if [[ -n "${OWNER_EMAIL:-}" ]]; then ENV_VARS="$ENV_VARS|OWNER_EMAIL=$OWNER_EMAIL"; echo "the monthly leaving report will go to $OWNER_EMAIL"; else echo 'no OWNER_EMAIL: the monthly leaving report is skipped with a log line (rerun this block with OWNER_EMAIL set)'; fi
 VERB=create; gcloud run jobs describe "$JOB" --project "$PROJECT_ID" --region "$REGION" >/dev/null 2>&1 && VERB=update
 gcloud run jobs "$VERB" "$JOB" --project "$PROJECT_ID" --region "$REGION" --image "$IMAGE" --service-account "$RUNTIME_SA" \
   --command node --args scripts/report.mjs,send --max-retries 0 --task-timeout 20m --memory 512Mi \

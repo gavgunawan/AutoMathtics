@@ -263,7 +263,7 @@ test('the operator\'s read: the notes of the last N days, newest first, with wha
   assert.deepEqual(week[0], { id: 'c', at: new Date(f.now() - 60_000).toISOString(), page: 'mission-control', release: 'r1', uid: null, familyId: null, contact: 'someone@example.test', text: 'note c' });
   assert.deepEqual([week[1].uid, week[1].familyId, week[1].contact], ['parentA', 'fam-1', null]); assert.equal((await reader.recent(30)).length, 3);
   const src = await readFile(CLI, 'utf8');
-  assert.ok(src.includes("feedback: { options: ['--days']") && src.includes("if (!reading && !/^[a-f0-9]{64,}$/.test(env.SESSION_SECRET || ''))"), 'the read signs nothing, so it needs no SESSION_SECRET');
+  assert.ok(src.includes("feedback: { options: ['--days']") && src.includes("if (!reading && !owners && !/^[a-f0-9]{64,}$/.test(env.SESSION_SECRET || ''))"), 'the read signs nothing, so it needs no SESSION_SECRET (nor does the leaving report)');
   for (const args of [['feedback', '--days'], ['feedback', '--days', 'x'], ['feedback', '--days', '0'], ['feedback', '--days', '401'], ['feedback', '--days', '7', '--days', '8'], ['feedback', 'all'], ['feedback', '--week', '2026-W36']]) {
     const r = await cli({}, args); assert.equal(r.code, 64, args.join(' ')); assert.match(r.err, /node scripts\/report\.mjs feedback \[--days N\]/);
   }

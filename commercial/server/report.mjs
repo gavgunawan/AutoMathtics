@@ -60,6 +60,13 @@ export function weekLabel(week) { const d = weekDays(week); return rangeLabel(d[
 // an operator's rerun (send --week) decides the same thing the scheduled run did.
 export const MONTHLY_WEEKS = 4;
 export const isMonthlySendWeek = (week) => { const s = weekStart(week); return s !== null && new Date(s + 7 * DAY).getUTCDate() <= 7; };
+/** The month the owner's leaving report covers on that Monday: the one before it, which is the last complete month. 'YYYY-MM'. */
+export function monthlyLeavingMonth(week) {
+  const s = weekStart(week); if (s === null) throw Error('WEEK_INVALID');
+  const out = new Date(s + 7 * DAY); // the Monday the email goes out: the 1st to the 7th of its month
+  const prev = new Date(Date.UTC(out.getUTCFullYear(), out.getUTCMonth() - 1, 1));
+  return `${prev.getUTCFullYear()}-${String(prev.getUTCMonth() + 1).padStart(2, '0')}`;
+}
 /** The four complete ISO weeks ending with `week`, oldest first. */
 export function monthlyWeeks(week, count = MONTHLY_WEEKS) {
   const s = weekStart(week); if (s === null) throw Error('WEEK_INVALID');
