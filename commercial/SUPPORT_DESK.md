@@ -5,8 +5,8 @@ in a free console or a command that exists in this repository. Where the code ca
 yet, the section says so instead of inventing a command.
 
 `SUPPORT.md` is the operator's reference (what each command does). This document is the desk: where
-mail arrives, what gets answered when, and what gets escalated. The words to send are in
-`SUPPORT_REPLIES.md`; incidents are in `INCIDENTS.md`.
+mail arrives, what gets answered when, what gets escalated, and the two money procedures. The words
+to send are in `SUPPORT_REPLIES.md`; incidents are in `INCIDENTS.md`.
 
 ## The one-time setup, in order
 
@@ -224,6 +224,173 @@ When it is built, this is the shape the desk expects, so the filters and labels 
 
 A note id makes the thread citable in an incident and in an audit row. Until the feature exists, a
 parent's own mail is the only channel, and the *First reply* text is where they learn the address.
+
+## Refunds
+
+Money moves **at the provider, in its dashboard**. Nothing in this repository moves money, and there
+is **no `refund` verb in `scripts/support.mjs`** — the spec for this desk asked for one and it does
+not exist. What the repository does is *record* a refund on the subscription, so entitlement and the
+audit trail agree with the money.
+
+**When it applies.** The owner's call, in three cases that come up: a charge the parent did not
+intend (a renewal they meant to cancel, a second charge); a plan they could not use (the app was
+down, the family was blocked); a mistake of the desk's own. A refund is **not** the answer to
+"we stopped using it" — that is a cancellation, below.
+
+**What the parent is told.** `SUPPORT_REPLIES.md` → *Refund approved* or *Refund refused*. Both
+quote the support operation id, say the amount, and say what happens to access. A refused refund
+always gives the reason in one sentence.
+
+**The commands, in this order.**
+
+1. See the family and the money first:
+   ```
+   node scripts/support.mjs family FAMILY_UUID
+   ```
+   Read **attention** first: `refundFailures`, `requiresAction`, `rejected`, `providerCheck`. The
+   `billing` list is the family's event ledger; `subscription.refunds` counts what is already
+   recorded.
+2. Refund the charge in the **Stripe dashboard** (test mode for the pilot; the pilot family itself
+   runs on a manual grant and has no charge to refund — `PILOT.md`). Partial or full.
+3. Stripe then sends `refund.created`, the inbox records it and the state machine applies it by
+   itself. Check that it landed:
+   ```
+   node scripts/support.mjs family FAMILY_UUID
+   node scripts/support.mjs inbox            # anything still requires_action
+   ```
+4. **Only if the event never arrives** (a provider the webhook cannot reach, the fake provider, a
+   charge taken outside Stripe) record it by hand:
+   ```
+   node scripts/subscription.mjs FAMILY_UUID refund AMOUNT_CENTS full
+   ```
+   Leave `full` off for a partial refund. `AMOUNT_CENTS` must be at least 1 — a zero-cent "full"
+   refund is refused (`INVALID_REQUEST`), on purpose, so a mistyped amount cannot cancel a family.
+   A family with **no subscription record at all** (the pilot family on a manual grant) is refused
+   with `INVALID_TRANSITION`: there is no money line to write the refund on, and that refusal is
+   correct — the refund then exists only at the provider and in the thread.
+5. A refund never cancels the subscription. If the family is also leaving, cancel it at the provider
+   too, then:
+   ```
+   node scripts/support.mjs reconcile-provider FAMILY_UUID
+   ```
+   until `match: true`. A **full** refund ends our record, so a subscription left live at the
+   provider makes the next run report `PROVIDER_SUBSCRIPTION_LIVE` — and the family would be billed
+   again. After a partial refund both sides are still live and `match: true` is the right answer.
+6. On a **deleted** family the same provider event is `reconciliation_required: FAMILY_DELETED` and
+   never revives access. Close it with what was done:
+   ```
+   node scripts/support.mjs resolve-event stripe EVENT_ID refunded_at_provider "refunded in the dashboard, see incident/ticket"
+   ```
+
+**What the ledger shows afterwards.** In `families/{f}/billing/{eventId}`: one row of type `refund`
+with `amountCents`, `full`, the actor (`webhook:stripe`, or the `OPERATOR_ID` when recorded by hand)
+and its `result`. On `families/{f}.subscription`: a new entry in `refunds[]` with `amountCents`,
+`full`, `at` and `providerRef`. Two partial refunds are two entries with their own amounts, never a
+running total. A **full** refund also sets `state: 'cancelled'` and `endedAt: now` — access ends
+immediately, which is the owner's policy — and clears any scheduled plan change. A partial refund
+changes nothing about access.
+
+Two honest details about the ids. `providerRef` on a `refunds[]` entry is the **customer**
+reference, not the refund's own id (`server/payments.mjs` passes `ev.customer`), and it is `null`
+when the refund was recorded by hand — `scripts/subscription.mjs` has no argument for it. Stripe's
+own refund id *is* stored, as `refundRef` on the `billingEvents` row (that is what makes a second
+delivery `DUPLICATE_REFUND`), but **neither `inbox` nor `family` prints it**: both print the provider
+*event* id, which is the one `resolve-event` takes. So quote the support operation id or the ticket in
+your reply, never `providerRef`, and match a refund to a Stripe refund id in the dashboard rather
+than in the report.
+
+**Child wallets are never touched.** No refund, dispute or cancellation posts a ledger row to a
+child's coins or fuel. A child's ledger only moves when the child plays or the parent spends
+(`SUBSCRIPTIONS.md`, `PAYMENTS.md`).
+
+**The audit trail.** `billing.refund` with the actor and the family id, TTL 400 days. Plus
+`support.event_resolved` if step 6 ran. A refund done only in the dashboard and never recorded leaves
+`PROVIDER_SUBSCRIPTION_LIVE` or a drifting period end for the next `reconcile-provider` — that is the
+check that catches a half-finished refund.
+
+**A refund never removes access already paid for.** A partial refund leaves the period intact. A full
+one ends it, because the money for it went back. There is no command that takes away a paid period
+while keeping the money, and none should be added.
+
+## Cancellations
+
+**Default: at period end.** The parent keeps what they paid for and access stops when the period
+does. Immediate cancellation happens **only** with a recorded refund decision (above) — either the
+full refund's own effect, or the operator's `terminate` written down beside it.
+
+**When it applies.** The parent asks to stop. That is all the justification needed; there is nothing
+to argue.
+
+**What the parent is told.** `SUPPORT_REPLIES.md` → *Cancellation confirmed*: the date access ends,
+that the children's progress stays, that nothing is deleted by cancelling, and that deleting the
+family is their own separate 14-day process. *Pause confirmed* covers "can we pause?" — and says
+plainly that there is no pause in this build.
+
+**The commands.**
+
+1. The parent can do it themselves, and should be told so first: Mission Control → the subscription
+   panel → *Cancel at period end* (`POST /api/billing/cancel`, undoable with the same panel). No
+   operator command is better than the parent's own click.
+2. If they cannot, or ask the desk to do it:
+   ```
+   node scripts/subscription.mjs FAMILY_UUID cancel.request
+   ```
+   and to reverse it while the period still runs:
+   ```
+   node scripts/subscription.mjs FAMILY_UUID cancel.undo
+   ```
+   Again: there is **no cancel verb in `scripts/support.mjs`**. `scripts/subscription.mjs` is the
+   operator's event tool, under the same `OPERATOR_ID` and with the same audit row. It is refused
+   (`INVALID_TRANSITION`) unless the subscription is in `trial`, `active` or `grace` — there is
+   nothing to cancel in `past_due`, `cancelled` or `expired`, and nothing to cancel for a family on
+   a manual grant.
+3. Immediate, and only with the refund decision recorded:
+   ```
+   node scripts/subscription.mjs FAMILY_UUID terminate
+   ```
+   This ends access now. Record the refund first (or immediately after), so the audit trail shows
+   money and access ending together.
+4. Cancel it at the provider too, in the dashboard, then:
+   ```
+   node scripts/support.mjs reconcile-provider FAMILY_UUID
+   ```
+   until `match: true`. `cancel.request` through the parent's own route already reaches Stripe before
+   the record changes; `scripts/subscription.mjs` does **not** — it writes a `manual` event only. So
+   step 4 is mandatory after step 2 or 3.
+5. **Deleting data is the parent's own 14-day process**, never the desk's shortcut: Mission Control →
+   *Delete my family* (`POST /api/family/deletion`), a *Keep my family* button for 14 days, and then
+   an operator executes it:
+   ```
+   CONFIRM_DELETION=FAMILY_UUID node scripts/support.mjs delete FAMILY_UUID
+   ```
+   The sweep names one that is due (`DELETION_DUE`). Never run it with `FORCE_BEFORE_GRACE=yes`
+   unless the parent asked for it in writing in the thread; it is audited as forced.
+
+**What the ledger shows afterwards.** `cancel.request` / `cancel.undo` / `terminate` each add a row
+to `families/{f}/billing/{eventId}` with the actor and the result. On the subscription, a period-end
+cancellation sets one fact: `cancelAtPeriodEnd: true`. Nothing else moves — the derived state stays
+**`active`** and access continues while `now < periodEnd`; at the period end it becomes `cancelled`
+instead of entering grace (a cancelled trial ends at `trialEndsAt` the same way), and `accessUntil`
+is then 0. `terminate` instead sets `state: 'cancelled'` and `endedAt: now` at once, clearing any
+scheduled change. Seats and children are untouched either way — a cancelled family's children keep
+every ledger row and every crown; a later payment brings them back exactly as they were.
+
+**The audit trail.** `billing.cancel.request`, `billing.cancel.undo`, `billing.terminate` under the
+`OPERATOR_ID` (or the parent's uid when they clicked it), and for a deletion
+`family.deletion_requested`, `family.deletion_started`, `family.deleted` plus the `deletions/{f}`
+record naming who asked and who executed.
+
+## Support operation ids, and quoting them
+
+Every corrective action that runs as a job writes `supportOperations/{id}` naming the operator before
+anything moves, and closes it with how it ended (`reprocess` today; the incident commands write
+`incidents/{id}` the same way). Reconciliations write `billingReconciliations/{id}`; both ids are
+printed by the command that made them. **Quote the id in the reply** — it is how a parent's mail,
+the audit row and the money line up months later.
+
+Where the repository has no id to quote (a refund done in the dashboard and applied by webhook, a
+`cancel.request`), quote the incident id if there is one, otherwise the Gmail thread subject. Do not
+invent an id.
 
 ## Running the commands from a phone
 
