@@ -164,6 +164,25 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
       // RFC 8058 one-click, cross-site with no cookie, Origin or CSRF token, so it sits here before those checks, like the webhooks:
       // the signed token is its whole authentication, it can only switch the weekly report off, and a failed token is budgeted per
       // address. RFC 8058 needs the token in this URL's query, so request logs do record these stop-the-report tokens (PRIVACY.md).
+      // Leaving the waiting list. Whoever holds the signed link is whoever got the email, which is the only authentication
+      // there can be for a person with no account; it removes one address and can do nothing else. A GET is a click and
+      // answers in words; a POST is the mailbox provider's one-click, cross-site with no cookie or CSRF token, so it sits
+      // here beside the other unsubscribe, before those checks. A bad token is budgeted per address, as a forged one should be.
+      if (waitlist && path === '/api/waitlist/leave') {
+        const t = new URL(req.url, cfg.origin).searchParams.get('t') || '';
+        if (req.method !== 'GET' && req.method !== 'POST') fail(405, 'METHOD_NOT_ALLOWED');
+        if (req.method === 'POST' && !(await oneClick(req))) fail(400, 'ONE_CLICK_REQUIRED');
+        try {
+          await waitlist.leave(t);
+          res.statusCode = 200; res.setHeader('Content-Type', req.method === 'GET' ? 'text/html; charset=utf-8' : 'text/plain; charset=utf-8');
+          return res.end(req.method === 'GET'
+            ? '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Off the list</title><link rel="stylesheet" href="/styles.css"><main id="app"><section class="panel w460"><p class="kicker">AUTOMATHTICS</p><h1>You are off the list.</h1><p class="intro muted">That address will not be written to again. Nothing else was kept.</p></section></main>'
+            : 'unsubscribed');
+        } catch (error) {
+          if (error instanceof Fault && error.status < 500) { try { await spend('unsubscribe-fail', req, 60, 10 * 60_000); } catch (limit) { if (limit instanceof Fault && limit.status === 429) throw limit; } }
+          throw error;
+        }
+      }
       if (email && path === '/api/email/unsubscribe') {
         const t = new URL(req.url, cfg.origin).searchParams.get('t') || '';
         if (req.method === 'GET') { res.statusCode = 303; res.setHeader('Location', /^v1\.[A-Za-z0-9_-]{1,2048}\.[A-Za-z0-9_-]{43}$/.test(t) ? `/#email=${t}` : '/'); return res.end(); }

@@ -55,3 +55,46 @@ test('a day holds only so many addresses never seen before; the day after is its
   f.advance(86_400_000);
   assert.deepEqual(await w.join(w.parse({ email: 'one-too-many@example.test', consent: true })), { ok: true, repeat: false });
 });
+
+// The owner's report of 12 Sep 2026: joining the list in silence feels broken. A new address gets one email back at once,
+// from no-reply with Reply pointed at a person, carrying an unsubscribe that works as a click and as a mailbox provider's
+// one-click POST. The email is best effort: the address is listed whether or not the provider answered.
+test('a new address gets one email back, with an unsubscribe that works, and a repeat join is not written to twice', async () => {
+  const f = fixture(), w = f.waitlist;
+  await w.join(w.parse({ email: 'parent@example.test', consent: true, source: 'ig' }));
+  assert.equal(f.waitlistMail.length, 1, 'one email, for one new address');
+  const [sent] = f.waitlistMail;
+  assert.equal(sent.to, 'parent@example.test');
+  assert.equal(sent.replyTo, 'support@example.test', 'no-reply writes it, but a person answers it');
+  assert.match(sent.subject, /on the AutoMathtics list/);
+  assert.match(sent.text, /19 September 2026/);
+  assert.equal(sent.headers['List-Unsubscribe-Post'], 'List-Unsubscribe=One-Click');
+  const url = sent.headers['List-Unsubscribe'].replace(/^<|>$/g, '');
+  assert.ok(sent.text.includes(url) && sent.html.includes(url), 'the same link a reader can click is the one the provider posts to');
+  await w.join(w.parse({ email: 'PARENT@example.test', consent: true }));
+  assert.equal(f.waitlistMail.length, 1, 'a second Join from someone already listed is a double tap, not a second person');
+  const token = new URL(url).searchParams.get('t');
+  assert.deepEqual(await w.leave(token), { ok: true });
+  assert.equal(await w.size(), 0, 'and the link takes that address off');
+});
+
+test('a forged or altered unsubscribe link removes nothing', async () => {
+  const f = fixture(), w = f.waitlist;
+  await w.join(w.parse({ email: 'parent@example.test', consent: true }));
+  const url = f.waitlistMail[0].headers['List-Unsubscribe'].replace(/^<|>$/g, '');
+  const good = new URL(url).searchParams.get('t'), [id, sig] = good.split('.');
+  for (const bad of [id, `${id}.`, `${id}.${'0'.repeat(sig.length)}`, `${sha256('someone-else@example.test')}.${sig}`, '', 'nonsense'])
+    await assert.rejects(w.leave(bad), rejected('INVALID_TOKEN'));
+  assert.equal(await w.size(), 1, 'the address is still there');
+  await w.leave(good);
+  assert.equal(await w.size(), 0);
+});
+
+test('a provider that fails does not unlist anyone: the address is kept and the failure is logged, not shown', async () => {
+  const f = fixture(), lines = [];
+  f.waitlist.log = (event) => lines.push(event);
+  f.waitlist.mailer = { send: async () => { throw Object.assign(Error('down'), { code: 'PROVIDER_UNREACHABLE' }); } };
+  assert.deepEqual(await f.waitlist.join(f.waitlist.parse({ email: 'parent@example.test', consent: true })), { ok: true, repeat: false });
+  assert.equal(await f.waitlist.size(), 1);
+  assert.ok(lines.some((l) => l.event === 'waitlist_confirm_failed'), 'the failure is a line in the log, not the parent\u2019s problem');
+});

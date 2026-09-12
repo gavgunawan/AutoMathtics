@@ -112,3 +112,10 @@ test('every adult screen carries a Back that goes where the browser\'s Back goes
   await h.click('\u2190 Back');
   assert.ok(h.root.textContent.includes('MISSION CONTROL'), 'which lands on the workspace');
 });
+
+// The masthead corner used to read PRIVATE PILOT, which was true of a pilot and wrong of a product (the owner, 12 Sep 2026).
+test('the masthead corner carries the family’s own name, and the pilot badge is gone', async (t) => {
+  const { h } = await family(t);
+  assert.equal(h.pilot.textContent, 'Test family', 'a parent sees whose grid this is');
+  assert.ok(!h.root.textContent.includes('PRIVATE PILOT'));
+});

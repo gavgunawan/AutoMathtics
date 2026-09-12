@@ -499,6 +499,13 @@ To read them, in Cloud Shell with the variables `scripts/support.mjs` uses (`APP
 when, the screen, the release, the parent and family when signed in, the address to answer when one was given, and the words.
 `--days` takes 1 to 400.
 
+**The waiting list's own sender.** `/join` writes one email back to every new address (server/waitlist.mjs), so it should not
+write as the address parents reply to. Export `WAITLIST_FROM='AutoMathtics <no-reply@THE-DOMAIN>'` and
+`WAITLIST_REPLY_TO='support@THE-DOMAIN'` before block C: the list then writes as no-reply, and a reader who answers anyway
+reaches a person. Without them the list writes as `EMAIL_FROM`, which is blunt but never wrong. Every message carries an
+unsubscribe signed for that one address (`/api/waitlist/leave`), working as a click and as RFC 8058 one-click; rotating
+`SESSION_SECRET` voids every link already sent, and a reader whose link no longer works can be removed by address by hand.
+
 **A copy in the owner's inbox.** With Resend set up (5b: the key in `am-v3-email-key`, and block G rerun with
 `EMAIL_PROVIDER=resend`, which grants the runtime account the key), deploy with the owner's address:
 `export FEEDBACK_TO=owner@example.com EMAIL_PROVIDER=resend`, then block C. Each note, within the day's copy caps, then also arrives by email, and Reply goes
