@@ -15,7 +15,7 @@ fi
 if env | grep -qE '^[A-Z0-9_]*EMULATOR[A-Z0-9_]*=.'; then
   echo 'Remove emulator environment variables before cloud deployment.' >&2; exit 1
 fi
-for tool in node npm gcloud java; do command -v "$tool" >/dev/null || { echo "Install $tool first." >&2; exit 1; }; done
+for tool in node npm gcloud java git tar; do command -v "$tool" >/dev/null || { echo "Install $tool first." >&2; exit 1; }; done
 if [[ ! -f package-lock.json ]]; then
   echo 'Run npm install --ignore-scripts, review and commit package-lock.json first.' >&2; exit 1
 fi
@@ -57,16 +57,27 @@ if [[ -n "${FEEDBACK_TO:-}" ]]; then
 fi
 # The commit being deployed travels with the service — RELEASE_SHA in the environment, a release-sha label on the revision — and
 # /api/health reports it, so "which commit runs on staging" is a fact anyone can read, not a line in somebody's terminal.
-# A dirty checkout would deploy code the commit does not describe: refused.
+# A dirty checkout would deploy code the commit does not describe: refused — and a git that cannot answer stops the helper too
+# (the status is assigned first so `set -e` sees its exit code; inside `[[ -z "$(...)" ]]` a failing git would read as clean).
 RELEASE_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
 [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'Deploy from a git checkout: the release commit is recorded on the service.' >&2; exit 1; }
-[[ -z "$(git status --porcelain --untracked-files=no)" ]] || { echo 'The checkout has uncommitted changes: the deployed code would not be the commit it claims. Commit or stash first.' >&2; exit 1; }
+DIRTY="$(git status --porcelain --untracked-files=no)"
+[[ -z "$DIRTY" ]] || { echo 'The checkout has uncommitted changes: the deployed code would not be the commit it claims. Commit or stash first.' >&2; exit 1; }
+# What is uploaded is the commit itself, exported now — never the working tree as it stands minutes later, after the suites: an
+# edit, a pull or a checkout in another tab while the tests run cannot reach the revision that carries this commit's label.
+SRC="$(mktemp -d)"; ENV_FILE="$(mktemp)"; SERVICE_JSON="$(mktemp)"
+trap 'rm -rf "$SRC"; rm -f "$ENV_FILE" "$SERVICE_JSON"' EXIT
+# (from the top level: run inside commercial/, git-archive scopes the archive to the current directory INSIDE the tree-ish and exports nothing)
+PREFIX="$(git rev-parse --show-prefix)"; PREFIX="${PREFIX%/}"; TOP="$(git rev-parse --show-toplevel)"
+git -C "$TOP" -c core.autocrlf=false archive --format=tar "${RELEASE_SHA}${PREFIX:+:$PREFIX}" | tar -x -C "$SRC"
+for needed in Dockerfile .dockerignore .gcloudignore package.json package-lock.json server/main.mjs; do [[ -e "$SRC/$needed" ]] || { echo "The exported commit lacks $needed." >&2; exit 1; }; done
 npm ci --ignore-scripts --no-fund --no-audit
 npm test
 npm run test:emulator
+# The tests ran on the checkout: it must still be the commit that was exported (a pull or a checkout meanwhile: start again).
+DIRTY="$(git status --porcelain --untracked-files=no)"
+[[ "$(git rev-parse HEAD)" == "$RELEASE_SHA" && -z "$DIRTY" ]] || { echo 'The checkout changed while the tests ran: start again.' >&2; exit 1; }
 # Ephemeral config contains ONLY public identifiers. Secret values never enter it.
-ENV_FILE="$(mktemp)"
-trap 'rm -f "$ENV_FILE"' EXIT
 export PROJECT_ID FIREBASE_WEB_API_KEY FIREBASE_WEB_APP_ID TRUSTED_PROXY_HOPS PAYMENT_PROVIDER STRIPE_PRICE_STARTER STRIPE_PRICE_FAMILY STRIPE_PRICE_BIG RELEASE_SHA FEEDBACK_TO EMAIL_PROVIDER EMAIL_FROM
 node --input-type=module - "$ENV_FILE" <<'NODE'
 import { writeFileSync } from 'node:fs';
@@ -79,14 +90,13 @@ writeFileSync(process.argv[2], JSON.stringify({ APP_MODE: 'staging',
 NODE
 # Deny browser database access BEFORE publishing the new service.
 ./node_modules/.bin/firebase deploy --config firebase.staging.json --project "$PROJECT_ID" --only firestore:rules
-gcloud run deploy "$SERVICE" --project "$PROJECT_ID" --region "$REGION"   --source . --service-account "$RUNTIME_SA" --allow-unauthenticated   --port 8080 --memory 512Mi --cpu 1 --concurrency 4 --min-instances 0 --max-instances 3   --timeout 60 --labels "release-sha=$RELEASE_SHA" --env-vars-file "$ENV_FILE"   --set-secrets "SESSION_SECRET=am-v3-session:1,PIN_PEPPER=am-v3-pin-pepper:1,$([ "${PAYMENT_PROVIDER:-fake}" = stripe ] && echo 'STRIPE_SECRET_KEY=am-v3-stripe-key:1,WEBHOOK_SECRET_STRIPE=am-v3-webhook-stripe:1' || echo 'WEBHOOK_SECRET_FAKE=am-v3-webhook-fake:1')$([ -n "${FEEDBACK_TO:-}" ] && [ "${EMAIL_PROVIDER:-fake}" = resend ] && echo ',EMAIL_API_KEY=am-v3-email-key:1')"
+gcloud run deploy "$SERVICE" --project "$PROJECT_ID" --region "$REGION"   --source "$SRC" --service-account "$RUNTIME_SA" --allow-unauthenticated   --port 8080 --memory 512Mi --cpu 1 --concurrency 4 --min-instances 0 --max-instances 3   --timeout 60 --labels "release-sha=$RELEASE_SHA" --env-vars-file "$ENV_FILE"   --set-secrets "SESSION_SECRET=am-v3-session:1,PIN_PEPPER=am-v3-pin-pepper:1,$([ "${PAYMENT_PROVIDER:-fake}" = stripe ] && echo 'STRIPE_SECRET_KEY=am-v3-stripe-key:1,WEBHOOK_SECRET_STRIPE=am-v3-webhook-stripe:1' || echo 'WEBHOOK_SECRET_FAKE=am-v3-webhook-fake:1')$([ -n "${FEEDBACK_TO:-}" ] && [ "${EMAIL_PROVIDER:-fake}" = resend ] && echo ',EMAIL_API_KEY=am-v3-email-key:1')"
 mkdir -p .hosting  # deliberately empty; git keeps no empty directory, so make sure it exists
 ./node_modules/.bin/firebase deploy --config firebase.staging.json --project "$PROJECT_ID" --only hosting
-node --input-type=module - "$ORIGIN" "$RELEASE_SHA" <<'NODE'
-const [origin, sha] = process.argv.slice(2);
-const health = await fetch(`${origin}/api/health`);
-const result = await health.json();
-if (!health.ok || result.version !== '3.0.0') throw Error('Live v3.0 health check failed; inspect Cloud Run logs.');
-if (result.release !== sha) throw Error(`The live service reports commit ${result.release || 'none'}, not ${sha}: the deploy did not take, or an older revision still serves traffic.`);
-console.log(`v${result.version} at commit ${sha.slice(0, 7)} is responding at ${origin}. Now complete the staging acceptance checklist.`);
-NODE
+# The revision this run created must be the one serving — traffic pinned to an earlier revision (a rollback per DEPLOY_V3.md §7)
+# would leave the new one, with its new environment, serving nothing while the health check still answered from the old — and
+# the live service must report this very commit. scripts/verify-release.mjs decides; the suite tests its decision.
+gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format=json > "$SERVICE_JSON"
+VERDICT="$(node scripts/verify-release.mjs "$ORIGIN" "$RELEASE_SHA" "$SERVICE_JSON")"
+echo "$VERDICT"
+[[ "$VERDICT" == *"is responding at"* ]] || { echo 'verify-release printed no verdict: refusing to call this deploy done.' >&2; exit 1; }

@@ -1,4 +1,6 @@
 /* ---- the AutoMathtics shell in the v2 look: one 640px card on the math grid, for parents and children alike ----
+/* v2 parity polish: the kids' grid presentation ported from v2 in full (port plan sections 1-3). The hooks this file
+   must keep are pinned by tests/release.test.mjs. */
    Tokens are the game's own (v2, main:src/automathtics-src.jsx 3647-3659): Orbitron for kickers, titles and buttons,
    Rajdhani for everything read, JetBrains Mono for numbers; neon cyan / magenta / violet / gold on #07091A; the grid and
    the aurora behind it. The fonts are served from this origin (public/fonts, SIL Open Font License) — no third-party
