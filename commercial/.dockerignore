@@ -1,0 +1,16 @@
+*
+!package.json
+!package-lock.json
+!server
+!server/**
+!public
+!public/**
+# the operator CLI rides in the image for the scheduled sweep job; the Cloud Shell blocks and the deploy helper do not.
+# `!scripts` is needed for `!scripts/*.mjs` to work under both builders — but it also re-includes the whole directory,
+# since Docker matches a pattern against every parent path and the last matching pattern wins. So the two lines after
+# it exclude the shell scripts again: the Cloud Shell blocks and deploy-staging.sh name project ids, accounts and
+# secret names, and belong to the owner's terminal, not to a container reachable from the internet.
+!scripts
+!scripts/*.mjs
+scripts/cloudshell
+scripts/*.sh

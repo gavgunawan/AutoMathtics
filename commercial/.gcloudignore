@@ -1,0 +1,12 @@
+# Never upload local secrets or the old prototype in the build context.
+.git
+.gitignore
+node_modules
+.env
+.env.*
+*.log
+firebase-debug.log
+firestore-debug.log
+.gcloudignore
+# the SMS ladder function deploys through the Firebase CLI, never inside the Cloud Run build context
+functions

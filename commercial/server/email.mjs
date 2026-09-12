@@ -1,0 +1,165 @@
+// Email (email-v1, the owner's request of 11 Sep 2026): the parent's consent at sign-up and the email preferences behind
+// Mission Control's switches. As everywhere else, the browser only sends choices; the server decides, records and audits.
+//
+// emailPrefs/{uid} = { progress, news, version, updatedAt, changes: [20 rows of { at, progress, news, source, version }: the sign-up
+//   row, which is the consent itself and is kept for good, then the newest of the rest] }
+//  • progress: the weekly progress report. With no record it is on: the report is part of the service the required sign-up box
+//    describes, and every report carries its own way out.
+//  • news: news and offers. With no record it is off: it needs a recorded yes. It is a separate, optional, unticked box because
+//    consent made a condition of sign-up is not consent (Indonesia PDP Law 27/2022, Singapore PDPA s.14(2)(a), GDPR art. 7(4)).
+//  • source: which door a change came through: 'signup' (the boxes), 'settings' (Mission Control), 'email' (a button in an email).
+// The record belongs to the sign-in account, not to the family, and never holds the address: the address stays with the
+// identity provider and is read when a report is sent. Deleting the sign-in account deletes the record (server/support.mjs).
+import { createHmac } from 'node:crypto';
+import { Fault, fail, object, text, equal, uuid } from './security.mjs';
+import { normalizeProgress, weekStart } from './progress.mjs';
+import { maskAddress } from './mailer.mjs';
+
+export const EMAIL_VERSION = 'email-v1';
+// ---- the buttons in an email: v1.<base64url(json)>.<base64url(hmac-sha256)>, the payload { a: action, u: parent uid,
+// f: family, c: child, v: value, w: ISO week, e: expiry }. The key is an HMAC of SESSION_SECRET under its own label, so a
+// token can never pass for a session, a CSRF token or a pre-authentication cookie, all of which the same secret signs.
+export const LINK_ACTIONS = Object.freeze({ focus: 14, pace: 14, unsub: 365 }); // how many days each kind of button works
+/**
+ * When a button stops working: the Monday after its report week (00:00 UTC) plus its kind's days. It follows from the week alone,
+ * so the same report renders the same links at any hour, which a retry needs to be byte-identical for Resend's Idempotency-Key.
+ * null for a week that does not exist or an action this server does not sign (own properties only).
+ */
+export const linkExpiry = (action, week) => { const s = weekStart(week); return s !== null && Object.hasOwn(LINK_ACTIONS, action) ? s + (7 + LINK_ACTIONS[action]) * 86_400_000 : null; };
+const linkKey = (secret) => createHmac('sha256', secret).update('email-links-v1').digest();
+export function signEmailToken(secret, payload) {
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  return `v1.${body}.${createHmac('sha256', linkKey(secret)).update(`v1.${body}`).digest('base64url')}`;
+}
+const TOKEN = /^v1\.([A-Za-z0-9_-]{1,2048})\.([A-Za-z0-9_-]{43})$/, UID = /^[A-Za-z0-9_-]{1,128}$/, KEYS = ['a', 'u', 'f', 'c', 'v', 'w', 'e'];
+const isUuid = (v) => { try { uuid(v); return true; } catch { return false; } };
+/**
+ * A button's token back to its payload: the signature first (constant time) and nothing parsed before it holds; then only what
+ * this server signs passes: an action of its own (never one inherited from Object: 'constructor', '__proto__' and the like), the
+ * value that action takes, a child for pace and focus, none for unsub, and exactly the expiry its week gives it (linkExpiry).
+ * LINK_INVALID for all of that, LINK_EXPIRED once the expiry has passed.
+ */
+export function readEmailToken(secret, token, now) {
+  const m = typeof token === 'string' ? TOKEN.exec(token) : null;
+  if (!m || !equal(m[2], createHmac('sha256', linkKey(secret)).update(`v1.${m[1]}`).digest('base64url'))) fail(400, 'LINK_INVALID');
+  let p = null; try { p = JSON.parse(Buffer.from(m[1], 'base64url').toString('utf8')); } catch { fail(400, 'LINK_INVALID'); }
+  const known = !!p && typeof p === 'object' && !Array.isArray(p) && typeof p.a === 'string' && Object.hasOwn(LINK_ACTIONS, p.a);
+  if (!known || Object.keys(p).some((k) => !KEYS.includes(k)) || typeof p.u !== 'string' || !UID.test(p.u) || !isUuid(p.f) || typeof p.w !== 'string' || !/^\d{4}-W\d{2}$/.test(p.w) || !Number.isSafeInteger(p.e)) fail(400, 'LINK_INVALID');
+  const value = p.a === 'pace' ? Number.isInteger(p.v) && p.v >= 10 && p.v <= 200 : p.a === 'focus' ? typeof p.v === 'boolean' : p.v === 'progress';
+  if (!value || (p.a === 'unsub' ? p.c !== undefined : !isUuid(p.c)) || p.e !== linkExpiry(p.a, p.w)) fail(400, 'LINK_INVALID');
+  if (p.e <= now) fail(410, 'LINK_EXPIRED');
+  return p;
+}
+const done = (p, nickname, cadence = 'off') => (p.a === 'pace' ? `${nickname}’s question time is now ${p.v}%.` : p.a === 'focus' ? (p.v ? `${nickname}’s next System Scan focuses on the weak spots: about 75% of its questions.` : `${nickname}’s System Scan is back to the normal mix.`)
+  : cadence === 'monthly' ? 'The progress report now comes once a month, on the first Monday, covering four weeks. Change it in Mission Control whenever you like.'
+    : 'The weekly progress report is off. Switch it back on in Mission Control whenever you like.');
+const CHANGES_MAX = 20;
+export const prefsPath = (uid) => `emailPrefs/${uid}`;
+// Leaving (12 Sep 2026): how often the progress report comes. `off` and `progress: false` are one and the same thing — the
+// boolean is kept because every reader of it (the job, the export, the buttons in an email) already knows what it means — and
+// `weekly` is what a record written before this existed means.
+export const CADENCES = Object.freeze(['weekly', 'monthly', 'off']);
+export const cadenceOf = (doc) => (doc?.progress === false ? 'off' : CADENCES.includes(doc?.cadence) ? doc.cadence : 'weekly');
+/** What the switches read: the record's state, or the defaults when none was ever written. */
+export const prefsOf = (doc) => { const cadence = cadenceOf(doc); return { progress: cadence !== 'off', news: doc?.news === true, cadence }; };
+/**
+ * The record after a change: the whole new state, and a row saying when, what, through which door and under which version of the
+ * wording. The sign-up row is never rotated out; the newest of the others fill the rest of the twenty. null when nothing changes:
+ * the switches saved as they are add no row (the app sends both switches every time). `cadence` and `progress` are the same
+ * switch from two sides: whichever the patch names decides, and `progress: true` after `off` means weekly again.
+ */
+export function withChange(doc, patch, source, now) {
+  const was = prefsOf(doc);
+  const cadence = CADENCES.includes(patch.cadence) ? patch.cadence
+    : patch.progress === false ? 'off'
+      : patch.progress === true ? (was.cadence === 'off' ? 'weekly' : was.cadence)
+        : was.cadence;
+  const state = { progress: cadence !== 'off', news: typeof patch.news === 'boolean' ? patch.news : was.news, cadence };
+  if (state.progress === was.progress && state.news === was.news && state.cadence === was.cadence) return null;
+  const rows = [...(Array.isArray(doc?.changes) ? doc.changes : []), { at: now, ...state, source, version: EMAIL_VERSION }], first = rows.find((r) => r?.source === 'signup'), rest = rows.filter((r) => r !== first);
+  return { ...state, version: EMAIL_VERSION, updatedAt: now, changes: first ? [first, ...rest.slice(-(CHANGES_MAX - 1))] : rest.slice(-CHANGES_MAX) };
+}
+const flags = (body, keys) => { for (const k of keys) if (body[k] !== undefined && typeof body[k] !== 'boolean') fail(400, 'INVALID_REQUEST'); };
+
+export class Email {
+  constructor({ foundation, store, identity, secret, now = Date.now }) { this.foundation = foundation; this.store = store; this.identity = identity; this.secret = secret; this.now = now; }
+  /**
+   * The sign-up boxes, recorded the moment the account exists: the browser posts the new account's own ID token right after the
+   * provider created it, with both boxes as ticked; the required one must be (progress: true) or nothing is recorded. Only the
+   * token's signature is checked (no second factor exists yet, and this records the account's own choice and nothing else), and
+   * only an absent record is written, so a second call, or anyone else holding the token, changes nothing. An account being
+   * deleted is refused. parents/{uid} is never created here: login() makes it, in the shape it and authorize() expect.
+   */
+  async consent(body) {
+    object(body, ['idToken', 'progress', 'news']); text(body.idToken, 20, 8192); flags(body, ['progress', 'news']);
+    if (body.progress !== true) fail(400, 'CONSENT_REQUIRED');
+    const uid = await this.identity.verifyUid(body.idToken); if (!uid) fail(401, 'INVALID_LOGIN');
+    await this.store.transaction(async (tx) => {
+      const recorded = await tx.get(prefsPath(uid)), parent = await tx.get(`parents/${uid}`);
+      if (parent?.identityDeletion) fail(403, 'ACCOUNT_DELETED');
+      if (recorded) return; // recorded already: from here on the switches change it
+      const now = this.now(), state = { progress: true, news: body.news === true, cadence: 'weekly' };
+      tx.set(prefsPath(uid), { ...state, version: EMAIL_VERSION, updatedAt: now, changes: [{ at: now, ...state, source: 'signup', version: EMAIL_VERSION }] });
+      this.foundation.audit(tx, 'email.consent_recorded', uid);
+    });
+    return { ok: true };
+  }
+  /** Mission Control's switches. A recent sign-in: a child at a remembered, open Mission Control must not switch the report off. */
+  async setPrefs(ctx, body) {
+    object(body, ['progress', 'news', 'cadence']); flags(body, ['progress', 'news']);
+    if (body.cadence !== undefined && !CADENCES.includes(body.cadence)) fail(400, 'INVALID_REQUEST');
+    if (body.progress === undefined && body.news === undefined && body.cadence === undefined) fail(400, 'INVALID_REQUEST');
+    return this.store.transaction(async (tx) => {
+      const { s } = await this.foundation.authorize(tx, ctx, ['parent'], false); this.foundation.requireRecent(s);
+      const old = await tx.get(prefsPath(s.uid)), next = withChange(old, body, 'settings', this.now());
+      if (next) { tx.set(prefsPath(s.uid), next); this.foundation.audit(tx, 'email.prefs_changed', s.uid, s.familyId); } // as they were: no row, no audit
+      return prefsOf(next || old);
+    });
+  }
+
+  // ---- the buttons in an email. A GET changes nothing anywhere: the button opens the app, which asks describe() what it does
+  // and calls apply() only on the parent's tap, because link scanners and mail previews open every link they see.
+  /** Is the token still about something real: the family (not deleted or being deleted), its owner the token's parent, the child still in it. Reads only. */
+  async context(tx, p) {
+    const family = await tx.get(`families/${p.f}`), member = await tx.get(`families/${p.f}/members/${p.u}`), parent = await tx.get(`parents/${p.u}`);
+    const child = p.c ? await tx.get(`families/${p.f}/children/${p.c}`) : null, learning = p.c ? await tx.get(`families/${p.f}/learning/${p.c}`) : null, prefs = p.a === 'unsub' ? await tx.get(prefsPath(p.u)) : null;
+    const live = !!family && family.deleted !== true && family.deletion?.status !== 'executing' && member?.role === 'owner' && member.status === 'active'
+      && !!parent && parent.familyId === p.f && !parent.identityDeletion && parent.deleted !== true && (!p.c || (!!child && (family.childIds || []).includes(p.c)));
+    return live ? { child, prog: p.c ? normalizeProgress(learning) : null, prefs } : null;
+  }
+  /** What the button will do, in the panel's words: { valid, action, nickname, value, current, email, reason }. Never changes anything. */
+  async describe(body) {
+    object(body, ['t']); let p;
+    try { p = readEmailToken(this.secret, body.t, this.now()); }
+    catch (error) { if (error instanceof Fault && error.status < 500) return { valid: false, reason: error.code === 'LINK_EXPIRED' ? 'expired' : 'invalid' }; throw error; }
+    const view = await this.store.transaction(async (tx) => {
+      const ctx = await this.context(tx, p); if (!ctx) return null;
+      return { valid: true, action: p.a, nickname: ctx.child?.nickname || null, value: p.v, current: p.a === 'pace' ? ctx.prog.pacePercent : p.a === 'focus' ? ctx.prog.scanFocus === true : prefsOf(ctx.prefs).progress,
+        cadence: p.a === 'unsub' ? prefsOf(ctx.prefs).cadence : null, email: null, reason: null }; // the unsubscribe panel offers monthly before off, so it must know which the family has
+    }, { readOnly: true });
+    if (!view) return { valid: false, reason: 'gone' };
+    if (p.a === 'unsub') { try { const user = await this.identity.lookup(p.u); view.email = user?.email ? maskAddress(user.email) : null; } catch { /* the panel says "for you" instead */ } }
+    return view;
+  }
+  /**
+   * The parent tapped Confirm. The same checks as describe(), in the transaction that writes; a second tap sets the same value.
+   * An unsubscribe token may also choose `monthly` instead of `off` (the leaving flow's least drastic offer): less than the
+   * token already allows, never more — no token of any kind can switch a report on.
+   */
+  async apply(body) {
+    object(body, ['t', 'cadence']); const p = readEmailToken(this.secret, body.t, this.now());
+    if (body.cadence !== undefined && (p.a !== 'unsub' || !['monthly', 'off'].includes(body.cadence))) fail(400, 'INVALID_REQUEST');
+    return this.store.transaction(async (tx) => { const ctx = await this.context(tx, p); if (!ctx) fail(409, 'LINK_GONE'); return this.write(tx, p, ctx, body.cadence || 'off'); });
+  }
+  /** RFC 8058 one-click: the mailbox provider's POST (http.mjs), the token its only authentication; it can switch the weekly report off and nothing else. */
+  async unsubscribe(t) {
+    const p = readEmailToken(this.secret, t, this.now()); if (p.a !== 'unsub') fail(400, 'LINK_INVALID');
+    return this.store.transaction(async (tx) => { const ctx = await this.context(tx, p); if (!ctx) fail(409, 'LINK_GONE'); return this.write(tx, p, ctx, 'off'); });
+  }
+  write(tx, p, ctx, cadence = 'off') {
+    if (p.a !== 'unsub') tx.set(`families/${p.f}/learning/${p.c}`, { ...ctx.prog, ...(p.a === 'pace' ? { pacePercent: p.v } : { scanFocus: p.v }) });
+    else { const next = withChange(ctx.prefs, { cadence }, 'email', this.now()); if (next) tx.set(prefsPath(p.u), next); } // already off: no second change row
+    this.foundation.audit(tx, 'email.action_applied', p.u, p.f, p.c || null, { kind: p.a, week: p.w });
+    return { ok: true, message: done(p, ctx.child?.nickname, cadence) };
+  }
+}

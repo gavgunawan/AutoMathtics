@@ -1,0 +1,8 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Private records are API-only. The Admin SDK bypasses these rules;
+    // authorization belongs in the server, and IAM must restrict server access.
+    match /{document=**} { allow read, write: if false; }
+  }
+}
