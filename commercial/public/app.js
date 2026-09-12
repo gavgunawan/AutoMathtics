@@ -172,6 +172,10 @@ function padKey(label, press, extra = '', aria = '') {
 function note(text, tone) {
   status.textContent = text || '';
   status.className = !text ? 'message' : `message msg-${tone || (/^✓/.test(text) ? 'ok' : /^[✗⚠]/.test(text) ? 'bad' : 'note')}`;
+  // This line lives under #app, and a child's home is far taller than a tablet: a refusal written down there while the
+  // child is looking at a track card half a page above never reaches them, and the tap reads as nothing happening at
+  // all — the owner's report of 12 Sep 2026, where one child could start a paper and the other silently could not.
+  if (text) { try { status.scrollIntoView?.({ block: 'nearest' }); } catch { /* a DOM that cannot scroll: the words are set all the same */ } }
 }
 // ---- Send feedback (the owner's request of 12 Sep 2026): under the sign-in screen and every parent screen, never in kid mode.
 // The browser sends the words, the screen, an operation id and, signed out, an address to be answered at if the sender wants one;
