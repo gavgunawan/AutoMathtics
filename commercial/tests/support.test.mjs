@@ -133,7 +133,7 @@ test('deletion: 14 days to change your mind; then the people and the game go, th
   const report = await f.support.familyReport(a.familyId); assert.equal(report.deleted, true); assert.equal(report.label, null);
   // the parent comes back: a fresh family, no children, and the trial is still used up
   f.advance(2000); const again = await f.login('parentA'); assert.equal((await f.service.me(again.ctx)).family, null); // an ID token minted before the deletion is refused: reauthAfter moved
-  const fresh = await f.service.createFamily(again.ctx, { label: 'Second life', adultAttestation: true, consentVersion: 'terms-2026-09-13' });
+  const fresh = await f.service.createFamily(again.ctx, { label: 'Second life', adultAttestation: true, consentVersion: 'terms-2026-09-13.2' });
   const ctx2 = await f.service.authenticate(fresh.token); assert.notEqual(fresh.id, a.familyId);
   await assert.rejects(f.billing.startTrial(ctx2, op()), rejected('TRIAL_ALREADY_USED'));
   assert.equal((await f.service.me(ctx2)).family.children.length, 0);

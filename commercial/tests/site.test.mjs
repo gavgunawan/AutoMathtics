@@ -42,8 +42,11 @@ test('the prices are the owner’s — IDR 199,000 for one child, 379,000 for tw
   const en = renderSitePage('/pricing'), id = renderSitePage('/id/pricing');
   for (const s of ['IDR 199,000', 'IDR 379,000', 'IDR 519,000', 'IDR 599,000', 'For five or more children, write to', '19 September 2026, 00:00 WIB', '10 October 2026, 23:59 WIB', '11 October 2026']) assert.ok(en.includes(s), s);
   for (const s of ['Rp199.000', 'Rp379.000', 'Rp519.000', 'Rp599.000', 'Untuk lima anak atau lebih, hubungi', '10 Oktober 2026 pukul 23.59 WIB', '11 Oktober 2026']) assert.ok(id.includes(s), s);
+  // yearly: twelve months less 20% (server/pricing.mjs), in the same table
+  for (const s of ['Yearly, 20% off', 'IDR 1,910,400', 'IDR 3,638,400', 'IDR 4,982,400', 'IDR 5,750,400']) assert.ok(en.includes(s), s);
+  for (const s of ['Tahunan, hemat 20%', 'Rp1.910.400', 'Rp3.638.400', 'Rp4.982.400', 'Rp5.750.400']) assert.ok(id.includes(s), s);
   const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
-  for (const s of ["endsWords: '10 October 2026, 23:59 WIB'", 'IDR 199,000 a month', 'IDR 379,000 a month', 'IDR 519,000 a month', 'IDR 599,000 a month']) assert.ok(app.includes(s), `the introduction: ${s}`);
+  for (const s of ["endsWords: '10 October 2026, 23:59 WIB'", 'IDR 199,000 a month', 'IDR 379,000 a month', 'IDR 519,000 a month', 'IDR 599,000 a month', 'Or pay yearly: twelve months for 20% less.']) assert.ok(app.includes(s), `the introduction: ${s}`);
   for (const old of ['150,000', '275,000', '125,000', '150.000', '275.000', '125.000'])
     assert.ok(![en, id, app].some((text) => text.includes(old)), `the old price ${old} is gone everywhere`);
 });
@@ -52,6 +55,9 @@ test('the terms carry their version and give the Indonesian text precedence; ref
   for (const lang of LANGS) assert.ok(renderSitePage(sitePath('terms', lang)).includes(TERMS_VERSION), lang);
   assert.ok(renderSitePage('/terms').includes('the Bahasa Indonesia version prevails'));
   assert.ok(renderSitePage('/id/terms').includes('versi Bahasa Indonesia yang berlaku'));
+  // the leaving offers never stack, and the terms say so in both languages
+  assert.ok(renderSitePage('/terms').includes('offers cannot be combined with each other or with any other discount, and the yearly price is never reduced further'));
+  assert.ok(renderSitePage('/id/terms').includes('penawaran tidak dapat digabungkan satu sama lain maupun dengan potongan lain, dan harga tahunan tidak pernah dipotong lagi'));
   assert.ok(renderSitePage('/refunds').includes('You were charged twice for the same month.'));
   assert.ok(renderSitePage('/privacy').includes('<b>__session</b>'), 'the one cookie is named');
   const known = new Set(['/', '/join', '/styles.css', '/icons/icon-180.png', '/fonts/Rajdhani-500.woff2', '/fonts/Orbitron-700.woff2', ...SITE_PAGES.flatMap((p) => LANGS.map((l) => sitePath(p, l)))]);

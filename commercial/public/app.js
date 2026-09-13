@@ -2245,7 +2245,8 @@ function joinScreen() {
   const cost = el('div', null, 'join-block');
   cost.append(el('span', 'WHAT IT COSTS', 'section-label'),
     joinLine('1', 'IDR 199,000 a month', 'for one child.'), joinLine('2', 'IDR 379,000 a month', 'for two children.'),
-    joinLine('3', 'IDR 519,000 a month', 'for three children.'), joinLine('4', 'IDR 599,000 a month', 'for four children.'));
+    joinLine('3', 'IDR 519,000 a month', 'for three children.'), joinLine('4', 'IDR 599,000 a month', 'for four children.'),
+    el('p', 'Or pay yearly: twelve months for 20% less.', 'join-words'));
   if (!over) cost.append(el('p', `Free for every family until ${TRIAL.endsWords}: nothing is charged before 11 October.`, 'join-words'));
   box.append(cost);
 

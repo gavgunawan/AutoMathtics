@@ -23,11 +23,11 @@ export function sitePages({ money, trial, updated, termsVersion, business }) {
   return {
     pricing: {
       en: {
-        title: 'Pricing', kicker: 'AUTOMATHTICS · PRICING', intro: 'One monthly price, set by how many children practise.',
-        description: `AutoMathtics costs ${m.en(m.monthly(1))} a month for one child, ${m.en(m.monthly(2))} for two, ${m.en(m.monthly(3))} for three and ${m.en(m.monthly(4))} for four. Free for every family until ${t.en.ends}.`,
+        title: 'Pricing', kicker: 'AUTOMATHTICS · PRICING', intro: 'One price, set by how many children practise: paid monthly, or yearly for 20% less.',
+        description: `AutoMathtics costs ${m.en(m.monthly(1))} a month for one child, ${m.en(m.monthly(2))} for two, ${m.en(m.monthly(3))} for three and ${m.en(m.monthly(4))} for four, or 20% less paid yearly. Free for every family until ${t.en.ends}.`,
         blocks: [
-          ['table', { head: ['Children', 'Price per month'], rows: [1, 2, 3, 4].map((n) => [`${n} ${n === 1 ? 'child' : 'children'}`, m.en(m.monthly(n))]) }],
-          ['note', 'For five or more children, write to support@automathtics.net. Prices are in Indonesian rupiah and include any applicable taxes.'],
+          ['table', { head: ['Children', 'Monthly', 'Yearly, 20% off'], rows: [1, 2, 3, 4].map((n) => [`${n} ${n === 1 ? 'child' : 'children'}`, m.en(m.monthly(n)), m.en(m.annual(n))]) }],
+          ['note', 'Yearly is twelve months’ price less 20%, paid once a year. For five or more children, write to support@automathtics.net. Prices are in Indonesian rupiah and include any applicable taxes.'],
           ['h2', `Free until ${t.en.ends}`],
           ['p', `Every family can use AutoMathtics free from ${t.en.opens} until ${t.en.ends}. No payment details are needed. If you subscribe during the trial, the first payment is taken on ${t.en.firstCharge}.`],
           ['h2', 'Every plan includes'],
@@ -41,9 +41,9 @@ export function sitePages({ money, trial, updated, termsVersion, business }) {
           ]],
           ['h2', 'How billing works'],
           ['ul', [
-            'Paid monthly in advance, and renewed automatically until you cancel.',
-            'Cancel any time in Mission Control. You keep access until the end of the month you paid for.',
-            'Or pause for one to three months, and pay nothing while paused.',
+            'Paid monthly or yearly in advance, and renewed automatically for the same period until you cancel.',
+            'Cancel any time in Mission Control. You keep access until the end of the month or year you paid for.',
+            'On a monthly plan you can pause for one to three months instead, and pay nothing while paused.',
             'Payments are processed securely by Xendit. The payment methods available are shown at checkout.',
           ]],
           ['p', 'The details are in the [Terms of Service](/terms) and the [Refund Policy](/refunds).'],
@@ -51,11 +51,11 @@ export function sitePages({ money, trial, updated, termsVersion, business }) {
         ],
       },
       id: {
-        title: 'Harga', kicker: 'AUTOMATHTICS · HARGA', intro: 'Satu harga bulanan, sesuai jumlah anak yang berlatih.',
-        description: `AutoMathtics ${m.id(m.monthly(1))} per bulan untuk satu anak, ${m.id(m.monthly(2))} untuk dua anak, ${m.id(m.monthly(3))} untuk tiga anak, dan ${m.id(m.monthly(4))} untuk empat anak. Gratis untuk setiap keluarga sampai ${t.id.ends}.`,
+        title: 'Harga', kicker: 'AUTOMATHTICS · HARGA', intro: 'Satu harga sesuai jumlah anak yang berlatih: dibayar bulanan, atau tahunan dengan hemat 20%.',
+        description: `AutoMathtics ${m.id(m.monthly(1))} per bulan untuk satu anak, ${m.id(m.monthly(2))} untuk dua anak, ${m.id(m.monthly(3))} untuk tiga anak, dan ${m.id(m.monthly(4))} untuk empat anak, atau hemat 20% bila dibayar tahunan. Gratis untuk setiap keluarga sampai ${t.id.ends}.`,
         blocks: [
-          ['table', { head: ['Jumlah anak', 'Harga per bulan'], rows: [1, 2, 3, 4].map((n) => [`${n} anak`, m.id(m.monthly(n))]) }],
-          ['note', 'Untuk lima anak atau lebih, hubungi support@automathtics.net. Harga dalam rupiah dan sudah termasuk pajak yang berlaku.'],
+          ['table', { head: ['Jumlah anak', 'Bulanan', 'Tahunan, hemat 20%'], rows: [1, 2, 3, 4].map((n) => [`${n} anak`, m.id(m.monthly(n)), m.id(m.annual(n))]) }],
+          ['note', 'Harga tahunan adalah harga dua belas bulan dikurangi 20%, dibayar sekali setahun. Untuk lima anak atau lebih, hubungi support@automathtics.net. Harga dalam rupiah dan sudah termasuk pajak yang berlaku.'],
           ['h2', `Gratis sampai ${t.id.ends}`],
           ['p', `Setiap keluarga dapat menggunakan AutoMathtics secara gratis mulai ${t.id.opens} sampai ${t.id.ends}. Tidak perlu data pembayaran. Jika Anda berlangganan selama uji coba, pembayaran pertama baru ditagih pada ${t.id.firstCharge}.`],
           ['h2', 'Setiap paket mencakup'],
@@ -69,9 +69,9 @@ export function sitePages({ money, trial, updated, termsVersion, business }) {
           ]],
           ['h2', 'Cara penagihan'],
           ['ul', [
-            'Dibayar di muka setiap bulan, dan diperpanjang otomatis sampai Anda membatalkan.',
-            'Batalkan kapan saja di Mission Control. Akses tetap berjalan sampai akhir bulan yang sudah dibayar.',
-            'Atau jeda selama satu sampai tiga bulan, tanpa pembayaran selama jeda.',
+            'Dibayar di muka setiap bulan atau setiap tahun, dan diperpanjang otomatis untuk periode yang sama sampai Anda membatalkan.',
+            'Batalkan kapan saja di Mission Control. Akses tetap berjalan sampai akhir bulan atau tahun yang sudah dibayar.',
+            'Pada paket bulanan, Anda juga dapat menjeda selama satu sampai tiga bulan, tanpa pembayaran selama jeda.',
             'Pembayaran diproses dengan aman oleh Xendit. Metode pembayaran yang tersedia ditampilkan saat checkout.',
           ]],
           ['p', 'Rinciannya ada di [Syarat dan Ketentuan Layanan](/id/terms) dan [Kebijakan Pengembalian Dana](/id/refunds).'],
@@ -110,7 +110,7 @@ export function sitePages({ money, trial, updated, termsVersion, business }) {
           ['h2', '5. Subscriptions and payment'],
           ['ul', [
             'Prices are on the [Pricing](/pricing) page, in Indonesian rupiah, and include any applicable taxes. The price depends on how many children are in your plan.',
-            'A subscription is paid monthly in advance and renews automatically each month until you cancel.',
+            'A subscription is paid monthly or yearly in advance, as you choose, and renews automatically for the same period until you cancel. A yearly plan costs twelve months’ price less 20%.',
             `If you subscribe during the opening trial, the first payment is taken on ${t.en.firstCharge}, not before.`,
             'Payments are processed by our payment processor, Xendit. We never see or store your full card or account details.',
             'If a renewal payment fails, access continues for 7 days while you sort out the payment; after that, play is paused until a payment succeeds. If nothing is paid within a further 30 days, the subscription ends. Your children’s progress is kept throughout.',
@@ -121,8 +121,9 @@ export function sitePages({ money, trial, updated, termsVersion, business }) {
           ['h2', '7. Cancelling and pausing'],
           ['ul', [
             'You can cancel at any time in Mission Control, under Cancel or pause. There is no cancellation fee.',
-            'Cancelling stops the next renewal. You keep access until the end of the month you have paid for, and you are not charged again.',
-            'You can pause instead, for one, two or three months. A pause takes no payment and gives no access beyond the month already paid for; the subscription carries on when the pause ends.',
+            'Cancelling stops the next renewal. You keep access until the end of the month or year you have paid for, and you are not charged again.',
+            'When you cancel, we may offer you a discount to stay. You can take one such offer, once: offers cannot be combined with each other or with any other discount, and the yearly price is never reduced further.',
+            'On a monthly plan you can pause instead, for one, two or three months. A pause takes no payment and gives no access beyond the month already paid for; the subscription carries on when the pause ends.',
             'Cancelling or pausing never deletes your children’s profiles or progress. To delete your data, see section 13.',
           ]],
           ['h2', '8. Refunds'],
@@ -146,13 +147,13 @@ export function sitePages({ money, trial, updated, termsVersion, business }) {
           ['h2', '12. Availability and changes to the service'],
           ['ul', [
             'We work to keep AutoMathtics available at all times, but it may occasionally be unavailable for maintenance or for reasons outside our control.',
-            'We improve the service over time and may change or remove features. If a change significantly reduces what you pay for, we will tell you first, and you may cancel and receive a refund for the unused part of the month.',
+            'We improve the service over time and may change or remove features. If a change significantly reduces what you pay for, we will tell you first, and you may cancel and receive a refund for the unused part of the period you paid for.',
             'AutoMathtics supports your child’s practice. It does not guarantee particular results, and it does not replace school.',
           ]],
           ['h2', '13. Ending your account'],
           ['ul', [
             'You can delete your family at any time in Mission Control. Deletion takes effect after 14 days and can be cancelled until then; any subscription is ended first. What is kept after deletion, and why, is in the [Privacy Policy](/privacy).',
-            'We may suspend or close an account that seriously breaks these terms, puts others at risk or is used for fraud. We will tell you why, unless the law or security prevents it. If we close an account for any other reason, we refund the unused part of the month.',
+            'We may suspend or close an account that seriously breaks these terms, puts others at risk or is used for fraud. We will tell you why, unless the law or security prevents it. If we close an account for any other reason, we refund the unused part of the period you paid for.',
           ]],
           ['h2', '14. Liability'],
           ['ul', [
@@ -204,7 +205,7 @@ export function sitePages({ money, trial, updated, termsVersion, business }) {
           ['h2', '5. Langganan dan pembayaran'],
           ['ul', [
             'Harga tercantum di halaman [Harga](/id/pricing) dalam rupiah dan sudah termasuk pajak yang berlaku. Harga ditentukan oleh jumlah anak dalam paket Anda.',
-            'Langganan dibayar di muka setiap bulan dan diperpanjang otomatis setiap bulan sampai Anda membatalkannya.',
+            'Langganan dibayar di muka setiap bulan atau setiap tahun, sesuai pilihan Anda, dan diperpanjang otomatis untuk periode yang sama sampai Anda membatalkannya. Paket tahunan seharga dua belas bulan dikurangi 20%.',
             `Jika Anda berlangganan selama uji coba pembukaan, pembayaran pertama baru ditagih pada ${t.id.firstCharge}, tidak lebih awal.`,
             'Pembayaran diproses oleh pemroses pembayaran kami, Xendit. Kami tidak pernah melihat atau menyimpan data lengkap kartu atau rekening Anda.',
             'Jika pembayaran perpanjangan gagal, akses tetap berjalan selama 7 hari agar Anda dapat menyelesaikan pembayaran; setelah itu permainan dijeda sampai pembayaran berhasil. Jika tidak ada pembayaran dalam 30 hari berikutnya, langganan berakhir. Perkembangan anak Anda tetap tersimpan selama itu.',
@@ -215,8 +216,9 @@ export function sitePages({ money, trial, updated, termsVersion, business }) {
           ['h2', '7. Membatalkan dan menjeda'],
           ['ul', [
             'Anda dapat membatalkan kapan saja di Mission Control, pada menu Cancel or pause. Tidak ada biaya pembatalan.',
-            'Pembatalan menghentikan perpanjangan berikutnya. Akses tetap berjalan sampai akhir bulan yang sudah dibayar, dan Anda tidak ditagih lagi.',
-            'Sebagai gantinya, Anda dapat menjeda langganan selama satu, dua, atau tiga bulan. Selama jeda tidak ada pembayaran dan tidak ada akses melebihi bulan yang sudah dibayar; langganan berlanjut ketika masa jeda berakhir.',
+            'Pembatalan menghentikan perpanjangan berikutnya. Akses tetap berjalan sampai akhir bulan atau tahun yang sudah dibayar, dan Anda tidak ditagih lagi.',
+            'Saat Anda membatalkan, kami dapat menawarkan potongan harga agar Anda tetap berlangganan. Penawaran seperti itu hanya dapat digunakan satu kali: penawaran tidak dapat digabungkan satu sama lain maupun dengan potongan lain, dan harga tahunan tidak pernah dipotong lagi.',
+            'Pada paket bulanan, Anda dapat menjeda langganan selama satu, dua, atau tiga bulan sebagai gantinya. Selama jeda tidak ada pembayaran dan tidak ada akses melebihi bulan yang sudah dibayar; langganan berlanjut ketika masa jeda berakhir.',
             'Membatalkan atau menjeda tidak pernah menghapus profil maupun perkembangan anak Anda. Untuk menghapus data, lihat bagian 13.',
           ]],
           ['h2', '8. Pengembalian dana'],
@@ -240,13 +242,13 @@ export function sitePages({ money, trial, updated, termsVersion, business }) {
           ['h2', '12. Ketersediaan dan perubahan layanan'],
           ['ul', [
             'Kami berupaya agar AutoMathtics selalu tersedia, tetapi sesekali layanan dapat tidak tersedia karena pemeliharaan atau hal di luar kendali kami.',
-            'Kami terus menyempurnakan layanan dan dapat mengubah atau menghapus fitur. Jika suatu perubahan secara berarti mengurangi apa yang Anda bayar, kami akan memberi tahu Anda terlebih dahulu, dan Anda dapat membatalkan serta menerima pengembalian dana untuk bagian bulan yang belum digunakan.',
+            'Kami terus menyempurnakan layanan dan dapat mengubah atau menghapus fitur. Jika suatu perubahan secara berarti mengurangi apa yang Anda bayar, kami akan memberi tahu Anda terlebih dahulu, dan Anda dapat membatalkan serta menerima pengembalian dana untuk bagian periode yang sudah dibayar dan belum digunakan.',
             'AutoMathtics mendukung latihan anak Anda. AutoMathtics tidak menjamin hasil tertentu dan tidak menggantikan sekolah.',
           ]],
           ['h2', '13. Mengakhiri akun'],
           ['ul', [
             'Anda dapat menghapus keluarga Anda kapan saja di Mission Control. Penghapusan berlaku 14 hari setelah diminta dan dapat dibatalkan sebelum itu; langganan yang berjalan diakhiri terlebih dahulu. Data yang tetap disimpan setelah penghapusan, beserta alasannya, dijelaskan dalam [Kebijakan Privasi](/id/privacy).',
-            'Kami dapat menangguhkan atau menutup akun yang melanggar syarat ini secara serius, membahayakan pihak lain, atau digunakan untuk penipuan. Kami akan menyampaikan alasannya, kecuali dilarang oleh hukum atau demi keamanan. Jika kami menutup akun karena alasan lain, kami mengembalikan dana untuk bagian bulan yang belum digunakan.',
+            'Kami dapat menangguhkan atau menutup akun yang melanggar syarat ini secara serius, membahayakan pihak lain, atau digunakan untuk penipuan. Kami akan menyampaikan alasannya, kecuali dilarang oleh hukum atau demi keamanan. Jika kami menutup akun karena alasan lain, kami mengembalikan dana untuk bagian periode yang sudah dibayar dan belum digunakan.',
           ]],
           ['h2', '14. Tanggung jawab'],
           ['ul', [
@@ -280,7 +282,7 @@ export function sitePages({ money, trial, updated, termsVersion, business }) {
           ['h2', 'Free trials'],
           ['p', `A free trial costs nothing, so there is nothing to refund. The opening trial (${t.en.opens} to ${t.en.ends}) needs no payment details at all.`],
           ['h2', 'Cancelling'],
-          ['p', 'You can cancel at any time in Mission Control, under Cancel or pause. Cancelling stops the next renewal; you keep access until the end of the month you have paid for, and you are not charged again.'],
+          ['p', 'You can cancel at any time in Mission Control, under Cancel or pause. Cancelling stops the next renewal; you keep access until the end of the month or year you have paid for, and you are not charged again.'],
           ['h2', 'When we refund in full'],
           ['ul', [
             'You were charged twice for the same month.',
@@ -289,14 +291,14 @@ export function sitePages({ money, trial, updated, termsVersion, business }) {
             'You were charged a different amount from the price shown when you subscribed or last changed your plan. We refund the difference.',
             'A payment was made from your account without your permission. We will check what happened and help you secure the account.',
           ]],
-          ['h2', 'When we refund the unused part of a month'],
+          ['h2', 'When we refund the unused part of a period'],
           ['ul', [
-            'AutoMathtics was unavailable to your family for more than 72 hours in total during a paid month, for reasons within our control.',
+            'AutoMathtics was unavailable to your family for more than 72 hours in total during any month you paid for, for reasons within our control.',
             'We stop providing the service, or significantly reduce what your plan includes.',
             'We close your account without a breach of the terms on your part.',
           ]],
           ['h2', 'Other requests'],
-          ['p', 'Otherwise we do not usually refund part of a month that has already started, because your access continues to the end of that month after you cancel. If something has gone wrong for you that this page does not cover, write to us anyway: we read every request and decide it fairly.'],
+          ['p', 'Otherwise we do not usually refund part of a month or year that has already started, because your access continues to its end after you cancel. If something has gone wrong for you that this page does not cover, write to us anyway: we read every request and decide it fairly.'],
           ['h2', 'How to ask for a refund'],
           ['ul', [
             'Email support@automathtics.net from the email address on your account, within 30 days of the payment.',
@@ -320,7 +322,7 @@ export function sitePages({ money, trial, updated, termsVersion, business }) {
           ['h2', 'Uji coba gratis'],
           ['p', `Uji coba gratis tidak dikenai biaya, sehingga tidak ada yang perlu dikembalikan. Uji coba pembukaan (${t.id.opens} sampai ${t.id.ends}) sama sekali tidak memerlukan data pembayaran.`],
           ['h2', 'Membatalkan langganan'],
-          ['p', 'Anda dapat membatalkan kapan saja di Mission Control, pada menu Cancel or pause. Pembatalan menghentikan perpanjangan berikutnya; akses tetap berjalan sampai akhir bulan yang sudah dibayar, dan Anda tidak ditagih lagi.'],
+          ['p', 'Anda dapat membatalkan kapan saja di Mission Control, pada menu Cancel or pause. Pembatalan menghentikan perpanjangan berikutnya; akses tetap berjalan sampai akhir bulan atau tahun yang sudah dibayar, dan Anda tidak ditagih lagi.'],
           ['h2', 'Pengembalian dana penuh'],
           ['ul', [
             'Anda ditagih dua kali untuk bulan yang sama.',
@@ -329,14 +331,14 @@ export function sitePages({ money, trial, updated, termsVersion, business }) {
             'Anda ditagih dengan jumlah yang berbeda dari harga yang ditampilkan saat Anda berlangganan atau terakhir mengubah paket. Kami mengembalikan selisihnya.',
             'Ada pembayaran dari akun Anda tanpa izin Anda. Kami akan memeriksa kejadiannya dan membantu Anda mengamankan akun.',
           ]],
-          ['h2', 'Pengembalian dana untuk bagian bulan yang belum digunakan'],
+          ['h2', 'Pengembalian dana untuk bagian periode yang belum digunakan'],
           ['ul', [
-            'AutoMathtics tidak dapat digunakan oleh keluarga Anda lebih dari total 72 jam dalam satu bulan yang sudah dibayar, karena hal yang berada dalam kendali kami.',
+            'AutoMathtics tidak dapat digunakan oleh keluarga Anda lebih dari total 72 jam dalam bulan mana pun yang sudah dibayar, karena hal yang berada dalam kendali kami.',
             'Kami berhenti menyediakan layanan, atau mengurangi isi paket Anda secara berarti.',
             'Kami menutup akun Anda tanpa adanya pelanggaran syarat dari pihak Anda.',
           ]],
           ['h2', 'Permintaan lain'],
-          ['p', 'Di luar hal di atas, kami biasanya tidak mengembalikan dana untuk bulan yang sudah berjalan, karena akses Anda tetap berlanjut sampai akhir bulan tersebut setelah Anda membatalkan. Jika Anda mengalami masalah yang tidak tercakup di halaman ini, tetap hubungi kami: setiap permintaan kami baca dan kami putuskan secara adil.'],
+          ['p', 'Di luar hal di atas, kami biasanya tidak mengembalikan dana untuk bulan atau tahun yang sudah berjalan, karena akses Anda tetap berlanjut sampai akhirnya setelah Anda membatalkan. Jika Anda mengalami masalah yang tidak tercakup di halaman ini, tetap hubungi kami: setiap permintaan kami baca dan kami putuskan secara adil.'],
           ['h2', 'Cara mengajukan pengembalian dana'],
           ['ul', [
             'Kirim email ke support@automathtics.net dari alamat email akun Anda, paling lambat 30 hari setelah pembayaran.',
