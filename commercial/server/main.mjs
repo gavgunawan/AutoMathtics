@@ -11,6 +11,7 @@ import { Support } from './support.mjs';
 import { Recovery } from './recovery.mjs';
 import { Email } from './email.mjs';
 import { Feedback } from './feedback.mjs';
+import { Waitlist } from './waitlist.mjs';
 import { LeavingFlow } from './leaving.mjs';
 import { createMailer } from './mailer.mjs';
 import { VERSION } from './version.mjs';
@@ -39,7 +40,11 @@ const feedback = new Feedback({ foundation: service, store, mailer: cfg.feedback
   release: cfg.releaseSha || VERSION, log: (event) => console.error(JSON.stringify(event)) });
 // Leaving (12 Sep 2026): the cancel-or-pause flow, which does its work through the billing, payment and email routes above
 const leaving = new LeavingFlow({ foundation: service, store, billing, payments, email });
-const server = createApp(service, cfg, { reportError: (event) => console.error(JSON.stringify(event)), learning, game, billing, payments, support, recovery, email, feedback, leaving });
+// The waiting list behind /join: addresses only, until the doors open on 19 September
+const waitlist = new Waitlist({ store, secret: cfg.secret, origin: cfg.origin, release: cfg.releaseSha || VERSION,
+  mailer: cfg.waitlist.mail.provider === 'resend' ? createMailer(cfg.waitlist.mail) : null, replyTo: cfg.waitlist.replyTo,
+  log: (event) => console.error(JSON.stringify(event)) });
+const server = createApp(service, cfg, { reportError: (event) => console.error(JSON.stringify(event)), learning, game, billing, payments, support, recovery, email, feedback, leaving, waitlist });
 server.listen(cfg.port, cfg.emulator ? '127.0.0.1' : '0.0.0.0', () => {
   console.log(JSON.stringify({ event: 'foundation_ready', mode: cfg.mode, port: cfg.port }));
 });

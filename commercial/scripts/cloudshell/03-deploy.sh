@@ -22,4 +22,24 @@ if ! ./node_modules/.bin/firebase projects:list --project "$PROJECT_ID" >/dev/nu
 fi
 # Send feedback copies each note to FEEDBACK_TO when it is set (by Resend with EMAIL_PROVIDER=resend): DEPLOY_V3.md → 5c
 [[ -n "${FEEDBACK_TO:-}" ]] && export FEEDBACK_TO EMAIL_PROVIDER="${EMAIL_PROVIDER:-fake}" && echo "feedback is copied to $FEEDBACK_TO (EMAIL_PROVIDER=$EMAIL_PROVIDER)"
-npm run deploy:staging && { echo; echo 'proxy depth probe:'; curl -s -H 'X-Forwarded-For: 203.0.113.250' "https://${PROJECT_ID}.web.app/api/health"; echo; echo 'BLOCK C DONE'; }
+# A deploy that fails, or one that finishes without the new revision taking traffic, used to end in silence that read like
+# success — the owner deployed three times over two days and kept seeing the release before it (12-13 Sep 2026). So the block
+# now asks the live service which commit it is running and says plainly whether that is this checkout's.
+WANT="$(git rev-parse HEAD)"
+if npm run deploy:staging; then
+  echo; echo 'proxy depth probe:'
+  for TRY in 1 2 3; do
+    ANSWER="$(curl -s -H 'X-Forwarded-For: 203.0.113.250' "https://${PROJECT_ID}.web.app/api/health")"
+    case "$ANSWER" in *"$WANT"*) break;; esac
+    sleep 5 # Cloud Run can take a moment to move traffic to the new revision
+  done
+  echo "$ANSWER"; echo
+  case "$ANSWER" in
+    *"$WANT"*) echo "BLOCK C DONE. The live service is running $(git log --format='%h %s' -1)";;
+    *) echo 'BLOCK C DID NOT TAKE: the live service still answers with a different commit than this checkout.';
+       echo "  this checkout: $(git log --format='%h %s' -1)";
+       echo '  Read the deploy output above for the reason; nothing here is live yet.';;
+  esac
+else
+  echo 'BLOCK C FAILED: the deploy did not finish. The lines above say why, and nothing was released.'
+fi

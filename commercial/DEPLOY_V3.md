@@ -51,7 +51,7 @@ not its display name. Do not use `automathtics`; the server explicitly rejects i
   receive no SMS at all: a test number gets a fixed code and the provider sends nothing, which
   looks exactly like a lost SMS.
   The app adds its own resend ladder on top (section 5, block F): one code at once,
-  then 30 seconds, 30 seconds, 2 minutes, 15 minutes, 1 hour, 6 hours and 12 hours
+  then 5 seconds, 5 seconds, 2 minutes, 15 minutes, 1 hour, 6 hours and 12 hours
   before the next ones, and a day before the ninth.
 - In Authentication settings, authorize `YOUR_PROJECT_ID.web.app` and
   `YOUR_PROJECT_ID.firebaseapp.com`; configure email templates, an enforced
@@ -302,8 +302,8 @@ Singapore time. Both are inside the free tiers at pilot scale; a failed job is t
 Then the SMS resend ladder (`scripts/cloudshell/06-sms-ladder.sh`, block F): an Identity Platform
 *blocking function* (`functions/index.js`, Cloud Functions 2nd gen, inside the free tier at pilot scale)
 that the provider consults before every verification SMS — a parent enrolling a mobile, the second
-factor at sign-in — and that refuses while the number is on a rung it has not waited out: 30 seconds
-after the first code and 30 seconds after the second (the owner's burst of three, 11 Sep 2026), then
+factor at sign-in — and that refuses while the number is on a rung it has not waited out: 5 seconds
+after the first code and 5 seconds after the second (the owner's burst of three: 30 seconds on 11 Sep 2026, 5 on 13 Sep), then
 2 minutes, 15 minutes, 1 hour, 6 hours, 12 hours, and a day before the ninth; a day without a code to
 that number starts the ladder over (`functions/ladder.mjs`). The last rung and the quiet period are the
 same day, so a run holds at most eight codes and the ninth, a day later, is the first rung of a new run.
@@ -498,6 +498,13 @@ To read them, in Cloud Shell with the variables `scripts/support.mjs` uses (`APP
 `CONFIRM_PROJECT`, `OPERATOR_ID`): `node scripts/report.mjs feedback --days 7` prints one JSON line per note, newest first:
 when, the screen, the release, the parent and family when signed in, the address to answer when one was given, and the words.
 `--days` takes 1 to 400.
+
+**The waiting list's own sender.** `/join` writes one email back to every new address (server/waitlist.mjs), so it should not
+write as the address parents reply to. Export `WAITLIST_FROM='AutoMathtics <no-reply@THE-DOMAIN>'` and
+`WAITLIST_REPLY_TO='support@THE-DOMAIN'` before block C: the list then writes as no-reply, and a reader who answers anyway
+reaches a person. Without them the list writes as `EMAIL_FROM`, which is blunt but never wrong. Every message carries an
+unsubscribe signed for that one address (`/api/waitlist/leave`), working as a click and as RFC 8058 one-click; rotating
+`SESSION_SECRET` voids every link already sent, and a reader whose link no longer works can be removed by address by hand.
 
 **A copy in the owner's inbox.** With Resend set up (5b: the key in `am-v3-email-key`, and block G rerun with
 `EMAIL_PROVIDER=resend`, which grants the runtime account the key), deploy with the owner's address:

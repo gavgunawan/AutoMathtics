@@ -38,7 +38,7 @@ export async function uiFixture(t, { family = true, signedIn = true, clock = nul
   const a = signedIn ? (family ? await f.family('parentA', 2) : await f.login('parentA')) : null;
   if (typeof location === 'function') location = await location(f, a);
   const cfg = { origin: 'http://127.0.0.1', secret, emulator: true, web: { authDomain: 'demo-am-foundation.firebaseapp.com' } };
-  const server = createApp(f.service, cfg, { learning: f.learning, game: f.game, billing: f.billing, payments: f.payments, email: f.email, feedback: f.feedback, leaving: f.leaving }); server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const server = createApp(f.service, cfg, { learning: f.learning, game: f.game, billing: f.billing, payments: f.payments, email: f.email, feedback: f.feedback, leaving: f.leaving, waitlist: f.waitlist }); server.listen(0, '127.0.0.1'); await once(server, 'listening');
   cfg.origin = `http://127.0.0.1:${server.address().port}`;
   t.after(() => { server.closeAllConnections(); server.close(); });
   let cookie = a ? `__session=${a.cookie}` : '';
@@ -52,8 +52,9 @@ export async function uiFixture(t, { family = true, signedIn = true, clock = nul
   const root = new Element('main'), message = new Element('p');
   // html: the page's root element, which carries data-mode (and data-bg on kid screens); decor: the #decor layer behind #app
   const html = new Element('html'), decor = new Element('div'); decor.id = 'decor';
+  const pilot = new Element('span'); pilot.id = 'pilot'; // the masthead corner, which holds the family's name once there is one
   const document = { visibilityState: 'visible', querySelector: sel => sel === '#app' ? root : message, documentElement: html,
-    getElementById: id => id === 'decor' ? decor : null, createElement: tag => new Element(tag),
+    getElementById: id => id === 'decor' ? decor : id === 'pilot' ? pilot : null, createElement: tag => new Element(tag),
     ...(svg ? { createElementNS: (ns, tag) => Object.assign(new Element(tag), { namespaceURI: ns }) } : {}), addEventListener: (name, fn) => { documentEvents[name] = fn; } };
   const fetchForPage = async (path, options = {}) => {
     requests.push({ path, method: options.method || 'GET', ...(recordBodies.includes(path) && options.body ? { body: JSON.parse(options.body) } : {}) }); // never retain request credentials
@@ -93,7 +94,7 @@ export async function uiFixture(t, { family = true, signedIn = true, clock = nul
     nodes(root, 'SELECT')[0].value = 'wolf'; f.advance(301000);
     await control(root, 'Create child profile').onclick(); assert.ok(root.textContent.includes('PARENT VERIFICATION'));
   };
-  return { f, a, root, message, html, decor, api, requests, broadcasts, nodes: tag => nodes(root, tag), click: label => control(root, label).onclick(),
+  return { f, a, root, message, html, decor, pilot, api, requests, broadcasts, nodes: tag => nodes(root, tag), click: label => control(root, label).onclick(),
     idle, setAuth, submitLogin, draft, cookie: () => cookie, setCookie: value => { cookie = `__session=${value}`; },
     visibility: () => documentEvents.visibilitychange?.(), sessionChange: () => channelHandler?.(),
     tap: (type = 'click') => documentEvents[type]?.({ type }), // a user's tap as the document sees it first (a click, a touchend, a key)

@@ -22,6 +22,7 @@ const messages = {
   PIN_SERVICE_BUSY: 'Another PIN check is in progress. Please try again in a moment.',
   PIN_CHECK_EXPIRED: 'This PIN check expired. Please enter your PIN again.',
   TOO_MANY_ATTEMPTS: 'Too many attempts. Please pause before trying again.',
+  TOO_MANY_PAPERS: 'That is a lot of papers started in one hour. Take a short break — you can start again soon.',
   INCORRECT_PIN: 'That PIN did not match.', REAUTHENTICATE: 'Please sign in again for this parent action.',
   SIGN_IN_REQUIRED: 'Please sign in.', PARENT_REQUIRED: 'Return to parent sign-in to manage your family.',
   CHILD_SESSION_REVOKED: 'The child PIN changed. Select the child and enter the new PIN.',
@@ -133,6 +134,11 @@ function clearLook() { applyLook(null); }
 function setMode() {
   const mode = model?.role === 'child' ? 'kid' : model?.role === 'selector' ? 'select' : 'parent';
   document.documentElement?.setAttribute('data-mode', mode); if (mode !== 'kid') clearLook();
+  // The corner of the masthead used to read PRIVATE PILOT, which was true of a pilot and is wrong of a product. It now holds
+  // the family's own name once there is one, and nothing at all before that: a parent sees whose grid this is, and a stranger
+  // is told nothing about anyone (the owner's request of 12 Sep 2026).
+  const corner = document.getElementById?.('pilot');
+  if (corner) corner.textContent = mode === 'parent' && model?.family?.label ? model.family.label : '';
 }
 // variant: one of v2's narrower cards (narrow 420px, w460, w520) or a screen's own class; play: a question session is on screen,
 // so a newer release's bar waits for its end (Update now); page: the name a note from this screen reports (Send feedback)
@@ -172,6 +178,10 @@ function padKey(label, press, extra = '', aria = '') {
 function note(text, tone) {
   status.textContent = text || '';
   status.className = !text ? 'message' : `message msg-${tone || (/^✓/.test(text) ? 'ok' : /^[✗⚠]/.test(text) ? 'bad' : 'note')}`;
+  // This line lives under #app, and a child's home is far taller than a tablet: a refusal written down there while the
+  // child is looking at a track card half a page above never reaches them, and the tap reads as nothing happening at
+  // all — the owner's report of 12 Sep 2026, where one child could start a paper and the other silently could not.
+  if (text) { try { status.scrollIntoView?.({ block: 'nearest' }); } catch { /* a DOM that cannot scroll: the words are set all the same */ } }
 }
 // ---- Send feedback (the owner's request of 12 Sep 2026): under the sign-in screen and every parent screen, never in kid mode.
 // The browser sends the words, the screen, an operation id and, signed out, an address to be answered at if the sender wants one;
@@ -802,15 +812,22 @@ async function parentScreen() {
 // because a change is never sent by itself.
 function emailBlock(prefs) {
   const wrap = adminSection('📧 Email updates', 'c-violet');
-  const sw = (words, detail, on) => { const l = el('label', null, 'check'), i = el('input'), s = el('span', words); i.type = 'checkbox'; i.checked = on; s.append(el('small', detail)); l.append(i, s); wrap.append(l); return i; };
-  const progress = sw('Weekly progress report', 'Every Monday: what each child got right and fast, right but slow, and wrong again and again, with a suggested pace.', prefs?.progress !== false);
-  // Leaving (12 Sep 2026): monthly instead of weekly, for a parent who finds it too much but does not want to lose it
-  const monthly = sw('Send it monthly instead', 'One email on the first Monday of the month, covering four weeks.', prefs?.cadence === 'monthly');
-  const news = sw('News and offers', 'Occasional news and offers from AutoMathtics.', prefs?.news === true);
+  const row = (type, words, detail, on, name = '') => { const l = el('label', null, 'check'), i = el('input'), s = el('span', words); i.type = type; if (name) i.name = name; i.checked = on; s.append(el('small', detail)); l.append(i, s); wrap.append(l); return i; };
+  // How often the progress report comes is one choice, not two switches. As two tick boxes, "Weekly progress report" and "Send it
+  // monthly instead" could both be ticked, and the page said two things the server holds as one (the owner, 13 Sep 2026). Three
+  // radio buttons in one named group: the browser itself keeps exactly one chosen, and "none" is a choice, not an unticked box.
+  const current = ['weekly', 'monthly', 'off'].includes(prefs?.cadence) ? prefs.cadence : prefs?.progress === false ? 'off' : 'weekly';
+  const pick = {
+    weekly: row('radio', 'Weekly progress report', 'Every Monday: what each child got right and fast, right but slow, and wrong again and again, with a suggested pace.', current === 'weekly', 'report-cadence'),
+    // Leaving (12 Sep 2026): monthly, for a parent who finds weekly too much but does not want to lose it
+    monthly: row('radio', 'Monthly progress report', 'One email on the first Monday of the month, covering four weeks.', current === 'monthly', 'report-cadence'),
+    off: row('radio', 'No progress report', 'Nothing about how the children are getting on. Choose weekly or monthly again here whenever you like.', current === 'off', 'report-cadence'),
+  };
+  const news = row('checkbox', 'News and offers', 'Occasional news and offers from AutoMathtics.', prefs?.news === true);
   const save = el('div', null, 'row email-save');
   save.append(el('span', 'Account and security emails always come.', 'row-words'), button('Save email settings', async () => {
-    // one switch, sent as the cadence it means: off, weekly, or monthly — never both a boolean and a cadence that disagree
-    const cadence = progress.checked !== true ? 'off' : monthly.checked === true ? 'monthly' : 'weekly';
+    // the one choice, sent as the cadence it names; in a browser only one of the three can be chosen at a time
+    const cadence = pick.monthly.checked === true ? 'monthly' : pick.off.checked === true ? 'off' : 'weekly';
     try { await api('/account/email', { cadence, news: news.checked === true }); await refresh(); note('Email settings saved.'); }
     catch (error) { if (error.code !== 'REAUTHENTICATE') throw error; reauthenticate(async () => { await refresh(); note('Parent verified. Set the switches again, then save.'); }); }
   }, 'tiny'));
@@ -858,12 +875,17 @@ function changeMobileScreen() {
     const consent = el('input'); consent.type = 'checkbox'; const consentLabel = el('label', null, 'check');
     consentLabel.append(consent, el('span', 'I agree to receive a verification SMS on this number. Google processes it for authentication and abuse prevention; carrier charges may apply.'));
     const otp = field('SMS verification code', 'text', { inputMode: 'numeric', pattern: '[0-9]{6}', maxLength: 6, autocomplete: 'one-time-code' });
+    const robot = captchaBox();
     const send = sendControl('Send code to the new number', () => tidy(phone.input.value), async () => {
       if (!e164(phone.input.value)) { note('Enter the number in international form, for example +62 812 3456 7890.'); return; }
-      note('Tick \u201cI\u2019m not a robot\u201d just below, then the code is sent.'); await (await auth()).changeMobileSend(tidy(phone.input.value), consent.checked); note('Code sent to the new number. Enter it below.');
+      note('Tick \u201cI\u2019m not a robot\u201d just below, then the code is sent.');
+      // The note scrolls itself into view at the foot of the page, which on a phone can carry the robot check off the top of
+      // the screen while the provider waits for it to be ticked. The box to tick is what must be in view (13 Sep 2026).
+      try { robot.scrollIntoView?.({ block: 'center' }); } catch { /* a DOM that cannot scroll */ }
+      await (await auth()).changeMobileSend(tidy(phone.input.value), consent.checked); note('Code sent to the new number. Enter it below.');
     });
     phone.input.addEventListener('input', () => send.check(true)); // the clock belongs to the number typed
-    box.append(phone.wrap, consentLabel, actionRow(send.button), captchaBox(), otp.wrap,
+    box.append(phone.wrap, consentLabel, actionRow(send.button), robot, otp.wrap,
       actionRow(button('Verify new number', async () => {
         const r = await (await auth()).changeMobileConfirm(otp.input.value); keepSdkSession = false;
         await api('/auth/logout', {}); channel?.postMessage('changed'); model = null; signInScreen(); note(r.notice); // the next sign-in carries the new factor
@@ -2119,7 +2141,109 @@ channel?.addEventListener('message', () => {
 // a cookie over the one another tab has just rotated (a hand-over, a PIN, Switch child, a sign-in). A change of session reaches this
 // tab by the tabs' own signal above, sent once the change is done (review of 12 Sep 2026).
 document.addEventListener('visibilitychange', () => (document.visibilityState === 'visible' ? checkRelease() : undefined));
-await run(refresh);
+// ---- /join (the owner's request of 12 Sep 2026): the page a post on social media points at. Every other screen in this app
+// assumes you already know what AutoMathtics is; whoever arrives from a post does not, so this is the one screen that explains
+// itself before it asks for anything. It carries one action, and the date decides what that action is: before the doors open it
+// takes an address for the waiting list and nothing else — no account, no password, no mobile, no child — and from 19 September
+// it walks into the ordinary sign-up, where the email check and the mobile code live as they always have. The trial ends for
+// everyone at the same moment however late they joined, so the page can name one date and mean it.
+const TRIAL = Object.freeze({
+  opensAt: Date.UTC(2026, 8, 18, 17), // 19 Sep 2026, 00:00 in Jakarta — WIB is UTC+7, and the page speaks in WIB throughout
+  endsAt: Date.UTC(2026, 9, 10, 16, 59, 59), // 10 Oct 2026, 23:59 WIB
+  opensWords: '19 September 2026', endsWords: '10 October 2026, 23:59 WIB',
+});
+// The tag a post's link carried (/join?from=ig), kept to the shape the server accepts so a junk one is simply not sent
+const joinSource = () => {
+  try { const t = new URLSearchParams(location.search).get('from') || ''; return /^[a-z0-9][a-z0-9-]{0,23}$/.test(t) ? t : null; } catch { return null; }
+};
+const joinLine = (emoji, name, words) => {
+  const row = el('div', null, 'join-line'), said = el('span', null, 'join-words');
+  said.append(el('b', name), words ? ` ${words}` : ''); // built before it is placed: the DOM these run in has no lastChild
+  row.append(el('span', emoji, 'join-mark'), said);
+  return row;
+};
+function joinScreen() {
+  transientView = true;
+  const now = Date.now(), open = now >= TRIAL.opensAt && now <= TRIAL.endsAt, over = now > TRIAL.endsAt;
+  const box = panel('AUTOMATHTICS · MATH GRID', 'Maths practice they ask to do.',
+    open ? `Free for every family until ${TRIAL.endsWords}. No card, nothing to cancel.`
+      : over ? 'The opening trial has finished. Accounts are open as usual.'
+        : `The grid opens on ${TRIAL.opensWords}. Leave your email and we will write to you that morning.`,
+    'w520 join', { back: false, page: 'join' });
+  // This screen belongs to nobody yet: setMode() has just dressed it as a parent's, masthead and all. A stranger who followed
+  // a link should not be told they are in Mission Control, and the tab they leave open should say what the page is.
+  document.documentElement?.setAttribute('data-mode', 'join');
+  try { document.title = 'AutoMathtics — maths practice they ask to do'; } catch { /* a document without a title to set */ }
+
+  const what = el('div', null, 'join-block');
+  what.append(el('span', 'WHAT YOUR CHILD PLAYS', 'section-label'),
+    joinLine('⚙️', 'Engine.', 'Papers of 25 questions, through six sectors: addition to fractions. Every paper is 100% to pass — close is not passed.'),
+    joinLine('🧭', 'Navigator.', 'The same maths in words and pictures, where the work is reading the problem and choosing the method.'),
+    joinLine('⚡', 'Grid coins.', 'Earned by passing, spent in the shop on backgrounds, pets, rockets and a mystery egg.'),
+    joinLine('🏆', 'Reward points.', 'For rewards you set and you approve. A child never spends real money, and nothing in the shop costs any.'));
+  box.append(what);
+
+  const parent = el('div', null, 'join-block');
+  parent.append(el('span', 'WHAT YOU GET', 'section-label'),
+    joinLine('📧', 'A weekly email.', 'Which kinds of question your child gets right and fast, which are slow, and which keep going wrong.'),
+    joinLine('🎚', 'A pace you set.', 'Speed the questions up or slow them down, per child, whenever you like.'),
+    joinLine('🗒', 'Every session logged.', 'What was practised, how long it took, and what was earned.'));
+  box.append(parent);
+
+  const privacy = el('div', null, 'join-block');
+  privacy.append(el('span', 'WHAT WE NEVER ASK A CHILD FOR', 'section-label'),
+    el('p', 'No child email address, phone number, photo or full birth date — ever. A nickname, an age and a year level is everything a child profile holds. The account is yours, and it is protected by your password and a code to your mobile.', 'join-words'));
+  box.append(privacy);
+
+  const steps = el('div', null, 'join-block');
+  steps.append(el('span', 'SIGNING UP TAKES FOUR STEPS', 'section-label'),
+    joinLine('1', 'Your email and a password.', ''),
+    joinLine('2', 'Confirm the email.', 'We send a link.'),
+    joinLine('3', 'A code by SMS.', 'Your mobile becomes the second lock on the account. This is not on this page — it comes during sign-up.'),
+    joinLine('4', 'Name your crew,', 'and add your explorers.'));
+  box.append(steps);
+
+  if (open) {
+    box.append(el('p', `Free until ${TRIAL.endsWords}. If you want to keep going afterwards you can set a subscription up during the trial — it starts charging on 11 October and not a day sooner.`, 'join-offer'),
+      actionRow(button('Start the free trial ▶', () => signInScreen(true), 'primary')),
+      actionRow(button('I already have an account', () => signInScreen(), 'ghost')));
+    return box;
+  }
+  if (over) {
+    box.append(actionRow(button('Create an account ▶', () => signInScreen(true), 'primary')),
+      actionRow(button('I already have an account', () => signInScreen(), 'ghost')));
+    return box;
+  }
+  // Before the doors open: an address, and the permission to write to it. Nothing else is asked and nothing else is kept.
+  const form = el('form', null, 'auth-form'), address = field('Your email', 'email', { autocomplete: 'email', maxLength: 254 });
+  const agree = el('label', null, 'field check'), tick = el('input');
+  Object.assign(tick, { type: 'checkbox', required: true });
+  agree.append(tick, el('span', `Write to me when AutoMathtics opens on ${TRIAL.opensWords}, and about how my children are getting on once we start.`));
+  const send = button('Join the list ▶', null, 'primary'); send.type = 'submit';
+  form.append(address.wrap, agree, actionRow(send));
+  form.onsubmit = (event) => {
+    event?.preventDefault?.();
+    return run(async () => {
+      csrf = (await bootstrap()).csrf; // this screen skips the app's own boot, so it holds no token until it needs one
+      const to = address.input.value.trim();
+      const said = await api('/waitlist', { email: to, consent: tick.checked === true, source: joinSource() });
+      // Which of the two happened, in words: someone who joins twice and is told nothing assumes it is broken and joins again
+      // (the owner, 13 Sep 2026). Spam is named, because that is where a first note usually is when it seems not to have come.
+      const done = panel('AUTOMATHTICS · MATH GRID', said.repeat ? 'You are already on the list.' : 'You are on the list.',
+        said.repeat
+          ? `${to} was already waiting. ${said.mailed ? 'We have just sent the note again.' : 'We wrote to it already — if you cannot find that note, look in your spam folder.'}`
+          : `We have sent a note to ${to}. We will write again on ${TRIAL.opensWords}, the morning the grid opens.`,
+        'w460 join', { back: false, page: 'join' });
+      document.documentElement?.setAttribute('data-mode', 'join');
+      done.append(el('p', 'Every email we send has an unsubscribe link in it.', 'join-words'));
+    });
+  };
+  box.append(form);
+  return box;
+}
+
+// The first screen: /join explains the app to a stranger and takes the trial or the list; every other path is the app itself.
+await run(() => (typeof location === 'object' && location?.pathname === '/join' ? joinScreen() : refresh()));
 setInterval(function releaseTick() { return document.visibilityState === 'visible' ? checkRelease() : undefined; }, RELEASE_CHECK_MS); // Update now: every five minutes in view
 // Back from a hosted checkout (Stage 4.1). The redirect proves nothing: the provider's signed webhook
 // is what changes the plan, so tell the parent what to expect and look again shortly.

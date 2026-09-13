@@ -56,6 +56,15 @@ pilot uses **synthetic child data** (`README.md`, `DEPLOY_V3.md`).
 `RETENTION` in `server/support.mjs` is the machine-readable form of the "kept after deletion" rows and is
 written onto every deletion record.
 
+**The waiting list** (`waitlist`, `server/waitlist.mjs`) is separate from every family record and holds one row per
+address: the address itself, because writing to it on 19 September is the whole point of the list; the moment the
+permission to write was given; and the short tag the link in a post carried (`/join?from=ig`), which describes the
+post and not the person. No name, no child, no account — an address on this list belongs to nobody who has signed
+up for anything. Rows are keyed by a SHA-256 of the address, so the same address left twice is one row and a row
+can be found and removed by address alone when someone asks. They expire 400 days after the address was last left
+(TTL), and `waitlistDays/{YYYY-MM-DD}` holds a count of new addresses for that day and nothing else, for 40 days.
+Every message sent to this list carries the one-click unsubscribe the weekly report already carries.
+
 ## The parent's rights, as implemented
 
 - **See**: `/api/family/export` — everything above that belongs to the family, in one JSON document,

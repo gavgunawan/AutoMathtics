@@ -11,10 +11,16 @@ import { fixture, secret } from './support.mjs';
 import { RETENTION } from '../server/support.mjs';
 import { verifyRelease } from '../scripts/verify-release.mjs';
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
-test('v3.0 version agrees across manifest, page and backend', async () => {
-  assert.equal(VERSION, '3.0.0');
+// The minor number is the pull request the release was merged from (the owner's rule of 12 Sep 2026), so a version names a
+// change anyone can go and read. The footer carries it with no date beside it: a date ages on a page deployed several times a
+// week, and which commit a release runs is already a fact /api/health states.
+test('the version agrees across manifest, page and backend, the footer carries it without a date, and no pilot badge is left', async () => {
+  assert.match(VERSION, /^\d+\.\d+\.\d+$/);
   assert.equal(JSON.parse(await read('../package.json')).version, VERSION);
-  assert.match(await read('../public/index.html'), /v3\.0 &middot; 6 Sep 2026/);
+  const page = await read('../public/index.html'), short = `v${VERSION.split('.').slice(0, 2).join('.')}`;
+  assert.ok(page.includes(`<footer>${short} <span>`), `the footer names this release (${short})`);
+  assert.ok(!/&middot;\s*\d+ \w+ \d{4}/.test(page), 'and no date stands beside it');
+  assert.ok(!page.includes('PRIVATE PILOT'), 'the pilot badge is gone: that corner holds the family’s own name now');
 });
 test('Hosting routes shell and API to the server, not the old static game', async () => {
   const cfg = JSON.parse(await read('../firebase.staging.json'));
@@ -191,4 +197,12 @@ test('the support desk ships as three documents a tired person can follow: the i
   const deploy = await read('../DEPLOY_V3.md');
   assert.ok(!deploy.match(/for GROUP in ([^;]+); do/)[1].split(/\s+/).includes('incidents'), 'the incident log is not a TTL group');
   assert.match(deploy, /`supportOperations` and `incidents` carry\nnone either/);
+});
+
+// 13 Sep 2026: the busy lock that stops a double tap also stopped the tick the robot check waits for, so every SMS screen's
+// Send spun forever. The lock stays; the check is exempt from it.
+test('a busy screen still lets a parent tick the robot check an SMS send is waiting on', async () => {
+  const css = await read('../public/styles.css');
+  assert.ok(css.includes('#app[aria-busy=true]{pointer-events:none}'), 'a busy screen takes no taps');
+  assert.ok(css.includes('#app[aria-busy=true] .captcha{pointer-events:auto}'), 'except on the robot check');
 });

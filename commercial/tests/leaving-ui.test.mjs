@@ -92,8 +92,8 @@ test('UI: too many emails offers monthly before off, and keeps the subscription'
   assert.equal((await subOf(h)).state, 'active');
   const [rec] = await leavingRows(h);
   assert.deepEqual([rec.action, rec.cadence, rec.offerAccepted, rec.offersShown], ['reduce_email', 'monthly', 'email_monthly', ['email_monthly', 'email_off']]);
-  assert.ok(text(h).includes('Send it monthly instead'), 'and Mission Control shows it');
-  const monthlyBox = nodes(h.root, 'LABEL').find((l) => l.textContent.includes('Send it monthly instead')).children.find((c) => c.tagName === 'INPUT');
+  assert.ok(text(h).includes('Monthly progress report'), 'and Mission Control shows it');
+  const monthlyBox = nodes(h.root, 'LABEL').find((l) => l.textContent.includes('Monthly progress report')).children.find((c) => c.tagName === 'INPUT');
   assert.equal(monthlyBox.checked, true);
 });
 

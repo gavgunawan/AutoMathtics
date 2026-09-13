@@ -59,12 +59,12 @@ export async function resendEmail() {
 // ---- this device's mirror of the SMS resend ladder (public/sms-schedule.js) ----
 // The function at the provider is the authority, and its refusal may never reach this page with its seconds, so
 // the device remembers when it sent codes and applies the same schedule: that is what the Send button counts
-// down from, and it replaces the old flat minute between codes so the first three can go 30 seconds apart.
+// down from, and it replaces the old flat minute between codes so the first three can go a few seconds apart.
 // One record per destination, under an HMAC of it keyed on this device (below): the typed E.164 number when
 // enrolling or changing the number, the enrolled factor's uid (or its masked hint) on a sign-in challenge. Nothing
 // here leaves the device.
 // A send is recorded only once the provider has accepted it. A send that FAILED is not a code anyone received, so
-// it never steps this device's run: the device holds the shortest rung (30 seconds) and lets the function, which is
+// it never steps this device's run: the device holds the shortest rung and lets the function, which is
 // the authority, refuse again with its own seconds if it means to. Stepping a rung on a failure instead — what this
 // did until 12 Sep 2026 — counted codes that never went out: one unreadable refusal put the parent on two minutes
 // and every retry climbed again (a quarter of an hour, four times over, on 11 Sep). Storage can be missing or throw (a

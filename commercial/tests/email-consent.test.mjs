@@ -170,9 +170,13 @@ test('UI: Mission Control shows the Email updates switches as the server holds t
   assert.ok(h.root.textContent.includes('Email updates')); assert.ok(h.root.textContent.includes('Account and security emails always come.'));
   const sw = (words) => h.nodes('LABEL').find((l) => l.textContent.includes(words)).children.find((c) => c.tagName === 'INPUT');
   assert.equal(sw('Weekly progress report').checked, true); assert.equal(sw('News and offers').checked, false);
-  sw('Weekly progress report').checked = false; await h.click('Save email settings');
+  // how often the report comes is one choice of three (the owner, 13 Sep 2026): weekly, monthly or none, never two at once
+  assert.deepEqual(['Weekly progress report', 'Monthly progress report', 'No progress report'].map((w) => [sw(w).type, sw(w).name]),
+    [['radio', 'report-cadence'], ['radio', 'report-cadence'], ['radio', 'report-cadence']], 'one named group of radios, so a browser keeps exactly one chosen');
+  sw('Weekly progress report').checked = false; sw('No progress report').checked = true; await h.click('Save email settings');
   assert.ok(h.message.textContent.includes('Email settings saved'), h.message.textContent);
-  assert.equal((await h.f.store.get('emailPrefs/parentA')).progress, false); assert.equal(sw('Weekly progress report').checked, false, 'the page shows what the server now holds');
+  assert.equal((await h.f.store.get('emailPrefs/parentA')).progress, false);
+  assert.equal(sw('No progress report').checked, true, 'the page shows what the server now holds'); assert.equal(sw('Weekly progress report').checked, false);
   h.f.advance(301_000); sw('News and offers').checked = true; await h.click('Save email settings');
   assert.ok(h.root.textContent.includes('PARENT VERIFICATION')); assert.equal((await h.f.store.get('emailPrefs/parentA')).news, false, 'not saved without a fresh sign-in');
   h.setAuth(); await h.submitLogin();
