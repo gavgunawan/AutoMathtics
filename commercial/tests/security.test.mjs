@@ -70,6 +70,7 @@ test('the environment the deploy writes is one the service can start from, addre
     STRIPE_PRICE_STARTER: 'price_1UDktFEAg0w7lrNU8ixmQg6g', STRIPE_PRICE_FAMILY: 'price_1UDktZEAg0w7lrNU0kJdqUxK',
     STRIPE_PRICE_BIG: 'price_1UDktlEAg0w7lrNUb4AwLnP3',
     WAITLIST_FROM: 'AutoMathtics <no-reply@automathtics.net>', WAITLIST_REPLY_TO: 'support@automathtics.net',
+    WAITLIST_SHEET_ID: '1vceAjJRQQYa1u3Z0okf7Tt3AOsZVBWui5Xvav985dNQ',
     FEEDBACK_TO: 'control.tower@automathtics.net', EMAIL_PROVIDER: 'resend',
     EMAIL_FROM: 'AutoMathtics <control.tower@automathtics.net>',
     SESSION_SECRET: 'a'.repeat(64), PIN_PEPPER: 'b'.repeat(64),
@@ -86,6 +87,11 @@ test('the environment the deploy writes is one the service can start from, addre
   for (const bad of ['automathtics.net', 'https://automathtics.net/', 'http://automathtics-v3-staging.web.app', 'https://automathtics.net,/join'])
     assert.throws(() => config({ ...deployed, APP_ALSO_ORIGINS: bad }), bad);
   assert.deepEqual(config({ ...deployed, APP_ALSO_ORIGINS: undefined }).origins, ['https://automathtics.net'], 'no list: the one origin, as before');
+  // the owner's Google Sheet copy of the waiting list (13 Sep 2026): its id, checked, since a malformed one fails every write in silence
+  assert.equal(cfg.waitlist.sheetId, '1vceAjJRQQYa1u3Z0okf7Tt3AOsZVBWui5Xvav985dNQ');
+  for (const bad of ['https://docs.google.com/spreadsheets/d/1vceAjJRQQYa1u3Z0okf7Tt3AOsZVBWui5Xvav985dNQ/edit', 'short-id', 'an id with spaces that is long enough to pass'])
+    assert.throws(() => config({ ...deployed, WAITLIST_SHEET_ID: bad }), bad);
+  assert.equal(config({ ...deployed, WAITLIST_SHEET_ID: undefined }).waitlist.sheetId, null, 'no sheet named: none written');
   // every ordinary address shape the owner might set, and the ones that should still be refused
   for (const good of ['a@b.co', 'support@automathtics.net', 'no.reply+list@sub.automathtics.net', 'SUPPORT@AUTOMATHTICS.NET'])
     assert.ok(config({ ...deployed, WAITLIST_REPLY_TO: good }), good);

@@ -66,6 +66,12 @@ can be found and removed by address alone when someone asks. They expire 400 day
 (TTL), and `waitlistDays/{YYYY-MM-DD}` holds a count of new addresses for that day and nothing else, for 40 days.
 Every message sent to this list carries the one-click unsubscribe the weekly report already carries.
 
+The owner reads the list in a Google Sheet (13 Sep 2026) shared with nobody but the service's own runtime account
+(`WAITLIST_SHEET_ID`, `server/sheets.mjs`): when each address joined, the address, the post tag, when its confirmation went and
+when it last joined. It is rewritten whole from the list after every join and every leave, and at startup when the copy is over
+an hour old, so an address that leaves the list, or passes its 400 days, leaves the sheet at the next rewrite.
+`waitlistSheet/state` records the sheet id, when it was last written and how many rows — never an address.
+
 ## The parent's rights, as implemented
 
 - **See**: `/api/family/export` — everything above that belongs to the family, in one JSON document,

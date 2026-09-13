@@ -557,6 +557,24 @@ The public pages — `/pricing`, `/terms`, `/privacy`, `/refunds`, `/contact`, a
 rendered by `server/site.mjs` from the words in `server/site-pages.mjs`. Fill in `BUSINESS` there (the name, address and phone
 exactly as registered with the payment provider) before its review: a line without a value is simply left off the Contact page.
 
+## The waiting list in a Google Sheet (13 Sep 2026)
+
+The owner reads the waiting list in a Google Sheet, **AutoMathtics waiting list** in the owner's Drive, instead of the Firestore
+console. The service rewrites it from the list after every join and every leave, and at startup when the copy is over an hour old
+(`server/sheets.mjs`, `server/waitlist.mjs`): newest first — when the address joined, the address, the post tag it came from,
+when its confirmation went, when it last joined — with the time of the last rewrite and the count in G1:H2. Times are WIB.
+
+One-time setup, done 13 Sep 2026:
+
+1. APIs & Services → enable **Google Sheets API** in the project.
+2. Create the sheet and **Share** it with `automathtics-v3-runtime@automathtics-v3-staging.iam.gserviceaccount.com` as **Editor**,
+   without a notification. Nobody else needs access.
+3. Its id — the part of the address between `/d/` and `/edit` — is `WAITLIST_SHEET_ID` in `.github/workflows/deploy.yml`.
+
+The service writes as its runtime account with a spreadsheets-only token from the metadata server: there is no key. A write that
+fails is logged as `waitlist_sheet_failed` (never with the address), costs nobody their place, and the next join, leave or
+startup writes the sheet again. Do not type into columns A–E or G–H: every rewrite replaces them. Use another tab for notes.
+
 ## 6. Activate your test family
 
 Sign up with your adult email, verify it, enrol the mobile MFA factor, then sign in

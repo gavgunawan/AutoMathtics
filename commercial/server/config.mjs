@@ -91,8 +91,13 @@ export function config(env = process.env) {
   const listFrom = env.WAITLIST_FROM || null, listReply = env.WAITLIST_REPLY_TO || null;
   if (listFrom !== null && !FROM.test(listFrom)) throw Error('WAITLIST_FROM must be an address, or "Name <address>".');
   if (listReply !== null && !ADDRESS.test(listReply)) throw Error('WAITLIST_REPLY_TO must be one email address.');
+  // The owner's copy of the list in a Google Sheet (server/sheets.mjs): its id, the long part of the sheet's address between /d/
+  // and /edit. Not a secret — the sheet opens only for the owner and the service account it is shared with — but a malformed one
+  // would fail every write in silence, so it is checked here.
+  const listSheet = env.WAITLIST_SHEET_ID || null;
+  if (listSheet !== null && !/^[A-Za-z0-9_-]{25,100}$/.test(listSheet)) throw Error('WAITLIST_SHEET_ID must be a Google Sheet id: the part of its address between /d/ and /edit.');
   // Only when something will actually send: mailerConfig demands the Resend key, and a service that copies nothing needs none.
-  const waitlist = { replyTo: listReply, mail: feedbackTo ? { ...feedback.mail, ...(listFrom ? { from: listFrom } : {}) } : null };
+  const waitlist = { replyTo: listReply, sheetId: listSheet, mail: feedbackTo ? { ...feedback.mail, ...(listFrom ? { from: listFrom } : {}) } : null };
   const port = Number(env.PORT || 8787);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw Error('Invalid PORT.');
   return { mode, emulator, projectId, origin, origins, secret, pepper, previousPeppers, proxyHops, port, releaseSha, feedback, waitlist, payments: { provider, webhookSecrets: { fake: webhookSecret }, stripe },
