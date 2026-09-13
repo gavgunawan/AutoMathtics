@@ -27,6 +27,17 @@ export const PLANS = Object.freeze({
   family: { id: 'family', name: 'Family', seats: 4, priceCents: 900, purchasable: true },
   big: { id: 'big', name: 'Big family', seats: 6, priceCents: 1400, purchasable: true },
 });
+// The opening trial (the owner's launch plan, 13 Sep 2026; the same moments /join and the public pages state): a trial started from
+// 19 Sep 2026 00:00 WIB until 10 Oct 2026 23:59 WIB runs to that one moment however late it began, with a slot for each child the
+// price list covers. A trial started in the days before and still running when the doors open joins it (withOpening). Any other
+// trial is the ordinary one: TRIAL_DAYS, and the trial plan's seats.
+export const OPENING = Object.freeze({ opensAt: Date.UTC(2026, 8, 18, 17), endsAt: Date.UTC(2026, 9, 10, 17), seats: 4, name: 'Opening free trial' });
+export const inOpening = (now) => Number.isSafeInteger(now) && now >= OPENING.opensAt && now < OPENING.endsAt;
+/** A trial as it stands with the opening applied: one started before the doors opened and still running when they do runs to the opening's end, with its seats. The stored facts are never rewritten. */
+export function withOpening(sub) {
+  if (sub?.plan !== 'trial' || sub.state !== 'trial' || !(sub.startedAt < OPENING.opensAt) || !(sub.trialEndsAt > OPENING.opensAt) || !(sub.trialEndsAt < OPENING.endsAt)) return sub;
+  return { ...sub, trialEndsAt: OPENING.endsAt, seats: Math.max(sub.seats, OPENING.seats) };
+}
 export const STATES = Object.freeze(['none', 'trial', 'active', 'grace', 'past_due', 'paused', 'cancelled', 'expired']);
 export const EVENTS = Object.freeze(['trial.start', 'payment.succeeded', 'payment.failed', 'plan.change', 'plan.schedule', 'cancel.request', 'cancel.undo', 'pause.start', 'pause.end', 'terminate', 'seats.assign', 'refund']);
 const ACCESS = new Set(['trial', 'active', 'grace']);
@@ -46,6 +57,7 @@ export function monthsAfter(ms, n) {
 /** The state a subscription is in at `now`, from its facts alone. */
 export function deriveState(sub, now) {
   if (!sub) return 'none';
+  sub = withOpening(sub);
   if (sub.state === 'cancelled' || sub.state === 'expired') return sub.state;
   if (sub.state === 'trial') return now < sub.trialEndsAt ? 'trial' : (sub.cancelAtPeriodEnd ? 'cancelled' : 'expired');
   if (sub.state === 'active') {
@@ -62,16 +74,16 @@ export function deriveState(sub, now) {
 /** When access ends if nothing else happens: trial end, period end, or the end of grace. */
 export function accessUntil(sub, now) {
   const state = deriveState(sub, now);
-  if (state === 'trial') return sub.trialEndsAt;
+  if (state === 'trial') return withOpening(sub).trialEndsAt;
   if (state === 'active') return sub.periodEnd;
   if (state === 'grace') return sub.periodEnd + GRACE_DAYS * DAY;
   return 0;
 }
 /** The entitlement shape Foundation.entitlement() and the parent UI read. */
-export function entitlementFor(sub, now) {
-  const state = deriveState(sub, now), until = accessUntil(sub, now);
+export function entitlementFor(stored, now) {
+  const sub = withOpening(stored), state = deriveState(sub, now), until = accessUntil(sub, now);
   return { status: ACCESS.has(state) && until > now ? 'active' : 'inactive', seatLimit: sub.seats, accessUntil: until, version: sub.version, source: 'subscription',
-    state, plan: sub.plan, planName: PLANS[sub.plan]?.name || sub.plan, cancelAtPeriodEnd: !!sub.cancelAtPeriodEnd, periodEnd: sub.periodEnd || null, trialEndsAt: sub.trialEndsAt || null,
+    state, plan: sub.plan, planName: sub.plan === 'trial' && sub.trialEndsAt === OPENING.endsAt ? OPENING.name : PLANS[sub.plan]?.name || sub.plan, cancelAtPeriodEnd: !!sub.cancelAtPeriodEnd, periodEnd: sub.periodEnd || null, trialEndsAt: sub.trialEndsAt || null,
     // a paused subscription raises no invoice, so it has no grace period to fall into
     graceUntil: sub.state === 'active' && sub.periodEnd && !sub.pause ? sub.periodEnd + GRACE_DAYS * DAY : null, failedAt: sub.failedAt || null,
     pause: sub.pause ? { months: sub.pause.months ?? null, pausedAt: sub.pause.pausedAt, resumesAt: sub.pause.resumesAt ?? null, by: sub.pause.by } : null,
@@ -88,10 +100,12 @@ export function transition(sub, event, now) {
   const state = deriveState(sub, now), version = (sub?.version || 0) + 1;
   const plan = (id) => { const p = PLANS[id]; if (!p || !p.purchasable) fail(400, 'INVALID_PLAN'); return p; };
   switch (event.type) {
-    case 'trial.start':
+    case 'trial.start': {
       if (sub) fail(409, 'SUBSCRIPTION_EXISTS');
-      return { plan: 'trial', seats: PLANS.trial.seats, state: 'trial', trialEndsAt: now + TRIAL_DAYS * DAY, periodEnd: null, cancelAtPeriodEnd: false, failedAt: null, failures: 0,
+      const opening = inOpening(now);
+      return { plan: 'trial', seats: opening ? OPENING.seats : PLANS.trial.seats, state: 'trial', trialEndsAt: opening ? OPENING.endsAt : now + TRIAL_DAYS * DAY, periodEnd: null, cancelAtPeriodEnd: false, failedAt: null, failures: 0,
         startedAt: now, updatedAt: now, version: 1, provider: event.provider || 'manual', providerRef: event.providerRef || null };
+    }
     case 'payment.succeeded': {
       const p = plan(event.plan);
       if (!Number.isSafeInteger(event.periodEnd) || event.periodEnd <= now || event.periodEnd > now + 400 * DAY) fail(400, 'INVALID_PERIOD');
@@ -213,7 +227,7 @@ export class Subscriptions {
     // that plan applies it (the provider never sends seat ids). Everything else uses the event's own.
     const scheduledIds = event.type === 'payment.succeeded' && prior?.scheduled && prior.scheduled.plan === sub.plan ? prior.scheduled.seatChildIds ?? undefined : undefined;
     const seatIds = event.type === 'plan.schedule' ? undefined : (event.seatChildIds ?? scheduledIds);
-    const { activeChildIds, activated, deactivated } = assignSeats(family, sub.seats, seatIds);
+    const { activeChildIds, activated, deactivated } = assignSeats(family, withOpening(sub).seats, seatIds); // a trial that joined the opening seats its four
     tx.set(path, { ...family, subscription: sub, activeChildIds });
     for (const [id, c] of children) {
       if (!c) continue;
@@ -261,7 +275,10 @@ export class Subscriptions {
     return this.store.transaction(async (tx) => {
       const { s, family, parent, ledger } = await this.parent(tx, ctx, false);
       const now = this.now();
+      // what a trial started now would give — the opening's moment and seats during it — so the page never works it out itself
+      const opening = inOpening(now);
       return { plans: Object.values(PLANS).filter((p) => p.purchasable).map(publicPlan), trialDays: TRIAL_DAYS, graceDays: GRACE_DAYS,
+        trialOffer: { opening, endsAt: opening ? OPENING.endsAt : now + TRIAL_DAYS * DAY, seats: opening ? OPENING.seats : PLANS.trial.seats },
         subscription: family.subscription ? entitlementFor(family.subscription, now) : null, manualGrant: family.subscription ? null : (family.entitlement || null),
         trial: this.trialEligibility(family, parent, ledger, now), activeChildIds: family.activeChildIds || [], familyId: s.familyId, customer: family.billing || null };
     }, { readOnly: true });

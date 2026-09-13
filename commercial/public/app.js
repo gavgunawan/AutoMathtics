@@ -561,6 +561,13 @@ function familySetup(draft = {}) {
       try {
         if (!termsVersion) csrf = (await bootstrap()).csrf;
         await api('/family', { label: label.input.value, adultAttestation: true, consentVersion: termsVersion }); await refresh();
+        // During the opening (19 Sep – 10 Oct 2026) the free trial starts with the family, so the explorers added next have their slots.
+        // The server decides whether this mobile may have it; a refusal leaves Mission Control's start button where it always was.
+        const at = Date.now();
+        if (at >= TRIAL.opensAt && at < TRIAL.accessEndsAt && model?.family && model.family.entitlement?.status !== 'active') {
+          try { await api('/billing/trial', { operationId: crypto.randomUUID() }); } catch { /* Mission Control says why */ }
+          await refresh();
+        }
       } catch (error) {
         if (error.code !== 'REAUTHENTICATE') throw error;
         const saved = { label: label.input.value, attested: terms ? terms.agreed() : true };
@@ -654,7 +661,7 @@ const LEAVING_REASONS = [
 function leavingFacts(box, e) {
   const when = e?.accessUntil ? new Date(e.accessUntil).toLocaleDateString() : null;
   box.append(el('p', 'Your children keep their profiles, their progress and their coins whatever you choose here. Nothing is charged today, and nothing changes until you tap one of the buttons.', 'notice'));
-  if (e?.state === 'trial') box.append(el('p', `The free trial ends ${when}. Cancelling now means it simply is not followed by a subscription.`, 'notice'));
+  if (e?.state === 'trial') box.append(el('p', `The free trial ends ${trialEnds(e) || when}. Cancelling now means it simply is not followed by a subscription.`, 'notice'));
   else if (when && ['active', 'grace'].includes(e?.state)) box.append(el('p', `${e.planName} plan, ${e.seatLimit} child slots, paid to ${when}. Cancelling keeps the grid open until then and does not renew it after that.`, 'notice'));
   else if (e?.state === 'paused') box.append(el('p', 'This subscription is paused: nothing is being collected, and the grid is closed until it starts again.', 'notice'));
 }
@@ -786,7 +793,7 @@ async function parentScreen() {
   const plan = el('section', null, 'admin-sec feature-box'); plan.append(el('h2', '💳 Plan & seats', 'log-title'));
   if (e.state) { // a subscription: what it is and when it turns
     const when = e.accessUntil ? new Date(e.accessUntil).toLocaleDateString() : null;
-    const line = e.state === 'trial' ? `${e.planName}${e.cancelAtPeriodEnd ? ', ending' : ', ends'} ${when}. Subscribe before then to keep going.`
+    const line = e.state === 'trial' ? `${e.planName}${e.cancelAtPeriodEnd ? ', ending' : ', ends'} ${trialEnds(e) || when}. Subscribe before then to keep going.`
       : e.state === 'active' ? `${e.planName} plan, ${e.seatLimit} child slots. ${e.cancelAtPeriodEnd ? `Ends ${when}.` : `Renews ${when}.`}`
       : e.state === 'grace' ? `${e.planName} plan. The renewal payment has not arrived; access continues until ${when}.`
       : e.state === 'past_due' ? `${e.planName} plan. Access is paused until a payment goes through.`
@@ -819,9 +826,10 @@ async function parentScreen() {
   } else if (!active) {
     planButtons(plan, billing);
     if (billing?.trial?.eligible) {
-      const trialOp = crypto.randomUUID();
-      plan.append(el('p', 'Your parent account is ready. Start the free trial to open two child slots for seven days.', 'notice'),
-        actionRow(button('Start the 7-day free trial', async () => { await api('/billing/trial', { operationId: trialOp }); note('Trial started.'); await refresh(); }, 'primary')));
+      const trialOp = crypto.randomUUID(), opening = billing.trialOffer?.opening === true; // the server says what a trial started now gives
+      plan.append(el('p', opening ? `Your parent account is ready. Start the free trial: a slot for each of up to ${billing.trialOffer.seats} children, free until ${TRIAL.endsWords}.`
+        : 'Your parent account is ready. Start the free trial to open two child slots for seven days.', 'notice'),
+        actionRow(button(opening ? 'Start the free trial' : 'Start the 7-day free trial', async () => { await api('/billing/trial', { operationId: trialOp }); note('Trial started.'); await refresh(); }, 'primary')));
     } else {
       plan.append(el('p', `${messages[billing?.trial?.reason] || 'The free trial is not available for this family.'} Ask the pilot operator to activate child slots.`, 'notice'));
     }
@@ -2201,8 +2209,11 @@ document.addEventListener('visibilitychange', () => (document.visibilityState ==
 const TRIAL = Object.freeze({
   opensAt: Date.UTC(2026, 8, 18, 17), // 19 Sep 2026, 00:00 in Jakarta — WIB is UTC+7, and the page speaks in WIB throughout
   endsAt: Date.UTC(2026, 9, 10, 16, 59, 59), // 10 Oct 2026, 23:59 WIB
+  accessEndsAt: Date.UTC(2026, 9, 10, 17), // the moment the server ends every opening trial (subscription.mjs OPENING): 11 Oct, 00:00 WIB
   opensWords: '19 September 2026', endsWords: '10 October 2026, 23:59 WIB',
 });
+/** The opening trial's end in the page's own words — one moment for every family, in WIB — or null for any other trial. */
+function trialEnds(e) { return e?.trialEndsAt === TRIAL.accessEndsAt ? TRIAL.endsWords : null; }
 // The tag a post's link carried (/join?from=ig), kept to the shape the server accepts so a junk one is simply not sent
 const joinSource = () => {
   try { const t = new URLSearchParams(location.search).get('from') || ''; return /^[a-z0-9][a-z0-9-]{0,23}$/.test(t) ? t : null; } catch { return null; }
