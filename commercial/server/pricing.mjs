@@ -11,10 +11,10 @@
 //                is the ordinary annual 20%, never 20% off that; and a family takes one leaving offer, once.
 //
 // Nothing here is a counter that can drift. Whether the 10% still applies is worked out every time from the family's recorded
-// charges, and "once" is read from the facts twice over — the stored offer record, and any charge that ever carried the 10% — so
-// a charge recorded twice or recorded badly, a recomputed charge, a lost or re-saved record or a forged count cannot give a family
-// more than one offer or more than three reduced charges. Where the facts needed for that count are missing, this refuses rather
-// than guesses. Two adversarial reviews (13 Sep 2026) broke the earlier versions in every way the tests now pin.
+// charges, and "once" is read from the facts twice over — the stored offer record, and any charge either offer was ever made under —
+// so a charge recorded twice or recorded badly, a recomputed charge, a lost or re-saved record or a forged count cannot give a family
+// more than one offer or more than three reduced charges. Where the facts needed for that count are missing or cut short, this
+// refuses rather than guesses. Three adversarial reviews (13 Sep 2026) broke the earlier versions in every way the tests now pin.
 import { fail } from './security.mjs';
 import { GRACE_DAYS, monthsAfter } from './subscription.mjs';
 
@@ -25,7 +25,8 @@ export const ANNUAL_PERCENT_OFF = 20;
 export const RETENTION = Object.freeze({ monthlyPercentOff: 10, monthlyCharges: 3, paidMonthsInARow: 2 });
 export const OFFER_KINDS = Object.freeze(['retention_monthly', 'retention_annual']);
 // "In a row": the later month starts where the earlier one ended — up to three days early (how a provider stamps a boundary), or
-// as late as the grace period (subscription.mjs), since a renewal paid late is still the same subscription. More is a break.
+// as late as the grace period (subscription.mjs), since a renewal paid late is still the same subscription. More is a break: for the
+// two months that make a family eligible, and for the three months the 10% runs along.
 export const IN_A_ROW = Object.freeze({ earlyMs: 3 * DAY, lateMs: GRACE_DAYS * DAY });
 // What a charge's period may span: a calendar month is 28–31 days, with a day's slack either side; an annual charge runs up to a
 // year and a day, and may be shorter when a provider prorates it onto the monthly anchor.
@@ -51,16 +52,21 @@ export const annualList = (children) => { const m = monthlyPrice(children); retu
 /** The annual price: twelve months less 20%. */
 export const annualPrice = (children) => { const list = annualList(children); return list === null ? null : lessPercent(list, ANNUAL_PERCENT_OFF); };
 
-// Refunded in any way a record might say so — a flag of any truthy value, a time, an amount, a status — is not a month paid in full.
-const refundedAtAll = (p) => Boolean(p.refunded) || (p.refundedAt !== undefined && p.refundedAt !== null) || Number(p.refundedAmount) > 0 || p.status === 'refunded';
+// A flag that plainly says yes: any truthy value, except the strings that plainly say no.
+const said = (v) => (typeof v === 'string' ? !['', 'false', '0', 'no'].includes(v.trim().toLowerCase()) : Boolean(v));
+// Refunded in any way a record might say so — a flag, a time, an amount under any of its usual names, a list of refunds, a status
+// mentioning a refund in any case — is not a month paid in full. A flag that plainly says no ('false', 0, '') is not a refund.
+const refundedAtAll = (p) => said(p.refunded) || said(p.refundedAt) || [p.refundedAmount, p.amountRefunded, p.refunded_amount].some((v) => Number(v) > 0)
+  || (Array.isArray(p.refunds) && p.refunds.length > 0) || /refund/i.test(String(p.status ?? ''));
 
 /**
  * A successful charge as the adapter records it: { periodStart, periodEnd, cycle, amount, list, applied?, refunded? }, times in
- * milliseconds. Anything else — refunded, a trial at nothing, a period the wrong length, times in seconds, strings, a monthly list
- * price the price list never had, a reduction the cycle cannot carry — is not a charge, and counts for nothing as a month paid.
+ * milliseconds. Anything else — refunded, a proration (proration: true: a charge, not a month), a trial at nothing, a period the
+ * wrong length, times in seconds, strings, a monthly list price the price list never had, a reduction the cycle cannot carry — is not
+ * a month's charge, and counts for nothing as a month paid.
  */
 export function isCharge(p) {
-  if (!p || typeof p !== 'object' || !CYCLES.includes(p.cycle) || refundedAtAll(p)) return false;
+  if (!p || typeof p !== 'object' || !CYCLES.includes(p.cycle) || refundedAtAll(p) || said(p.proration)) return false;
   const { periodStart: start, periodEnd: end, amount, list } = p;
   if (![start, end, amount, list].every(Number.isSafeInteger) || start < MS_FLOOR || end <= start || amount <= 0 || list <= 0) return false;
   const span = PERIOD_SPAN[p.cycle];
@@ -82,49 +88,95 @@ export function chargesOf(paid) {
   return [...byPeriod.values()].sort((a, b) => b.periodEnd - a.periodEnd || b.periodStart - a.periodStart);
 }
 
-// The 10% counted loosely, on the side that cannot stack. A record claiming the reduction counts as a use of it whatever else is
-// wrong with it — refunded, a wrong length, strings, the wrong case — and whenever it was charged; a monthly charge below its list
-// price after the offer was taken counts too, labelled or not. One period stored twice is one use.
+// The 10% is counted two ways, and a charge carries it only when both allow.
+//
+// Loosely, on the side that cannot stack: a record claiming the reduction counts as a use of it whatever else is wrong with it —
+// refunded, a wrong length, strings, the wrong case — and whenever it was charged; a monthly charge below its list price after the
+// offer was taken counts too, labelled or not, unless it is a proration. One period stored twice is one use.
 const claimsRetention = (r) => !!r && typeof r === 'object' && String(r.applied).toLowerCase() === 'retention_monthly';
-const belowListAfter = (r, acceptedAt) => !!r && typeof r === 'object' && String(r.cycle).toLowerCase() === 'monthly' && Number(r.amount) < Number(r.list) && Number(r.periodStart) > acceptedAt;
+// Either offer marks the charges made under it (chargeFor's `offer`): a charge so marked means the offer was taken, record or no record.
+const marksOffer = (r) => claimsRetention(r) || (!!r && typeof r === 'object' && OFFER_KINDS.includes(String(r.offer).toLowerCase()));
+const belowListAfter = (r, acceptedAt) => !!r && typeof r === 'object' && !said(r.proration) && String(r.cycle).toLowerCase() === 'monthly'
+  && Number(r.amount) < Number(r.list) && Number(r.periodStart) > acceptedAt;
 function retentionUses(paid, acceptedAt, at) {
   const periods = new Set();
-  for (const r of paid) {
-    if (!(claimsRetention(r) || belowListAfter(r, acceptedAt)) || Number(r.periodStart) === at) continue; // a charge is not a use of itself
-    periods.add(`${String(r.periodStart)}:${String(r.periodEnd)}`);
-  }
+  paid.forEach((r, i) => {
+    if (!(claimsRetention(r) || belowListAfter(r, acceptedAt)) || Number(r.periodStart) === at) return; // a charge is not a use of itself
+    // one period stored twice is one use; a record with no period to tell it by is a use of its own
+    periods.add(Number.isSafeInteger(r.periodStart) && Number.isSafeInteger(r.periodEnd) ? `${r.periodStart}:${r.periodEnd}` : `record:${i}`);
+  });
   return periods.size;
 }
-/** Whether the leaving 10% reduces the monthly charge for the period starting `at`: a period beginning after the offer was taken and within the four months after it, while fewer than three charges already carried it. */
+// And along the months: the charges that carry it are the three after the month the offer was taken in, found by walking the
+// recorded monthly periods from that month one at a time — each starting where the last ended (IN_A_ROW) — never by counting
+// whatever the list holds. A history cut short, or missing a month, cannot make a fourth charge look like a third: the walk stops at
+// the gap, and the 10% does not cross it. A break in the subscription stops it the same way, so a family who cancels during the
+// three months and comes back pays full price. Any record naming a monthly period is a step, however else it is wrong, except a
+// proration and a period longer than a month can be; where several could be the next step, the one reaching furthest.
+const monthlyPeriod = (r) => {
+  if (!r || typeof r !== 'object' || String(r.cycle).toLowerCase() !== 'monthly' || said(r.proration)) return null;
+  const start = Number(r.periodStart), end = Number(r.periodEnd);
+  return Number.isSafeInteger(start) && Number.isSafeInteger(end) && start < end && end - start <= PERIOD_SPAN.monthly.max ? { start, end } : null;
+};
+const follows = (start, end) => start - end >= -IN_A_ROW.earlyMs && start - end <= IN_A_ROW.lateMs;
+const furthest = (periods) => periods.reduce((end, p) => Math.max(end, p.end), -Infinity);
+/** Which charge after the month the offer was taken in the one for the period starting `at` is — 1 for the first — or Infinity when the walk does not reach it within three. */
+function chargeNumber(paid, acceptedAt, at) {
+  const periods = paid.map(monthlyPeriod).filter(Boolean);
+  let end = furthest(periods.filter((p) => p.start <= acceptedAt && acceptedAt < p.end));
+  for (let n = 1; n <= RETENTION.monthlyCharges && end > -Infinity; n++) {
+    if (follows(at, end)) return n;
+    end = furthest(periods.filter((p) => follows(p.start, end)));
+  }
+  return Infinity;
+}
+const covers = (r, t) => !!r && typeof r === 'object' && String(r.cycle).toLowerCase() === 'monthly' && Number(r.periodStart) <= t && t < Number(r.periodEnd);
+
+/** Whether the leaving 10% reduces the monthly charge for the period starting `at`: one of the three charges after the month the offer was taken in, walked to without a gap, while fewer than three others carried it. */
 function retentionReduces(retention, paid, at) {
   if (!retention || typeof retention !== 'object' || retention.kind !== 'retention_monthly' || !Number.isSafeInteger(retention.acceptedAt)) return false;
+  // After the offer was taken, and within the four months after it. The walk already keeps every reduced charge inside that — three
+  // steps of at most a month and a grace period each — and the bound stays for the day the grace period or a month's span changes.
   if (at <= retention.acceptedAt || at >= monthsAfter(retention.acceptedAt, RETENTION.monthlyCharges + 1)) return false;
-  return retentionUses(paid, retention.acceptedAt, at) < RETENTION.monthlyCharges;
+  // The history must reach back to the month the offer was taken in: there is nothing to walk from without it, and a list cut down
+  // to its latest charges would count fewer uses than there were. Refused rather than trusted.
+  if (!paid.some((r) => covers(r, retention.acceptedAt))) fail(400, 'PAID_INCOMPLETE');
+  return chargeNumber(paid, retention.acceptedAt, at) <= RETENTION.monthlyCharges && retentionUses(paid, retention.acceptedAt, at) < RETENTION.monthlyCharges;
 }
 
 /**
  * One charge, for the period starting `at`.
  *   children   how many children the plan covers now
  *   cycle      'monthly' or 'annual'
- *   retention  the family's leaving-offer record ({ kind, acceptedAt }), or null
- *   paid       the family's recorded charges so far, reduced ones included — required, with `at`, when there is an offer record
- * → { amount, list, percentOff, applied }: `applied` names the one reduction in it — 'annual', 'retention_monthly' or null.
+ *   retention  the family's leaving-offer record ({ kind, acceptedAt }), or null — a required key, as for eligibility
+ *   paid       the family's recorded charges, reduced ones included, from at least the month an offer was taken in — required,
+ *              with `at`, when there is an offer record
+ * → { amount, list, percentOff, applied, offer }: `applied` names the one reduction in it — 'annual', 'retention_monthly' or null —
+ * and `offer` the leaving offer it was made under, or null. Record both with the charge.
  */
-export function chargeFor({ children, cycle, retention = null, paid, at } = {}) {
+export function chargeFor(args = {}) {
+  const { children, cycle, retention, paid, at } = args && typeof args === 'object' ? args : {};
   if (!CYCLES.includes(cycle)) fail(400, 'INVALID_CYCLE');
   const monthly = monthlyPrice(children);
   if (monthly === null) fail(400, 'CHILDREN_NOT_PRICED');
-  // an annual charge is the annual price whatever else the family holds: the one reduction it carries is the annual 20%
-  if (cycle === 'annual') return { amount: annualPrice(children), list: annualList(children), percentOff: ANNUAL_PERCENT_OFF, applied: 'annual' };
+  // "No offer" is never read from the record's absence: charged without it, a yearly charge taken as the offer would carry no mark
+  // of it, so the offer could be taken again, and a monthly charge would lose the 10%.
+  if (!Object.hasOwn(args, 'retention')) fail(400, 'RETENTION_REQUIRED');
+  // An annual charge is the annual price whatever else the family holds: the one reduction it carries is the annual 20%. Taken as the
+  // leaving offer, it is marked so — the annual offer leaves no other trace — so a lost offer record cannot reopen the offer later.
+  if (cycle === 'annual') {
+    const offer = !!retention && typeof retention === 'object' && retention.kind === 'retention_annual' ? 'retention_annual' : null;
+    return { amount: annualPrice(children), list: annualList(children), percentOff: ANNUAL_PERCENT_OFF, applied: 'annual', offer };
+  }
   if (retention !== null && retention !== undefined) {
     // an offer record is on the family: the charges and the period are how the 10% is counted, and without them this cannot count
     if (!Array.isArray(paid)) fail(400, 'PAID_REQUIRED');
     if (!Number.isSafeInteger(at)) fail(400, 'PERIOD_REQUIRED');
     if (retentionReduces(retention, paid, at)) {
-      return { amount: lessPercent(monthly, RETENTION.monthlyPercentOff), list: monthly, percentOff: RETENTION.monthlyPercentOff, applied: 'retention_monthly' };
+      return { amount: lessPercent(monthly, RETENTION.monthlyPercentOff), list: monthly, percentOff: RETENTION.monthlyPercentOff, applied: 'retention_monthly', offer: 'retention_monthly' };
     }
   }
-  return { amount: monthly, list: monthly, percentOff: 0, applied: null };
+  return { amount: monthly, list: monthly, percentOff: 0, applied: null, offer: null };
 }
 
 /**
@@ -137,7 +189,7 @@ export function retentionEligibility(args = {}) {
   if (!args || typeof args !== 'object' || !Object.hasOwn(args, 'retention')) fail(400, 'RETENTION_REQUIRED');
   const { paid = [], retention, now } = args;
   if (retention !== null && retention !== undefined) return { eligible: false, reason: 'OFFER_ALREADY_USED' }; // any stored record, of any shape
-  if (Array.isArray(paid) && paid.some(claimsRetention)) return { eligible: false, reason: 'OFFER_ALREADY_USED' }; // the charges show it taken, record or no record
+  if (Array.isArray(paid) && paid.some(marksOffer)) return { eligible: false, reason: 'OFFER_ALREADY_USED' }; // the charges show it taken, record or no record
   if (!Number.isSafeInteger(now)) return { eligible: false, reason: 'NOT_CURRENT' };
   const charges = chargesOf(paid);
   if (charges.some((c) => c.cycle === 'annual' && now < c.periodEnd)) return { eligible: false, reason: 'NOT_MONTHLY' }; // on annual, or already paid to move to it
