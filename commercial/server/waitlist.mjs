@@ -24,15 +24,24 @@ export const WAITLIST_TTL_MS = 400 * DAY, WAITLIST_MAIL_TIMEOUT_MS = 3000;
 // address or one network flooding it, and this stops the list itself being filled from many. An address already on the list
 // costs nothing, so a parent who taps Join twice is never refused.
 export const WAITLIST_A_DAY = 500;
+// The owner's Google Sheet (sheets.mjs; the owner's request of 13 Sep 2026). It is rewritten whole from the list — after a join,
+// after a leave, and at startup when the copy is over an hour old — so it can never keep an address the list no longer holds. A
+// join or a leave waits for it SHEET_DEADLINE at most: Google being slow never keeps a parent waiting, and never costs a place.
+export const WAITLIST_SHEET_DEADLINE_MS = 3000, WAITLIST_SHEET_REFRESH_MS = 60 * 60_000;
+const SHEET_STATE = 'waitlistSheet/state'; // the sheet id, when it was written and how many rows: never an address
+const SHEET_HEADER = ['Joined (WIB)', 'Email', 'Came from', 'Confirmation sent (WIB)', 'Last joined (WIB)'];
+const wib = (ms) => (Number.isFinite(ms) ? new Date(ms + 7 * 3_600_000).toISOString().slice(0, 16).replace('T', ' ') : ''); // Jakarta, UTC+7
 const ADDRESS = /^[^\s@<>"]{1,64}@[^\s@<>"]{1,190}\.[^\s@<>"]{2,}$/;
 const SOURCE = /^[a-z0-9][a-z0-9-]{0,23}$/;
 const esc = (s) => String(s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
 
 export class Waitlist {
   constructor({ store, secret = null, origin = '', mailer = null, replyTo = null, opensOn = '19 September 2026',
-    release = null, now = Date.now, log = () => {}, mailTimeoutMs = WAITLIST_MAIL_TIMEOUT_MS } = {}) {
+    release = null, now = Date.now, log = () => {}, mailTimeoutMs = WAITLIST_MAIL_TIMEOUT_MS,
+    sheets = null, sheetId = null, sheetDeadlineMs = WAITLIST_SHEET_DEADLINE_MS } = {}) {
     this.store = store; this.secret = secret; this.origin = origin; this.mailer = mailer; this.replyTo = replyTo;
     this.opensOn = opensOn; this.release = release; this.now = now; this.log = log; this.mailTimeoutMs = mailTimeoutMs;
+    this.sheets = sheets; this.sheetId = sheetId; this.sheetDeadlineMs = sheetDeadlineMs;
   }
   /** The body, checked before any budget is spent: { email, consent, source }. Consent must be given here; it is not assumed. */
   parse(body) {
@@ -80,6 +89,7 @@ export class Waitlist {
     if (mailed) await this.store.transaction(async (tx) => {
       const row = await tx.get(`waitlist/${id}`); if (row) tx.set(`waitlist/${id}`, { ...row, mailedAt: now });
     });
+    await this.sheetSoon(repeat ? 'rejoin' : 'join');
     this.log({ event: 'waitlist_join', source: input.source, repeat, mailed });
     // The page says which of the two happened, and when the note went, so a parent who joins twice is told rather than left
     // guessing (the owner's report of 13 Sep 2026). A waiting list is not an account: that someone is on it discloses only
@@ -119,8 +129,46 @@ export class Waitlist {
     const id = this.idFromToken(token);
     if (!id) fail(400, 'INVALID_TOKEN');
     await this.store.transaction(async (tx) => { if (await tx.get(`waitlist/${id}`)) tx.delete(`waitlist/${id}`); });
+    await this.sheetSoon('leave'); // gone from the owner's copy too, not only from the list
     this.log({ event: 'waitlist_leave' });
     return { ok: true };
+  }
+  /** Rewrite the owner's sheet from the list as it stands: newest first, times in WIB, the rows below the list emptied. Never throws. */
+  async syncSheet(reason) {
+    if (!this.sheets || !this.sheetId) return { synced: false, reason: 'no_sheet' };
+    try {
+      const now = this.now();
+      // an address past its expiry is not written, whether or not the TTL sweep has reached its row yet
+      const rows = (await this.store.list('waitlist')).filter((r) => typeof r?.email === 'string' && !(r.expireAt <= now))
+        .sort((a, b) => (b.joinedAt || 0) - (a.joinedAt || 0));
+      const table = [SHEET_HEADER, ...rows.map((r) => [wib(r.joinedAt), r.email, r.source || '', wib(r.mailedAt), wib(r.lastAt)])];
+      await this.sheets.write(this.sheetId, {
+        data: [[`A1:E${table.length}`, table], ['G1:H2', [['List updated (WIB)', 'Addresses'], [wib(now), rows.length]]]],
+        clear: [`A${table.length + 1}:E`],
+      });
+      await this.store.transaction(async (tx) => { tx.set(SHEET_STATE, { sheetId: this.sheetId, syncedAt: now, count: rows.length }); });
+      this.log({ event: 'waitlist_sheet_synced', reason, count: rows.length });
+      return { synced: true, count: rows.length };
+    } catch (error) { // the list is the record; its copy failing is logged, and the next join, leave or startup writes it again
+      this.log({ event: 'waitlist_sheet_failed', reason, code: String(error?.code || error?.message || error).slice(0, 80) });
+      return { synced: false, reason: 'failed' };
+    }
+  }
+  /** syncSheet for a request in progress: waited for until the deadline and no longer. */
+  async sheetSoon(reason) {
+    if (!this.sheets || !this.sheetId) return { synced: false, reason: 'no_sheet' };
+    let timer;
+    const late = new Promise((resolve) => { timer = setTimeout(() => resolve({ synced: false, reason: 'late' }), this.sheetDeadlineMs); });
+    try { return await Promise.race([this.syncSheet(reason), late]); } finally { clearTimeout(timer); }
+  }
+  /** At startup: rewrite the sheet when it was never written for this sheet id, or not within the hour. A new sheet fills itself. */
+  async syncSheetIfStale() {
+    if (!this.sheets || !this.sheetId) return { synced: false, reason: 'no_sheet' };
+    try {
+      const state = await this.store.get(SHEET_STATE);
+      if (state?.sheetId === this.sheetId && this.now() - state.syncedAt < WAITLIST_SHEET_REFRESH_MS) return { synced: false, reason: 'fresh' };
+    } catch { /* the marker cannot be read: write the sheet, which is what the marker exists to save */ }
+    return this.syncSheet('startup');
   }
   /** How many addresses the list holds, for the operator's dashboard. Counts rows; reads no address. */
   async size() { return (await this.store.list('waitlist')).length; }

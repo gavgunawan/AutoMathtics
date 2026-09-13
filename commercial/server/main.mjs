@@ -12,6 +12,7 @@ import { Recovery } from './recovery.mjs';
 import { Email } from './email.mjs';
 import { Feedback } from './feedback.mjs';
 import { Waitlist } from './waitlist.mjs';
+import { createSheets } from './sheets.mjs';
 import { LeavingFlow } from './leaving.mjs';
 import { createMailer } from './mailer.mjs';
 import { VERSION } from './version.mjs';
@@ -44,7 +45,11 @@ const leaving = new LeavingFlow({ foundation: service, store, billing, payments,
 const waitlist = new Waitlist({ store, secret: cfg.secret, origin: cfg.origin, release: cfg.releaseSha || VERSION,
   // mail is null when the service copies nothing (no FEEDBACK_TO, config.mjs), and a service with nothing to send must still start
   mailer: cfg.waitlist.mail?.provider === 'resend' ? createMailer(cfg.waitlist.mail) : null, replyTo: cfg.waitlist.replyTo,
+  sheets: cfg.waitlist.sheetId ? createSheets() : null, sheetId: cfg.waitlist.sheetId, // the owner's Google Sheet copy, where one is named
   log: (event) => console.error(JSON.stringify(event)) });
+// A new sheet fills itself, and an address that expired from the list leaves it: at startup, when the copy is over an hour old.
+// Not awaited, so the port opens at once; it never throws.
+waitlist.syncSheetIfStale();
 const server = createApp(service, cfg, { reportError: (event) => console.error(JSON.stringify(event)), learning, game, billing, payments, support, recovery, email, feedback, leaving, waitlist });
 server.listen(cfg.port, cfg.emulator ? '127.0.0.1' : '0.0.0.0', () => {
   console.log(JSON.stringify({ event: 'foundation_ready', mode: cfg.mode, port: cfg.port }));

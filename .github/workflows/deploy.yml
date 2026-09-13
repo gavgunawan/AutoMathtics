@@ -52,6 +52,9 @@ jobs:
       # that opened the app there before the domain existed (DEPLOY_V3.md → Custom domain)
       APP_ORIGIN: https://automathtics.net
       APP_ALSO_ORIGINS: https://automathtics-v3-staging.web.app,https://automathtics-v3-staging.firebaseapp.com
+      # The owner's copy of the waiting list, a Google Sheet shared with the runtime account alone (DEPLOY_V3.md → The waiting
+      # list in a Google Sheet). An id, not a credential: the sheet opens for nobody it is not shared with.
+      WAITLIST_SHEET_ID: 1vceAjJRQQYa1u3Z0okf7Tt3AOsZVBWui5Xvav985dNQ
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
