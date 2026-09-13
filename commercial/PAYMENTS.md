@@ -120,6 +120,49 @@ it with that command. `EVENT_ID=` re-delivers (watch the replay); `EVENT_AT=` se
 Outside the emulator the server refuses to start with the fake provider unless
 `FAKE_PAYMENTS_ACK=no-real-money` is set, so a pilot can never be mistaken for a shop.
 
+## Payments not open (PAYMENT_PROVIDER=none, 13 Sep 2026)
+
+The live launch runs with no payment provider connected: Xendit is not approved yet and Stripe is preview-only in Indonesia. Families
+play free on the trial, nobody can buy anything, and nothing can reach a provider.
+
+- **Configuration.** `PAYMENT_PROVIDER=none` is accepted in every `APP_MODE` (emulator, staging, production). No provider secret, price
+  id or `FAKE_PAYMENTS_ACK` is read, and a provider variable left in the environment is ignored. `fake` and `stripe` behave, and refuse,
+  exactly as before: the fake provider still needs `FAKE_PAYMENTS_ACK=no-real-money` outside the emulator, and production still refuses
+  a Stripe test key. The deploy helper goes further and refuses the fake provider in production outright.
+- **No gateway.** `server/main.mjs` builds none. `Payments` refuses to start with a gateway when the provider is `none`, or when the
+  billing view (`Subscriptions.paymentsOpen`) disagrees with it. `scripts/support.mjs`, and so the nightly sweep job, builds the same.
+- **Refused**, with `409 PAYMENTS_NOT_OPEN` and nothing written. Checkout, plan change, pause, resume and the leaving flow's pause or
+  downgrade are refused before anything is read; a cancellation after reading whether the plan is a free trial.
+
+  | Route or command | With `PAYMENT_PROVIDER=none` |
+  |---|---|
+  | `POST /api/billing/checkout` | refused |
+  | `POST /api/billing/plan` (an upgrade, a scheduled downgrade, clearing a schedule) | refused |
+  | `POST /api/billing/pause`, `POST /api/billing/resume` | refused |
+  | `POST /api/billing/cancel` (and its `undo`) on anything but a free trial | refused: a paid plan on the record has a provider this server cannot reach, and ending it here alone could leave it billing there |
+  | `POST /api/leaving` with `action: pause` or `downgrade` | refused, whatever offer the browser names |
+  | `POST /api/leaving` with `action: cancel` on anything but a free trial | refused by the cancel route; no leaving record is written |
+  | `POST /api/webhooks/{provider}`, any provider, method or body | `404 NOT_FOUND`, before a byte is read |
+  | `scripts/support.mjs reprocess` | refused before the operation is recorded |
+
+- **Still working**: starting the free trial (the opening trial included), cancelling a trial and taking that back, giving a child a free
+  seat, the family export, the family's deletion (asked for, taken back, and executed by the operator) and the sign-in account's
+  deletion. A deletion asks no provider anything: `cancelAtProvider` finds no gateway and records the provider cancellation as
+  `not_applicable`, and a hosted session a provider left behind is recorded `PROVIDER_NOT_CONFIGURED` and named by the sweep.
+  `reconcile-provider` finds no provider to ask and gives no verdict (`match: null`).
+- **What the page is told.** `GET /api/billing` carries `payments: { open: false }` and an empty `plans` (with a provider,
+  `payments: { open: true }` and the plans). The leaving flow's offers carry the same flag and offer no pause, smaller plan or fewer
+  seats; the email offers and the feedback panel remain. `public/app.js` draws no plan, checkout, change-of-plan, pause or resume
+  control. Where it would ask a family to subscribe it says, once, *Subscriptions are not open yet and your free access continues.* to a
+  family with access now, or *Subscriptions are not open yet.* to one without, and it promises no date. A free trial is cancelled from
+  *Cancel the free trial*.
+- **What it does not do.** It extends nothing. A trial still ends when it ends (the opening trial at 10 Oct 2026, 23:59 WIB), and a
+  family whose trial is over has no access until payments open or an operator grants it. The operator's own tools still work, so a plan
+  can still be written by hand (`scripts/subscription.mjs payment.succeeded`, `scripts/grant.mjs`): that is an operator's decision,
+  audited under `OPERATOR_ID`, never a family's.
+- **Opening payments later** is a redeploy with the provider named, its secrets and prices in place (`DEPLOY_V3.md` §4). Nothing needs
+  migrating: no checkout, customer reference or provider event was ever recorded.
+
 ## Checkout intent (S3.3-A)
 
 ```
