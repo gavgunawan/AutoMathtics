@@ -70,6 +70,9 @@ test('the environment the helper writes for a live project is one the service st
     FEEDBACK_TO: 'control.tower@automathtics.net', EMAIL_PROVIDER: 'resend', EMAIL_FROM: 'AutoMathtics <control.tower@automathtics.net>' }, 'no acknowledgement, no price, no empty origin list');
   const cfg = config({ ...live, SESSION_SECRET: 'a'.repeat(64), PIN_PEPPER: 'b'.repeat(64), EMAIL_API_KEY: `re_${'z'.repeat(30)}`, PORT: '8080' }); // and the secrets Cloud Run adds: no provider's
   assert.deepEqual([cfg.mode, cfg.payments, cfg.web.authDomain, cfg.origins], ['production', { provider: 'none', webhookSecrets: { fake: null }, stripe: null }, 'automathtics.net', ['https://automathtics.net']]);
+  const before = written({ ...common, PROJECT_ID: 'automathtics-live', APP_MODE: 'production', PAYMENT_PROVIDER: 'none', APP_ORIGIN: 'https://automathtics.net', APP_ALSO_ORIGINS: '', FIREBASE_AUTH_DOMAIN: '' }); // LIVE_AUTH_DOMAIN not set yet
+  assert.equal('FIREBASE_AUTH_DOMAIN' in before, false, 'an unset variable writes nothing');
+  assert.equal(config({ ...before, SESSION_SECRET: 'a'.repeat(64), PIN_PEPPER: 'b'.repeat(64), EMAIL_API_KEY: `re_${'z'.repeat(30)}`, PORT: '8080' }).web.authDomain, 'automathtics-live.firebaseapp.com', 'so sign-in runs through the project\'s own host until the domain moves');
   const staging = written({ ...common, PROJECT_ID: 'automathtics-v3-staging', PAYMENT_PROVIDER: 'stripe', ...PRICES, APP_ORIGIN: 'https://automathtics.net', APP_ALSO_ORIGINS: 'https://automathtics-v3-staging.web.app' });
   assert.deepEqual([staging.APP_MODE, staging.PAYMENT_PROVIDER, staging.STRIPE_PRICE_BIG, 'FIREBASE_AUTH_DOMAIN' in staging, 'FAKE_PAYMENTS_ACK' in staging, staging.APP_ALSO_ORIGINS],
     ['staging', 'stripe', PRICES.STRIPE_PRICE_BIG, false, false, 'https://automathtics-v3-staging.web.app'], 'staging as the workflow deploys it');
@@ -98,7 +101,7 @@ test('the workflow: the staging job as it was; deploy-live only once LIVE_PROJEC
   assert.ok(live.includes("    if: ${{ vars.LIVE_PROJECT_ID != '' }}"), 'only once the variable names a project');
   assert.deepEqual([le.PROJECT_ID, le.CONFIRM_PROJECT, le.RUNTIME_SA, le.FIREBASE_WEB_API_KEY, le.FIREBASE_WEB_APP_ID], ['${{ vars.LIVE_PROJECT_ID }}', '${{ vars.LIVE_PROJECT_ID }}', '${{ vars.LIVE_RUNTIME_SA }}', '${{ vars.LIVE_FIREBASE_WEB_API_KEY }}', '${{ vars.LIVE_FIREBASE_WEB_APP_ID }}']);
   assert.ok(text.includes('workload_identity_provider: ${{ vars.LIVE_WORKLOAD_IDENTITY_PROVIDER }}') && text.includes('service_account: ${{ vars.LIVE_DEPLOY_SERVICE_ACCOUNT }}'), 'its own identity, from its own variables');
-  assert.deepEqual([le.APP_MODE, le.PAYMENT_PROVIDER, le.APP_ORIGIN, le.FIREBASE_AUTH_DOMAIN, le.TRUSTED_PROXY_HOPS], ['production', 'none', 'https://automathtics.net', 'automathtics.net', '2']);
+  assert.deepEqual([le.APP_MODE, le.PAYMENT_PROVIDER, le.APP_ORIGIN, le.FIREBASE_AUTH_DOMAIN, le.TRUSTED_PROXY_HOPS], ['production', 'none', 'https://automathtics.net', '${{ vars.LIVE_AUTH_DOMAIN }}', '2'], 'the sign-in domain is a variable, unset until automathtics.net is served by the live project');
   for (const key of ['EMAIL_PROVIDER', 'FEEDBACK_TO', 'OWNER_EMAIL', 'EMAIL_FROM', 'WAITLIST_FROM', 'WAITLIST_REPLY_TO', 'WAITLIST_SHEET_ID']) assert.equal(le[key], se[key], `${key} is staging's`);
   assert.equal(le.APP_ALSO_ORIGINS, 'https://${{ vars.LIVE_PROJECT_ID }}.web.app,https://${{ vars.LIVE_PROJECT_ID }}.firebaseapp.com', 'the project\'s own hosts, so it can be tried before the domain moves');
   assert.ok(!Object.keys(le).some((k) => /^STRIPE_|^FAKE_|WEBHOOK/.test(k)), 'no provider setting of any kind'); assert.ok(!text.includes('automathtics-v3-staging'), 'nothing of staging\'s project');
@@ -160,6 +163,6 @@ test('the documents: PAYMENTS.md says what payments not open refuses and keeps, 
     'gcloud secrets versions access 1 --secret am-v3-session --project automathtics-v3-staging | gcloud secrets create am-v3-session --data-file=- --project automathtics-live',
     'gcloud secrets versions access 1 --secret am-v3-pin-pepper --project automathtics-v3-staging | gcloud secrets create am-v3-pin-pepper --data-file=- --project automathtics-live',
     '## A live project with payments not open (PAYMENT_PROVIDER=none)', 'npm run deploy:live', '`deploy-live`', '`LIVE_PROJECT_ID`', '`LIVE_RUNTIME_SA`', '`LIVE_FIREBASE_WEB_API_KEY`', '`LIVE_FIREBASE_WEB_APP_ID`',
-    '`LIVE_WORKLOAD_IDENTITY_PROVIDER`', '`LIVE_DEPLOY_SERVICE_ACCOUNT`', 'FIREBASE_AUTH_DOMAIN=automathtics.net', 'Authorized domains', 'APP_ALSO_ORIGINS` may be empty']) assert.ok(deploy.includes(s), `DEPLOY_V3.md: ${s}`);
+    '`LIVE_WORKLOAD_IDENTITY_PROVIDER`', '`LIVE_DEPLOY_SERVICE_ACCOUNT`', '`LIVE_AUTH_DOMAIN`', 'FIREBASE_AUTH_DOMAIN=automathtics.net', 'Authorized domains', 'APP_ALSO_ORIGINS` may be empty']) assert.ok(deploy.includes(s), `DEPLOY_V3.md: ${s}`);
   assert.ok(deploy.indexOf('## Moving to a live project') < deploy.indexOf('## 6. Activate your test family'));
 });
