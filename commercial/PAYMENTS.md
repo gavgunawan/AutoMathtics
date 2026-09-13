@@ -442,43 +442,47 @@ Five or more children are priced by hand: the Pricing page sends them to support
 
 **A charge, as the adapter records it**: `{ periodStart, periodEnd, cycle, amount, list, applied, refunded }` — times in
 milliseconds, `cycle` `monthly` or `annual`, `applied` the one reduction the charge carried (`retention_monthly` on a monthly
-charge, `annual` on an annual one, otherwise null), `refunded` true once it is refunded in full. `isCharge` refuses anything
-else: a period the wrong length for its cycle, times in seconds or as strings, an amount or list at nothing, a monthly list
-price the price list never had (keep retired prices in `KNOWN_MONTHLY_LISTS` when prices change). `chargesOf` keeps one
-record per period however often it was stored — the reduced copy if copies disagree.
+charge, `annual` on an annual one, otherwise null), `refunded` true once any of it is refunded. One record per provider charge,
+and the period is the **scheduled** billing period, not the day it happened to be paid. For a month to count as paid, `isCharge`
+requires: a period of 27–32 days (an annual charge, 27–367 days, so a prorated one still reads as annual); times after 2020 (not
+seconds, not strings); an amount and list above nothing; a monthly list price in `KNOWN_MONTHLY_LISTS` — written out, so a price
+change keeps the old price counting; add the new price there as well; and no refund in any form (a truthy `refunded`, a
+`refundedAt`, a `refundedAmount`, or `status: refunded` — a partial refund included, which is a decision still open). `chargesOf`
+keeps one record per period, the more cautious copy if copies disagree.
 
-**The leaving offers.** A family asking to cancel at `now` is eligible (`retentionEligibility`) when: it holds no offer record
-at all — any stored record, of any shape, means the offer is spent; the charge covering `now` is monthly; its two latest
-monthly charges were both in full (no reduction, not below the list price) and in a row (the later started between three days
-before and seven days — the grace period — after the earlier ended); and, for the prices (`retentionOffers`), it has one to
-four children. It is offered one of: 10% off the next three monthly charges, or the yearly plan at the ordinary yearly price.
-`acceptRetention` works the offers out again from the facts it is given — never from an eligibility handed to it — and returns
-the record to store on the family: `{ kind, acceptedAt }`.
+**The leaving offers.** A family asking to cancel at `now` is eligible (`retentionEligibility`) when: its stored offer record is
+null — the key must be passed, and any record of any shape means the offer is spent — and none of its charges ever claimed the
+10%; no annual charge of its is running or already paid to start; a monthly charge covers `now`; its two latest monthly charges
+were both in full (not below the list price) and in a row (the later started between three days before and seven days — the
+grace period — after the earlier ended); and, for the prices (`retentionOffers`), it has one to four children. A family in its
+grace period after a failed renewal is not offered anything until that renewal is paid. It is offered one of: 10% off the next
+three monthly charges, or the yearly plan at the ordinary yearly price. `acceptRetention` works the offers out again from the
+facts it is given — never from an eligibility handed to it — and returns the record to store on the family: `{ kind, acceptedAt }`.
 
 They never stack:
 
 - a charge carries at most one reduction — `chargeFor` names it in `applied`;
 - a yearly charge is the yearly price whatever offer record the family holds, and the yearly offer is the ordinary yearly 20%,
   never 20% off the yearly price;
-- a family takes one offer, once: every later attempt, of either kind and including while the 10% still runs, is
-  `OFFER_ALREADY_USED`;
-- the 10% is never a stored counter: `chargeFor` works it out from the charges already recorded — it reduces a monthly charge
-  whose period starts after the offer was taken and within the four months after it, while fewer than three other charges
-  carry it — so a charge stored twice, a recomputed charge or a forged count changes nothing, and a family who cancels anyway
-  and returns later pays full price;
+- a family takes one offer, once — read twice over: from the stored record, and from any charge that ever claimed the 10%, so a
+  lost or re-saved record does not reopen it;
+- the 10% is never a stored counter. `chargeFor` needs the charges and the period whenever an offer record exists (it refuses
+  `PAID_REQUIRED` / `PERIOD_REQUIRED` rather than guess), and counts loosely on the side that cannot stack: every charge that
+  claims the 10% — refunded, badly shaped or from any date — and every monthly charge below its list after the offer was taken,
+  one per period. It reduces a charge whose period starts after the offer was taken and within the four months after it, while
+  fewer than three others carry it; a family who cancels anyway and returns later pays full price;
 - a forged or malformed offer record reduces nothing.
 
 **What the Xendit adapter must do.** Read the family's charges and its offer record in the transaction that decides; charge
 `chargeFor({ children, cycle, retention, paid, at })` with `at` the start of the period being charged; record each successful
-charge in the shape above, with the `applied` that `chargeFor` answered; mark a fully refunded charge `refunded`; in
-`LeavingFlow.offers` show `retentionOffers`; accept with `acceptRetention` and store its record on the family in the same
-transaction; move a family that took the yearly offer to the yearly cycle at its next renewal.
+charge in the shape above, with the `applied` that `chargeFor` answered; mark any refund on the charge it refunds; in
+`LeavingFlow.offers` show `retentionOffers({ paid, retention, now, children })`; accept with `acceptRetention` and store its record
+on the family in the same transaction; move a family that took the yearly offer to the yearly cycle at its next renewal.
 
 `tests/pricing.test.mjs` checks this five ways: the figures by hand; the rules recomputed independently, and the offers field by
-field; every eligibility rule alone and at its boundaries; the no-stacking rules against each way an adversarial review broke
-the first version (both offers taken, one taken twice, the 10% stretched past three charges, a handed-in eligibility, a forged
-record, a duplicate charge); and a simulation of every family of one to four children through two years of charges, cancel
-attempts and answers.
+field; every eligibility rule alone and at its boundaries (in a row, a month's length, an annual's); the no-stacking rules against
+each way two adversarial reviews broke earlier versions; and a simulation of every family of one to four children through two
+years of charges, cancel attempts and answers.
 
 The seat plans in `server/subscription.mjs` (`starter`, `family`, `big`, with the Stripe sandbox price ids) predate these prices
 and are replaced when the adapter lands.
