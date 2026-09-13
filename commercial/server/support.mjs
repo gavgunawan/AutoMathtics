@@ -280,6 +280,7 @@ export class Support {
   /** Reprocess every event waiting on this family's customers. Same code path the server runs itself. */
   async reprocess(familyId, operator) {
     uuid(familyId); this.operator(operator);
+    if (this.payments?.open === false) fail(409, 'PAYMENTS_NOT_OPEN'); // payments not open: no gateway to reprocess through, and no operation recorded as started
     const family = await this.store.get(`families/${familyId}`); if (!family) fail(404, 'FAMILY_NOT_FOUND');
     // The operator's intent is durable before anything moves: a crash mid-way leaves supportOperations/{id} `running` under their name.
     const id = randomUUID(), startedAt = this.now();

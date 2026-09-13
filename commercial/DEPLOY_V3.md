@@ -594,6 +594,92 @@ under Resend's free 100 a day: a longer list finishes with a rerun the next day.
 `due`, `sent`, `failed`, `skipped`, `left` — never an address. Exit 2 means a send failed or nothing could be signed: run it again
 after reading the log.
 
+## Moving to a live project (automathtics-live)
+
+The owner's plan (13 Sep 2026): everything on staging (the parents' accounts, the children and the waiting list) moves to a new project,
+`automathtics-live`, which serves automathtics.net with payments not open (next section). The Cloud Shell blocks work on either project:
+staging's identifiers are their defaults, and only for staging.
+
+1. **Create the project** as in section 2: Firestore in Native mode, Identity Platform with email and SMS multi-factor, a web app,
+   Hosting. Record its project number, and the web app's `apiKey` and `appId`.
+2. **Point a fresh Cloud Shell tab at it** (a tab that worked on staging still holds staging's values) and run block A with the
+   project's own values exported first. Block A stops when one is missing or still names staging:
+
+   ```bash
+   export PROJECT_ID=automathtics-live PROJECT_NUMBER='…' FIREBASE_WEB_API_KEY='…' FIREBASE_WEB_APP_ID='…'
+   export APP_MODE=production PAYMENT_PROVIDER=none APP_ORIGIN=https://automathtics.net
+   source <(curl -fsSL https://raw.githubusercontent.com/gavgunawan/AutoMathtics/release/v3.0/commercial/scripts/cloudshell/01-prepare.sh)
+   ```
+
+   Leave `FIREBASE_AUTH_DOMAIN` unset for now: until automathtics.net is served by this project's Hosting, sign-in has to run
+   through the project's own `firebaseapp.com` host (The auth domain, below).
+
+3. **Copy the secrets the records depend on from staging, BEFORE block B runs on the live project.** They are never generated fresh
+   there. `am-v3-pin-pepper` made every PIN hash. `am-v3-session` made the phone keys behind one trial per mobile (`phones/*`,
+   `parents/*.phoneKey`), and signs every email button, stop-the-report link and waiting-list leave link already sent. A fresh pair
+   would leave every moved child's PIN refusing, every used trial free to take again and every link sent from staging dead. Each pipe
+   hands the value from one Secret Manager straight to the other and never prints it:
+
+   ```bash
+   gcloud secrets versions access 1 --secret am-v3-session --project automathtics-v3-staging | gcloud secrets create am-v3-session --data-file=- --project automathtics-live
+   gcloud secrets versions access 1 --secret am-v3-pin-pepper --project automathtics-v3-staging | gcloud secrets create am-v3-pin-pepper --data-file=- --project automathtics-live
+   ```
+
+   `am-v3-email-key` (the Resend key) can move the same way, or be created from the Resend account as in 5b: nothing stored depends
+   on it. If staging's service ever ran with `PIN_PEPPER_PREVIOUS`, the live service needs the same retired peppers. The SMS ladder's
+   `AM_V3_SMS_PEPPER` need not move: its records expire within two days, and block F makes its own. No payment provider secret moves.
+   Block B refuses to make `am-v3-session` or `am-v3-pin-pepper` on any project but staging; `FRESH_SECRETS=yes` is for a project with
+   nothing moved into it.
+4. **Then blocks B to H** run in that tab as they do for staging. Block C deploys with `npm run deploy:live` (`APP_MODE=production`) and
+   grants no Stripe secret; blocks E and G build their jobs with `APP_MODE=production`, `APP_ORIGIN=https://automathtics.net` and
+   `PAYMENT_PROVIDER=none`, so the sweep names no price and binds no provider secret; block H prints the `LIVE_*` variables below.
+5. **The data itself** (a Firestore export and import, and the Auth users with their password hashes and second factors) moves in its
+   own reviewed step before families are told. It is not in these blocks.
+
+The waiting list's Google Sheet: the live job names staging's `WAITLIST_SHEET_ID`, and each service rewrites that sheet from its own
+list. Share the sheet with one runtime account at a time (the other's writes are logged `waitlist_sheet_failed` and cost nobody their
+place), or give the live job a sheet of its own.
+
+## A live project with payments not open (PAYMENT_PROVIDER=none)
+
+A live project runs `APP_MODE=production` with `PAYMENT_PROVIDER=none` until a payment provider is approved. `PAYMENTS.md` → Payments
+not open says what that refuses and what keeps working. The same helper deploys it, and every staging check stays in force:
+
+- `npm run deploy:live` is `APP_MODE=production bash scripts/deploy-staging.sh`. `APP_MODE` is `staging` (the default) or `production`,
+  nothing else.
+- `PAYMENT_PROVIDER=none` checks and binds no provider secret and names no price: the service gets `SESSION_SECRET`, `PIN_PEPPER` and,
+  with Resend, `EMAIL_API_KEY`. The fake provider is refused in production, and an unknown provider anywhere.
+- `APP_ALSO_ORIGINS` may be empty. `RUNTIME_SA` may name the runtime account, which must belong to the project. `FIREBASE_AUTH_DOMAIN`
+  names the domain sign-in runs through.
+- The refusals are unchanged: an unconfirmed, demo or legacy project, emulator variables, a lockfile or checkout that differs from the
+  commit, a failing unit or emulator suite, a revision that does not serve the commit it was deployed from.
+
+**The auth domain.** With `FIREBASE_AUTH_DOMAIN=automathtics.net` the Firebase SDK signs in through `https://automathtics.net/__/auth/`, so
+sign-in, its reCAPTCHA and its SMS name the real domain. The domain must be listed under Authentication → Settings → Authorized domains,
+and this project's Firebase Hosting must serve it, which is true only once automathtics.net has moved to the live
+project. Until then leave it unset; then set `FIREBASE_AUTH_DOMAIN=automathtics.net` (for the workflow, the variable `LIVE_AUTH_DOMAIN`) and deploy again.
+
+**From GitHub.** `.github/workflows/deploy.yml` has a second job, `deploy-live`, beside the staging job, which is unchanged. It runs on the
+same pushes, only when the repository variable `LIVE_PROJECT_ID` is set, and deploys with `APP_MODE=production`, `PAYMENT_PROVIDER=none`,
+`APP_ORIGIN=https://automathtics.net`, `FIREBASE_AUTH_DOMAIN` from the variable `LIVE_AUTH_DOMAIN` (unset until the domain moves), the project's own `web.app` and `firebaseapp.com` hosts as
+`APP_ALSO_ORIGINS` (so it can be tried there before the domain moves), and the staging job's email and waiting-list settings. Then it
+checks that `https://LIVE_PROJECT_ID.web.app/api/health` reports the commit. Its repository variables (Settings → Secrets and variables
+→ Actions → Variables; block H prints them for the live project; none is a secret):
+
+| Variable | What it names |
+|---|---|
+| `LIVE_PROJECT_ID` | the live project. Set it last: from then on every push to `release/v3.0` deploys it |
+| `LIVE_RUNTIME_SA` | the runtime service account, `automathtics-v3-runtime@LIVE_PROJECT_ID.iam.gserviceaccount.com` |
+| `LIVE_FIREBASE_WEB_API_KEY`, `LIVE_FIREBASE_WEB_APP_ID` | the live web app's public identifiers |
+| `LIVE_WORKLOAD_IDENTITY_PROVIDER`, `LIVE_DEPLOY_SERVICE_ACCOUNT` | block H's federation provider and deployer account on the live project |
+| `LIVE_AUTH_DOMAIN` | unset until automathtics.net is served by the live project, then `automathtics.net` (The auth domain, above) |
+
+The live project needs the secrets `am-v3-session` and `am-v3-pin-pepper` (copied, above) and `am-v3-email-key` (the job sends with
+Resend), and no payment provider secret.
+
+**Checking it.** `curl https://LIVE_PROJECT_ID.web.app/api/health` reports the commit; a signed-in parent's `GET /api/billing` answers
+`"payments":{"open":false}` with `"plans":[]`; `POST /api/webhooks/stripe` answers 404.
+
 ## 6. Activate your test family
 
 Sign up with your adult email, verify it, enrol the mobile MFA factor, then sign in

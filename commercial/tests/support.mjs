@@ -62,7 +62,10 @@ export const fakeHasher = {
   hash: async (f, c, p) => mac(pepper, `${f}:${c}:${p}`),
   verify: async (f, c, p, h) => h === mac(pepper, `${f}:${c}:${p}`),
 };
-export function fixture() {
+// provider: 'fake' (the default) or 'none', payments not open: no gateway at all (`gateway` is null), and the billing view, the payment
+// routes and the leaving flow built here say so, as main.mjs builds them for PAYMENT_PROVIDER=none
+export function fixture({ provider = 'fake' } = {}) {
+  if (!['fake', 'none'].includes(provider)) throw Error(`fixture: provider must be fake or none, not ${provider}`);
   let clock = Date.parse('2026-09-06T10:00:00Z');
   const store = new MemoryStore(), users = new Map(), tokens = new Map();
   const auth = { verifyCalls: [], getUserCalls: 0, deleted: [], failDelete: null, updates: [], failUpdate: null, beforeGetUser: null, beforeUpdateUser: null,
@@ -76,9 +79,9 @@ export function fixture() {
   const service = new Foundation({ store, identity, hasher: fakeHasher, secret, now: () => clock });
   const learning = new Learning({ foundation: service, store, now: () => clock });
   const game = new Game({ foundation: service, store, now: () => clock, pickIndex: () => 0 });
-  const billing = new Subscriptions({ foundation: service, store, now: () => clock });
-  const gateway = new FakeGateway({ secret: webhookSecret });
-  const payments = new Payments({ foundation: service, store, billing, provider: 'fake', gateways: { fake: gateway }, now: () => clock });
+  const billing = new Subscriptions({ foundation: service, store, now: () => clock, paymentsOpen: provider !== 'none' });
+  const gateway = provider === 'none' ? null : new FakeGateway({ secret: webhookSecret });
+  const payments = new Payments({ foundation: service, store, billing, provider, gateways: gateway ? { fake: gateway } : {}, now: () => clock });
   const support = new Support({ foundation: service, store, billing, payments, now: () => clock });
   const recovery = new Recovery({ foundation: service, store, identity, secret, now: () => clock });
   const email = new Email({ foundation: service, store, identity, secret, now: () => clock });

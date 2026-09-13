@@ -34,7 +34,8 @@ if (!actor) throw Error('Set OPERATOR_ID to your auditable operator identity.');
 if (!/^[A-Za-z0-9@._:-]{3,120}$/.test(actor)) throw Error('OPERATOR_ID must be a plain auditable identity (3-120 characters of letters, digits and @._:-).');
 const secret = process.env.SESSION_SECRET, pepper = process.env.PIN_PEPPER, webhookSecret = process.env.WEBHOOK_SECRET_FAKE, stripeKey = process.env.STRIPE_SECRET_KEY;
 if (!/^[a-f0-9]{64,}$/.test(secret || '') || !/^[a-f0-9]{64,}$/.test(pepper || '')) throw Error('SESSION_SECRET and PIN_PEPPER are required (the same operator environment as scripts/support.mjs).');
-if (!/^[a-f0-9]{64,}$/.test(webhookSecret || '') && !stripeKey) throw Error('Set WEBHOOK_SECRET_FAKE (fake provider) or the STRIPE_* variables (Stripe), as the server has them.');
+// PAYMENT_PROVIDER=none (payments not open): there is no provider secret to have, and the dashboard reads no payment state anyway
+if (process.env.PAYMENT_PROVIDER !== 'none' && !/^[a-f0-9]{64,}$/.test(webhookSecret || '') && !stripeKey) throw Error('Set WEBHOOK_SECRET_FAKE (fake provider) or the STRIPE_* variables (Stripe), as the server has them, or PAYMENT_PROVIDER=none where payments are not open.');
 
 // strictly flag/value pairs, so a typo is refused rather than silently ignored
 const OPTIONS = new Set(['--out', '--json', '--days', '--min-cell', '--by']);

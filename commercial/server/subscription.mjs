@@ -208,8 +208,12 @@ export function assignSeats(family, seats, seatChildIds) {
 const fingerprintOf = (event) => sha256(JSON.stringify({ type: event.type, provider: event.provider || null, providerRef: event.providerRef || null, plan: event.plan || null, periodEnd: event.periodEnd || null, seatChildIds: event.seatChildIds ? [...new Set(event.seatChildIds)].sort() : null, amountCents: event.amountCents ?? null, full: event.full === true, months: event.months ?? null, resumesAt: event.resumesAt ?? null, by: event.by || null }));
 
 export class Subscriptions {
-  constructor({ foundation = null, store, now = Date.now, audit = null }) {
+  constructor({ foundation = null, store, now = Date.now, audit = null, paymentsOpen = true }) {
     this.foundation = foundation; this.store = store; this.now = now;
+    // Payments not open (PAYMENT_PROVIDER=none): the billing view lists no plan and says so, and the parent actions that exist only for
+    // a paid subscription are refused (PAYMENTS_NOT_OPEN). A trial starts, is cancelled and seats its children as always. Only an
+    // explicit true is open, so a mistaken value fails closed.
+    this.paymentsOpen = paymentsOpen === true;
     this.audit = audit || ((tx, action, actor, familyId) => foundation.audit(tx, action, actor, familyId));
   }
   // Shared commit: reads first (event record, children), then the transition, then writes.
@@ -277,7 +281,8 @@ export class Subscriptions {
       const now = this.now();
       // what a trial started now would give — the opening's moment and seats during it — so the page never works it out itself
       const opening = inOpening(now);
-      return { plans: Object.values(PLANS).filter((p) => p.purchasable).map(publicPlan), trialDays: TRIAL_DAYS, graceDays: GRACE_DAYS,
+      // payments: whether a plan can be bought at all. Closed, no plan is listed, so the page draws no plan, checkout or change of plan.
+      return { payments: { open: this.paymentsOpen }, plans: this.paymentsOpen ? Object.values(PLANS).filter((p) => p.purchasable).map(publicPlan) : [], trialDays: TRIAL_DAYS, graceDays: GRACE_DAYS,
         trialOffer: { opening, endsAt: opening ? OPENING.endsAt : now + TRIAL_DAYS * DAY, seats: opening ? OPENING.seats : PLANS.trial.seats },
         subscription: family.subscription ? entitlementFor(family.subscription, now) : null, manualGrant: family.subscription ? null : (family.entitlement || null),
         trial: this.trialEligibility(family, parent, ledger, now), activeChildIds: family.activeChildIds || [], familyId: s.familyId, customer: family.billing || null };
@@ -304,6 +309,7 @@ export class Subscriptions {
     return this.store.transaction(async (tx) => {
       const { s, family } = await this.parent(tx, ctx, true);
       if (!family.subscription) fail(409, 'NO_SUBSCRIPTION');
+      if (!this.paymentsOpen && family.subscription.plan !== 'trial') fail(409, 'PAYMENTS_NOT_OPEN'); // payments not open: a trial only (Payments.cancel says why)
       return this.commit(tx, s.familyId, family, { id: eventId, type: body.undo === true ? 'cancel.undo' : 'cancel.request' }, s.uid, this.now());
     });
   }
@@ -312,6 +318,7 @@ export class Subscriptions {
    * until `resumesAt` nothing is collected and nothing is granted. Payments.pause tells the provider first.
    */
   async pause(ctx, body) {
+    if (!this.paymentsOpen) fail(409, 'PAYMENTS_NOT_OPEN'); // payments not open: nothing is collected, so nothing pauses
     object(body, ['months', 'operationId']); const eventId = this.eventId(body);
     if (!PAUSE_MONTHS.includes(body.months)) fail(400, 'INVALID_MONTHS');
     return this.store.transaction(async (tx) => {
@@ -322,6 +329,7 @@ export class Subscriptions {
   }
   /** End a pause early. The provider hears it first (Payments.resume); its next invoice is the one that brings the family back. */
   async resume(ctx, body) {
+    if (!this.paymentsOpen) fail(409, 'PAYMENTS_NOT_OPEN'); // payments not open: there is no collection to bring back
     object(body, ['operationId']); const eventId = this.eventId(body);
     return this.store.transaction(async (tx) => {
       const { s, family } = await this.parent(tx, ctx, true);

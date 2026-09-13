@@ -83,3 +83,64 @@ jobs:
           curl -fsS "https://${PROJECT_ID}.web.app/api/health"; echo
           curl -fsS "https://${PROJECT_ID}.web.app/api/health" | grep -q "$GITHUB_SHA" \
             || { echo 'The live service is not running this commit.' >&2; exit 1; }
+
+  # A live project (DEPLOY_V3.md → A live project with payments not open): families play free and no payment provider is connected.
+  # It runs beside the job above, on the same pushes, once the repository variable LIVE_PROJECT_ID names that project. Every value that
+  # belongs to the project is a repository variable (LIVE_*, which block H prints): names, not secrets. APP_MODE=production refuses the fake
+  # provider and PAYMENT_PROVIDER=none builds no gateway at all, so no family can get a paid plan here. The email and waiting-list
+  # settings are the staging job's; the project's own hosts are the other origins, so it can be tried there before the domain moves.
+  deploy-live:
+    if: ${{ vars.LIVE_PROJECT_ID != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: live
+    defaults:
+      run:
+        working-directory: commercial
+    env:
+      PROJECT_ID: ${{ vars.LIVE_PROJECT_ID }}
+      CONFIRM_PROJECT: ${{ vars.LIVE_PROJECT_ID }}
+      RUNTIME_SA: ${{ vars.LIVE_RUNTIME_SA }}
+      FIREBASE_WEB_API_KEY: ${{ vars.LIVE_FIREBASE_WEB_API_KEY }}
+      FIREBASE_WEB_APP_ID: ${{ vars.LIVE_FIREBASE_WEB_APP_ID }}
+      # the domain sign-in runs through: unset (the project's own firebaseapp.com host) until automathtics.net is served by this project's Hosting and listed in its authorized domains, then the variable LIVE_AUTH_DOMAIN=automathtics.net
+      FIREBASE_AUTH_DOMAIN: ${{ vars.LIVE_AUTH_DOMAIN }}
+      TRUSTED_PROXY_HOPS: '2'
+      APP_MODE: production
+      PAYMENT_PROVIDER: none
+      EMAIL_PROVIDER: resend
+      FEEDBACK_TO: control.tower@automathtics.net
+      OWNER_EMAIL: control.tower@automathtics.net
+      EMAIL_FROM: AutoMathtics <control.tower@automathtics.net>
+      WAITLIST_FROM: AutoMathtics <no-reply@automathtics.net>
+      WAITLIST_REPLY_TO: support@automathtics.net
+      APP_ORIGIN: https://automathtics.net
+      APP_ALSO_ORIGINS: https://${{ vars.LIVE_PROJECT_ID }}.web.app,https://${{ vars.LIVE_PROJECT_ID }}.firebaseapp.com
+      WAITLIST_SHEET_ID: 1vceAjJRQQYa1u3Z0okf7Tt3AOsZVBWui5Xvav985dNQ
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # the deploy records the commit it released and exports that tree; a shallow clone has neither
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with: # the deploy runs the emulator suite itself before it releases anything
+          distribution: temurin
+          java-version: '21'
+      - id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.LIVE_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.LIVE_DEPLOY_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - run: npm ci --ignore-scripts --no-fund --no-audit
+      - run: npm run deploy:live
+      # the commit, read back from the live project's own host, which answers whatever APP_ORIGIN names
+      - name: What the live service is running
+        run: |
+          echo "expected $GITHUB_SHA"
+          curl -fsS "https://${PROJECT_ID}.web.app/api/health"; echo
+          curl -fsS "https://${PROJECT_ID}.web.app/api/health" | grep -q "$GITHUB_SHA" \
+            || { echo 'The live service is not running this commit.' >&2; exit 1; }

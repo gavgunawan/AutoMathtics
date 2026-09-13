@@ -17,6 +17,9 @@
 //   node scripts/support.mjs delete-account PARENT_UID               delete the sign-in account of a parent with no family (retry after a provider failure)
 //        CONFIRM_DELETION=PARENT_UID is required
 //        CONFIRM_DELETION=FAMILY_UUID is required; FORCE_BEFORE_GRACE=yes executes early (audited as forced)
+//
+// PAYMENT_PROVIDER=none (payments not open, PAYMENTS.md): no provider secret is needed and no gateway is built; a deletion records its
+// provider cancellation as not_applicable, reconcile-provider finds no provider to ask, and reprocess answers PAYMENTS_NOT_OPEN.
 import { FirestoreStore } from '../server/firebase.mjs';
 import { Foundation } from '../server/service.mjs';
 import { Subscriptions } from '../server/subscription.mjs';
@@ -42,7 +45,11 @@ const actor = emulator ? 'emulator-operator' : process.env.OPERATOR_ID;
 if (!actor) throw Error('Set OPERATOR_ID to your auditable operator identity.');
 const secret = process.env.SESSION_SECRET, pepper = process.env.PIN_PEPPER, webhookSecret = process.env.WEBHOOK_SECRET_FAKE, stripeKey = process.env.STRIPE_SECRET_KEY;
 if (!/^[a-f0-9]{64,}$/.test(secret || '') || !/^[a-f0-9]{64,}$/.test(pepper || '')) throw Error('SESSION_SECRET and PIN_PEPPER are required (the tool constructs the same services the server does).');
-if (!/^[a-f0-9]{64,}$/.test(webhookSecret || '') && !stripeKey) throw Error('Set WEBHOOK_SECRET_FAKE (fake provider) or the STRIPE_* variables (Stripe), as the server has them.');
+// The provider, as the server has it. PAYMENT_PROVIDER=none (payments not open): no gateway is built and no provider secret is needed; a
+// provider key left in the environment is ignored, so nothing this tool does, the nightly sweep and a deletion included, can reach a provider.
+const provider = process.env.PAYMENT_PROVIDER || (/^[a-f0-9]{64,}$/.test(webhookSecret || '') ? 'fake' : 'stripe');
+if (!['fake', 'stripe', 'none'].includes(provider)) throw Error('PAYMENT_PROVIDER must be fake, stripe or none, as the server has it.');
+if (provider !== 'none' && !/^[a-f0-9]{64,}$/.test(webhookSecret || '') && !stripeKey) throw Error('Set WEBHOOK_SECRET_FAKE (fake provider) or the STRIPE_* variables (Stripe), as the server has them, or PAYMENT_PROVIDER=none where payments are not open.');
 const { initializeApp, applicationDefault } = await import('firebase-admin/app');
 const { getAuth } = await import('firebase-admin/auth');
 const { getFirestore, Timestamp } = await import('firebase-admin/firestore');
@@ -50,11 +57,11 @@ const { FirebaseIdentity } = await import('../server/firebase.mjs');
 const app = initializeApp({ projectId, ...(emulator ? {} : { credential: applicationDefault() }) });
 const store = new FirestoreStore(getFirestore(app), { timestamp: (ms) => Timestamp.fromMillis(ms) });
 const service = new Foundation({ store, identity: new FirebaseIdentity(getAuth(app)), hasher: pinHasher(pepper), secret });
-const billing = new Subscriptions({ foundation: service, store });
+const billing = new Subscriptions({ foundation: service, store, paymentsOpen: provider !== 'none' });
 const gateways = {};
-if (/^[a-f0-9]{64,}$/.test(webhookSecret || '')) gateways.fake = new FakeGateway({ secret: webhookSecret });
-if (stripeKey) gateways.stripe = new StripeGateway({ secretKey: stripeKey, webhookSecret: process.env.WEBHOOK_SECRET_STRIPE, prices: { starter: process.env.STRIPE_PRICE_STARTER, family: process.env.STRIPE_PRICE_FAMILY, big: process.env.STRIPE_PRICE_BIG }, origin: process.env.APP_ORIGIN || 'https://localhost' });
-const payments = new Payments({ foundation: service, store, billing, provider: process.env.PAYMENT_PROVIDER || (gateways.fake ? 'fake' : 'stripe'), gateways });
+if (provider !== 'none' && /^[a-f0-9]{64,}$/.test(webhookSecret || '')) gateways.fake = new FakeGateway({ secret: webhookSecret });
+if (provider !== 'none' && stripeKey) gateways.stripe = new StripeGateway({ secretKey: stripeKey, webhookSecret: process.env.WEBHOOK_SECRET_STRIPE, prices: { starter: process.env.STRIPE_PRICE_STARTER, family: process.env.STRIPE_PRICE_FAMILY, big: process.env.STRIPE_PRICE_BIG }, origin: process.env.APP_ORIGIN || 'https://localhost' });
+const payments = new Payments({ foundation: service, store, billing, provider, gateways });
 const support = new Support({ foundation: service, store, billing, payments });
 const out = (v) => console.log(JSON.stringify(v, null, 2));
 switch (command) {

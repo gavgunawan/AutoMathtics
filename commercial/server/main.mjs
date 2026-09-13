@@ -29,7 +29,9 @@ const service = new Foundation({ store, identity, hasher: pinHasher(cfg.pepper, 
 const recovery = new Recovery({ foundation: service, store, identity, secret: cfg.secret }); // Stage 4.4
 const learning = new Learning({ foundation: service, store });
 const game = new Game({ foundation: service, store });
-const billing = new Subscriptions({ foundation: service, store });
+// PAYMENT_PROVIDER=none: payments are not open. config.mjs reads no provider settings, so no gateway is built below, and the billing
+// view, the payment routes and the leaving flow all say so (PAYMENTS.md → Payments not open).
+const billing = new Subscriptions({ foundation: service, store, paymentsOpen: cfg.payments.provider !== 'none' });
 const gateways = {};
 if (cfg.payments.webhookSecrets.fake) gateways.fake = new FakeGateway({ secret: cfg.payments.webhookSecrets.fake });
 if (cfg.payments.stripe) gateways.stripe = new StripeGateway({ ...cfg.payments.stripe, origin: cfg.origin });
