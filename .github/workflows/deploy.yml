@@ -48,6 +48,10 @@ jobs:
       EMAIL_FROM: AutoMathtics <control.tower@automathtics.net>
       WAITLIST_FROM: AutoMathtics <no-reply@automathtics.net>
       WAITLIST_REPLY_TO: support@automathtics.net
+      # The address every link, email and checkout carries, and the project's own hosts, which keep taking forms from the devices
+      # that opened the app there before the domain existed (DEPLOY_V3.md → Custom domain)
+      APP_ORIGIN: https://automathtics.net
+      APP_ALSO_ORIGINS: https://automathtics-v3-staging.web.app,https://automathtics-v3-staging.firebaseapp.com
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

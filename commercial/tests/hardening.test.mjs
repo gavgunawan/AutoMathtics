@@ -242,7 +242,7 @@ test('S1-006: creating a family rotates the session and invalidates the pre-fami
   const f = fixture(), parent = await f.login('parentA');
   const oldCsrf = (await f.service.me(parent.ctx)).csrf;
   const created = await f.service.createFamily(parent.ctx, {
-    label: 'Rotation family', adultAttestation: true, consentVersion: 'pilot-v1'
+    label: 'Rotation family', adultAttestation: true, consentVersion: 'terms-2026-09-13'
   });
   assert.equal(typeof created.token, 'string');
   assert.notEqual(created.token, parent.cookie);
@@ -259,7 +259,7 @@ test('S1-006: family creation HTTP rotates the cookie without exposing the raw t
   const f = fixture(), parent = await f.login('parentA'), s = await listen(t, f, true);
   const csrf = (await f.service.me(parent.ctx)).csrf;
   const response = await s.call('/family', parent.cookie, csrf, {
-    label: 'HTTP rotation family', adultAttestation: true, consentVersion: 'pilot-v1'
+    label: 'HTTP rotation family', adultAttestation: true, consentVersion: 'terms-2026-09-13'
   });
   assert.equal(response.status, 200);
   const body = await response.json();

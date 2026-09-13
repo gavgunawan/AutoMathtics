@@ -535,6 +535,28 @@ limit: a slow or failing provider never loses the note or fails the parent's req
 environment, so keep `FEEDBACK_TO` exported for every later run of block C; a deploy without it stops the copies (the notes are
 still kept). With `EMAIL_PROVIDER=fake`, or without `FEEDBACK_TO`, the service emails nothing.
 
+## Custom domain: automathtics.net (13 Sep 2026)
+
+The site is served at **https://automathtics.net** by Firebase Hosting, and the project's own hosts keep working beside it.
+
+1. Firebase console → Hosting → *Add custom domain* → `automathtics.net`, no redirect. Hosting lists two records.
+2. Cloudflare → DNS → add both as **DNS only** (grey cloud: a proxied record stops Hosting from issuing the certificate):
+   - `A` `@` → `199.36.158.100`
+   - `TXT` `@` → `hosting-site=automathtics-v3-staging`
+
+   The apex already carries the email records (MX, the SPF TXT, DKIM, DMARC); these sit beside them and change none of them.
+3. Back in Hosting, *Verify*. The certificate takes minutes to a few hours; the domain reads *Connected* once it is live.
+4. Firebase console → Authentication → Settings → *Authorized domains* → add `automathtics.net`. Without it the SMS step
+   refuses on the new address with `auth/unauthorized-domain`.
+5. The deploy (`.github/workflows/deploy.yml`) sets `APP_ORIGIN=https://automathtics.net`, which every link, email and checkout
+   return carries, and `APP_ALSO_ORIGINS` to the project's own `web.app` and `firebaseapp.com` hosts, which keep taking forms from
+   the devices that opened the app there. The deploy still checks the release on the `web.app` host, which always answers.
+6. `www.automathtics.net`: add it in Hosting as a redirect to `automathtics.net`, with the records Hosting lists for it.
+
+The public pages — `/pricing`, `/terms`, `/privacy`, `/refunds`, `/contact`, and the same under `/id/` in Bahasa Indonesia — are
+rendered by `server/site.mjs` from the words in `server/site-pages.mjs`. Fill in `BUSINESS` there (the name, address and phone
+exactly as registered with the payment provider) before its review: a line without a value is simply left off the Contact page.
+
 ## 6. Activate your test family
 
 Sign up with your adult email, verify it, enrol the mobile MFA factor, then sign in

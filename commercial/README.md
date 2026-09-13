@@ -76,7 +76,8 @@ The v3 game code is a Stage 2 completion candidate, but real iPhone Safari / And
 production deployment controls remain required before any public paid launch.
 
 Email/mobile verification and an adult checkbox are NOT legal proof of adulthood or
-parental responsibility. `pilot-v1` is a test acknowledgement, not approved launch terms.
+parental responsibility. Since 13 Sep 2026 sign-up agrees to the public Terms of Service and Privacy Policy
+(`terms-2026-09-13`, `server/site.mjs`); those words still need the launch-country legal review.
 Use synthetic child data until the launch-country privacy/consent review is complete.
 
 ## Local checks (no dependencies or cloud access required)

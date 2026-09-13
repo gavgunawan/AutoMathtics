@@ -5,12 +5,18 @@ import { Fault, fail, equal, object, preauth, preauthCsrf, sha256 } from './secu
 import { WEBHOOK_BODY_LIMIT } from './payments.mjs';
 import { FEEDBACK_BUDGETS } from './feedback.mjs';
 import { REMEMBER_MS } from './service.mjs';
+import { renderSitePage, TERMS_VERSION } from './site.mjs';
 
 // Firebase Hosting forwards only the specially named __session cookie to Cloud Run.
 const COOKIE = '__session';
-// /join is the same document as '/': one page, which reads its own path and shows the joining screen there (app.js).
+// /join is the same document as '/': one page, which reads its own path and shows the joining screen there (app.js). The public
+// pages — /pricing, /terms, /privacy, /refunds, /contact and their /id/ twins — are whole documents rendered by server/site.mjs.
 const FILES = { '/': ['index.html', 'text/html'], '/join': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'],
   '/auth.js': ['auth.js', 'text/javascript'], '/sms-schedule.js': ['sms-schedule.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css'],
+  // The home-screen app. No web page can make Safari or Chrome on an iPhone hide their bars (the owner's report of 13 Sep 2026, an
+  // iPhone X in Chrome): opened from the Home Screen, with this manifest and its icons, the grid fills the screen instead.
+  '/manifest.webmanifest': ['manifest.webmanifest', 'application/manifest+json'],
+  ...Object.fromEntries(['icon-180', 'icon-192', 'icon-512', 'icon-maskable-512'].map((f) => [`/icons/${f}.png`, [`icons/${f}.png`, 'image/png']])),
   // the game's own faces, served from this origin (public/fonts, SIL Open Font License): no third-party request at sign-in
   ...Object.fromEntries(['Orbitron-700', 'Rajdhani-500', 'Rajdhani-600', 'Rajdhani-700', 'JetBrainsMono-600'].map((f) => [`/fonts/${f}.woff2`, [`fonts/${f}.woff2`, 'font/woff2']])) };
 const cookieToken = (req) => {
@@ -119,7 +125,7 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
       res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
       if (!cfg.emulator) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
       res.setHeader('Content-Security-Policy', [
-        "default-src 'none'", "base-uri 'none'", "frame-ancestors 'none'", "form-action 'self'", "object-src 'none'",
+        "default-src 'none'", "base-uri 'none'", "frame-ancestors 'none'", "form-action 'self'", "object-src 'none'", "manifest-src 'self'",
         // Path-scoped sources: a bare https://www.google.com would admit its JSONP endpoints as script.
         "script-src 'self' https://www.gstatic.com/firebasejs/ https://www.gstatic.com/recaptcha/ https://www.google.com/recaptcha/ https://www.recaptcha.net/recaptcha/",
         "style-src 'self'", "font-src 'self'", "img-src 'self' data: https://www.gstatic.com/recaptcha/",
@@ -130,8 +136,14 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
       if (req.method === 'GET' && FILES[path]) {
         const [file, type] = FILES[path];
         if (type === 'font/woff2') { res.setHeader('Content-Type', type); res.setHeader('Cache-Control', 'public, max-age=31536000, immutable'); } // a font never changes under its name
+        else if (type === 'image/png') { res.setHeader('Content-Type', type); res.setHeader('Cache-Control', 'public, max-age=86400'); } // an icon can be redrawn: a day
         else res.setHeader('Content-Type', `${type}; charset=utf-8`);
         return res.end(await readFile(new URL(file, publicDir)));
+      }
+      // the public pages (server/site.mjs): the same document for everyone, and no session is read to make it
+      if (req.method === 'GET') {
+        const page = renderSitePage(path, { origin: cfg.origin });
+        if (page !== null) { res.setHeader('Content-Type', 'text/html; charset=utf-8'); return res.end(page); }
       }
       if (req.method === 'GET' && path === '/api/health') { // not /healthz: the Cloud Run frontend swallows that path
         // `forwarded` counts the X-Forwarded-For entries the server saw, and `leading` echoes the first one only when it is an
@@ -205,12 +217,16 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
           csrf = preauthCsrf(cfg.secret, token, service.now());
           if (!csrf) { token = preauth(cfg.secret, service.now()); csrf = preauthCsrf(cfg.secret, token, service.now()); setCookie(res, token, 600); }
         }
-        return json(200, { csrf, release: cfg.releaseSha || VERSION }); // the running release (as /api/health): the app offers Update now when it changes
+        // release: the running release (as /api/health), so the app offers Update now when it changes; terms: the version of the terms
+        // the sign-up's box agrees to, which creating a family must carry (service.createFamily)
+        return json(200, { csrf, release: cfg.releaseSha || VERSION, terms: TERMS_VERSION });
       }
       if (req.method !== 'GET' && req.method !== 'POST') fail(405, 'METHOD_NOT_ALLOWED');
       let data;
       if (req.method === 'POST') {
-        if (req.headers.origin !== cfg.origin) fail(403, 'ORIGIN_DENIED');
+        // the canonical address or another the same service answers at (config APP_ALSO_ORIGINS): automathtics.net, and the
+        // project's own hosts for the devices that opened the app there first
+        if (!(cfg.origins || [cfg.origin]).includes(req.headers.origin)) fail(403, 'ORIGIN_DENIED');
         const csrf = stored && stored.expiresAt > service.now() ? stored.csrf : preauthCsrf(cfg.secret, token, service.now());
         if (!csrf || !equal(csrf, req.headers['x-csrf-token'])) fail(403, 'CSRF_DENIED');
         data = await body(req);

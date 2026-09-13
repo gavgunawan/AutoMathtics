@@ -28,6 +28,17 @@ export function config(env = process.env) {
   } else if (url.protocol !== 'https:' || projectId.startsWith('demo-') || Object.keys(env).some((k) => k.includes('EMULATOR') && env[k])) {
     throw Error('Staging/production requires HTTPS and must not use emulator configuration.');
   }
+  // The other addresses the same service is reached at (APP_ALSO_ORIGINS, comma-separated): accepted as the Origin of a form, never
+  // used to build a link. APP_ORIGIN is the address every email and checkout carries — automathtics.net from 13 Sep 2026 — while
+  // the project's own web.app and firebaseapp.com hosts keep working for the devices that opened the app there before it existed.
+  const also = (env.APP_ALSO_ORIGINS || '').split(',').map((v) => v.trim()).filter(Boolean);
+  for (const o of also) {
+    let u;
+    try { u = new URL(o); } catch { throw Error('APP_ALSO_ORIGINS must list absolute origins, separated by commas.'); }
+    if (u.origin !== o) throw Error('APP_ALSO_ORIGINS must list origins with no path or trailing slash.');
+    if (!emulator && u.protocol !== 'https:') throw Error('APP_ALSO_ORIGINS must be HTTPS outside the emulator.');
+  }
+  const origins = [...new Set([origin, ...also])];
   if (!env.FIREBASE_WEB_API_KEY || !env.FIREBASE_WEB_APP_ID) throw Error('Set the new project web configuration.');
   // Retired PIN peppers still verify old hashes; see pinHasher. Each must be a distinct real secret.
   const previousPeppers = (env.PIN_PEPPER_PREVIOUS || '').split(',').map((v) => v.trim()).filter(Boolean);
@@ -84,6 +95,6 @@ export function config(env = process.env) {
   const waitlist = { replyTo: listReply, mail: feedbackTo ? { ...feedback.mail, ...(listFrom ? { from: listFrom } : {}) } : null };
   const port = Number(env.PORT || 8787);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw Error('Invalid PORT.');
-  return { mode, emulator, projectId, origin, secret, pepper, previousPeppers, proxyHops, port, releaseSha, feedback, waitlist, payments: { provider, webhookSecrets: { fake: webhookSecret }, stripe },
+  return { mode, emulator, projectId, origin, origins, secret, pepper, previousPeppers, proxyHops, port, releaseSha, feedback, waitlist, payments: { provider, webhookSecrets: { fake: webhookSecret }, stripe },
     web: { apiKey: env.FIREBASE_WEB_API_KEY, appId: env.FIREBASE_WEB_APP_ID, projectId, authDomain: `${projectId}.firebaseapp.com` } };
 }

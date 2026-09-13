@@ -62,7 +62,8 @@ test('real scrypt PIN hashes are salted, peppered and bound to family plus child
 // environment the deploy script actually writes is built here, exactly, and asserted to start.
 test('the environment the deploy writes is one the service can start from, addresses and all', () => {
   const deployed = {
-    APP_MODE: 'staging', APP_ORIGIN: 'https://automathtics-v3-staging.web.app',
+    APP_MODE: 'staging', APP_ORIGIN: 'https://automathtics.net',
+    APP_ALSO_ORIGINS: 'https://automathtics-v3-staging.web.app,https://automathtics-v3-staging.firebaseapp.com',
     FIREBASE_PROJECT_ID: 'automathtics-v3-staging', FIREBASE_WEB_API_KEY: 'AIzaSyTest', FIREBASE_WEB_APP_ID: '1:1:web:1',
     TRUSTED_PROXY_HOPS: '2', RELEASE_SHA: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef', PAYMENT_PROVIDER: 'stripe',
     STRIPE_PRICE_STARTER: 'price_1UDktFEAg0w7lrNU8ixmQg6g', STRIPE_PRICE_FAMILY: 'price_1UDktZEAg0w7lrNU0kJdqUxK',
@@ -78,6 +79,12 @@ test('the environment the deploy writes is one the service can start from, addre
   assert.equal(cfg.waitlist.mail.from, 'AutoMathtics <no-reply@automathtics.net>', 'the list writes as no-reply');
   assert.equal(cfg.waitlist.replyTo, 'support@automathtics.net', 'and a person answers it');
   assert.equal(cfg.feedback.to, 'control.tower@automathtics.net');
+  // links carry the domain, and the project's own hosts still take forms from the devices that opened the app there (13 Sep 2026)
+  assert.equal(cfg.origin, 'https://automathtics.net');
+  assert.deepEqual(cfg.origins, ['https://automathtics.net', 'https://automathtics-v3-staging.web.app', 'https://automathtics-v3-staging.firebaseapp.com']);
+  for (const bad of ['automathtics.net', 'https://automathtics.net/', 'http://automathtics-v3-staging.web.app', 'https://automathtics.net,/join'])
+    assert.throws(() => config({ ...deployed, APP_ALSO_ORIGINS: bad }), bad);
+  assert.deepEqual(config({ ...deployed, APP_ALSO_ORIGINS: undefined }).origins, ['https://automathtics.net'], 'no list: the one origin, as before');
   // every ordinary address shape the owner might set, and the ones that should still be refused
   for (const good of ['a@b.co', 'support@automathtics.net', 'no.reply+list@sub.automathtics.net', 'SUPPORT@AUTOMATHTICS.NET'])
     assert.ok(config({ ...deployed, WAITLIST_REPLY_TO: good }), good);

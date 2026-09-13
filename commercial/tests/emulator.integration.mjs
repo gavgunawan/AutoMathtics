@@ -137,7 +137,7 @@ test('real Auth emulator rejects unverified email before account access', async 
 test('real SMS MFA token, Firestore seat contention, private rules and expiry', async () => {
   const p = await parent(`verified-${randomUUID()}@example.test`, '+16505550111');
   const loginCookie = await service.login(p.idToken), loginCtx = await service.authenticate(loginCookie);
-  const family = await service.createFamily(loginCtx, { label: 'Emulator family', adultAttestation: true, consentVersion: 'pilot-v1' });
+  const family = await service.createFamily(loginCtx, { label: 'Emulator family', adultAttestation: true, consentVersion: 'terms-2026-09-13' });
   assert.equal(typeof family.token, 'string');
   await assert.rejects(service.authenticate(loginCookie), rejected('SIGN_IN_REQUIRED'));
   const cookie = family.token, ctx = await service.authenticate(cookie);
@@ -198,8 +198,8 @@ test('real Firestore: two families under one verified phone race for the single 
   // Give both parents the same phone key (as two sign-ups with one SIM would have) before their families exist.
   const keyA = (await db.doc(`parents/${pa.uid}`).get()).data().phoneKey; assert.ok(keyA);
   await db.doc(`parents/${pb.uid}`).update({ phoneKey: keyA });
-  const fa = await service.createFamily(la, { label: 'Trial race A', adultAttestation: true, consentVersion: 'pilot-v1' });
-  const fb = await service.createFamily(lb, { label: 'Trial race B', adultAttestation: true, consentVersion: 'pilot-v1' });
+  const fa = await service.createFamily(la, { label: 'Trial race A', adultAttestation: true, consentVersion: 'terms-2026-09-13' });
+  const fb = await service.createFamily(lb, { label: 'Trial race B', adultAttestation: true, consentVersion: 'terms-2026-09-13' });
   const ctxA = await service.authenticate(fa.token), ctxB = await service.authenticate(fb.token);
   assert.deepEqual((await db.doc(`phones/${keyA}`).get()).data().families.sort(), [fa.id, fb.id].sort());
   const race = await Promise.allSettled([billing.startTrial(ctxA, { operationId: randomUUID() }), billing.startTrial(ctxB, { operationId: randomUUID() })]);
@@ -219,7 +219,7 @@ test('real Firestore: the same signed webhook delivered three times at once is a
   const payments = new Payments({ foundation: service, store, billing, provider: 'fake', gateways: { fake: new FakeGateway({ secret: webhookSecret }) } });
   const p = await parent(`hook-${randomUUID()}@example.test`, '+16505550130');
   const l = await service.authenticate(await service.login(p.idToken));
-  const fam = await service.createFamily(l, { label: 'Webhook family', adultAttestation: true, consentVersion: 'pilot-v1' });
+  const fam = await service.createFamily(l, { label: 'Webhook family', adultAttestation: true, consentVersion: 'terms-2026-09-13' });
   const ctx = await service.authenticate(fam.token);
   const co = await payments.checkout(ctx, { plan: 'starter', operationId: randomUUID() });
   assert.equal((await db.doc(`billingCustomers/fake:${co.customerRef}`).get()).data().familyId, fam.id);
@@ -244,7 +244,7 @@ test('real Firestore: an abandoned plan change that is taken over can never fina
   const payments = new Payments({ foundation: service, store, billing, provider: 'fake', gateways: { fake: gateway }, inflightMs: 1500 }); // a short window for the test
   const p = await parent(`takeover-${randomUUID()}@example.test`, '+16505550140');
   const l = await service.authenticate(await service.login(p.idToken));
-  const fam = await service.createFamily(l, { label: 'Takeover family', adultAttestation: true, consentVersion: 'pilot-v1' });
+  const fam = await service.createFamily(l, { label: 'Takeover family', adultAttestation: true, consentVersion: 'terms-2026-09-13' });
   const ctx = await service.authenticate(fam.token);
   const co = await payments.checkout(ctx, { plan: 'starter', operationId: randomUUID() });
   const event = { id: `evt_${randomUUID()}`, type: 'checkout.completed', at: Date.now(), customer: co.customerRef, data: { price: 'price_fake_starter', periodEnd: Date.now() + 30 * 86_400_000, checkoutId: co.checkoutId } };
@@ -279,7 +279,7 @@ test('real Firestore: a requested deletion removes the people and the game and l
   const support = new Support({ foundation: service, store, billing, payments });
   const p = await parent(`delete-${randomUUID()}@example.test`, '+16505550150');
   const l = await service.authenticate(await service.login(p.idToken));
-  const fam = await service.createFamily(l, { label: 'Leaving family', adultAttestation: true, consentVersion: 'pilot-v1' });
+  const fam = await service.createFamily(l, { label: 'Leaving family', adultAttestation: true, consentVersion: 'terms-2026-09-13' });
   const ctx = await service.authenticate(fam.token);
   const co = await payments.checkout(ctx, { plan: 'starter', operationId: randomUUID() });
   const event = { id: `evt_${randomUUID()}`, type: 'checkout.completed', at: Date.now(), customer: co.customerRef, data: { price: 'price_fake_starter', periodEnd: Date.now() + 30 * 86_400_000, checkoutId: co.checkoutId } };
@@ -339,7 +339,7 @@ test('real Auth: once the family is gone the parent deletes the sign-in account,
   const support = new Support({ foundation: service, store, billing, payments });
   const email = `leaving-${randomUUID()}@example.test`, p = await parent(email, '+16505550160');
   const l = await service.authenticate(await service.login(p.idToken));
-  const fam = await service.createFamily(l, { label: 'Leaving for good', adultAttestation: true, consentVersion: 'pilot-v1' });
+  const fam = await service.createFamily(l, { label: 'Leaving for good', adultAttestation: true, consentVersion: 'terms-2026-09-13' });
   const ctx = await service.authenticate(fam.token);
   await assert.rejects(support.deleteAccount(ctx, { operationId: randomUUID() }), rejected('FAMILY_STILL_EXISTS'));
   await support.requestDeletion(ctx, { operationId: randomUUID() });
@@ -366,7 +366,7 @@ test('real Auth: lost phone â€” the factor is removed only after the emailed pas
   const recovery = new Recovery({ foundation: service, store, identity, secret, waitMs: WAIT });
   const email = `lost-${randomUUID()}@example.test`, p = await parent(email, '+16505550170');
   const cookie = await service.login(p.idToken), l = await service.authenticate(cookie);
-  const fam = await service.createFamily(l, { label: 'Lost phone', adultAttestation: true, consentVersion: 'pilot-v1' });
+  const fam = await service.createFamily(l, { label: 'Lost phone', adultAttestation: true, consentVersion: 'terms-2026-09-13' });
   const before = (await db.doc(`parents/${p.uid}`).get()).data();
   const started = await recovery.start({ email }); assert.equal(started.accepted, true); assert.ok(started.readyAt > Date.now() && started.readyAt <= Date.now() + WAIT);
   assert.deepEqual(await recovery.complete({ email }), { completed: false }, 'no proof: the same answer as for any email');
@@ -408,7 +408,7 @@ test('real Firestore: two children imported from v2 and then the family rocket â
   const { importLearning, importRocket } = await import('../server/migrate.mjs');
   const p = await parent(`rocket-${randomUUID()}@example.test`, '+16505550180');
   const l = await service.authenticate(await service.login(p.idToken));
-  const fam = await service.createFamily(l, { label: 'Rocket family', adultAttestation: true, consentVersion: 'pilot-v1' });
+  const fam = await service.createFamily(l, { label: 'Rocket family', adultAttestation: true, consentVersion: 'terms-2026-09-13' });
   const ctx = await service.authenticate(fam.token);
   await grantEntitlement(store, { familyId: fam.id, seatLimit: 2, accessUntil: Date.now() + 600000, reason: 'emulator rocket grant', actor: 'integration-test' });
   const { child: nova } = await service.createChild(ctx, { nickname: 'Nova', icon: 'fox', pin: '763829' }, randomUUID());
@@ -454,7 +454,7 @@ test('real Firestore, through the operator tool: a leftover CONFIRM_MIGRATION=wr
   const { tmpdir } = await import('node:os'); const { join } = await import('node:path'); const { fileURLToPath } = await import('node:url');
   const p = await parent(`rocket-cli-${randomUUID()}@example.test`, '+16505550181');
   const l = await service.authenticate(await service.login(p.idToken));
-  const fam = await service.createFamily(l, { label: 'Rocket CLI family', adultAttestation: true, consentVersion: 'pilot-v1' });
+  const fam = await service.createFamily(l, { label: 'Rocket CLI family', adultAttestation: true, consentVersion: 'terms-2026-09-13' });
   const ctx = await service.authenticate(fam.token);
   await grantEntitlement(store, { familyId: fam.id, seatLimit: 2, accessUntil: Date.now() + 600000, reason: 'emulator rocket grant', actor: 'integration-test' });
   const { child: nova } = await service.createChild(ctx, { nickname: 'Nova', icon: 'fox', pin: '763829' }, randomUUID());
