@@ -183,6 +183,10 @@ input.pin-box.bad{border-style:solid;border-color:var(--red);box-shadow:0 0 16px
    quick answers never flash it, a ring says the app is working. The owner's request of 12 Sep 2026: a child who taps a
    track card again because nothing seems to be happening was starting a second paper each time. */
 #app[aria-busy=true]{pointer-events:none}
+/* ...except the robot check. Pressing Send before ticking it leaves the provider waiting for that tick, and a screen that took
+   no taps took the tick away with it: the Send button spun forever on every SMS screen, sign-up included (13 Sep 2026). The
+   check is the one thing inside the app a parent must still reach while an action is waiting on them. */
+#app[aria-busy=true] .captcha{pointer-events:auto}
 #app[aria-busy=true]:after{content:'';position:fixed;left:50%;top:50%;width:46px;height:46px;margin:-23px 0 0 -23px;border-radius:50%;
   border:3px solid rgba(255,255,255,.16);border-top-color:var(--cyan);opacity:0;z-index:40;
   animation:busyIn .2s ease-out .25s forwards,busySpin .8s linear infinite}

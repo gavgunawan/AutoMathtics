@@ -124,3 +124,11 @@ test('an address listed before the note existed still gets one; after that a rej
   assert.deepEqual([tomorrow.repeat, tomorrow.mailed], [true, true], 'a parent who lost it can ask again the next day');
   assert.equal(f.waitlistMail.length, 2);
 });
+
+// 13 Sep 2026: every confirmation went nowhere because its tags were bare strings, which Resend refuses outright. The list's
+// test mailer runs the real mailer's checks, so a shape Resend would refuse fails here instead of in production.
+test('the confirmation carries tags in the shape Resend accepts', async () => {
+  const f = fixture(), w = f.waitlist;
+  await w.join(w.parse({ email: 'parent@example.test', consent: true }));
+  assert.deepEqual(f.waitlistMail[0].tags, [{ name: 'kind', value: 'waitlist_confirm' }]);
+});

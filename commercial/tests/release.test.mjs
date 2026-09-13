@@ -198,3 +198,11 @@ test('the support desk ships as three documents a tired person can follow: the i
   assert.ok(!deploy.match(/for GROUP in ([^;]+); do/)[1].split(/\s+/).includes('incidents'), 'the incident log is not a TTL group');
   assert.match(deploy, /`supportOperations` and `incidents` carry\nnone either/);
 });
+
+// 13 Sep 2026: the busy lock that stops a double tap also stopped the tick the robot check waits for, so every SMS screen's
+// Send spun forever. The lock stays; the check is exempt from it.
+test('a busy screen still lets a parent tick the robot check an SMS send is waiting on', async () => {
+  const css = await read('../public/styles.css');
+  assert.ok(css.includes('#app[aria-busy=true]{pointer-events:none}'), 'a busy screen takes no taps');
+  assert.ok(css.includes('#app[aria-busy=true] .captcha{pointer-events:auto}'), 'except on the robot check');
+});

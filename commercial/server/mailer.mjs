@@ -43,6 +43,12 @@ export function createMailer({ provider = 'fake', apiKey = null, from = DEFAULT_
   const sent = [];
   async function send({ to, subject, html, text, headers = {}, idempotencyKey = null, tags = [], familyId = null, replyTo = null, timeoutMs: deadline = timeoutMs } = {}) {
     if (!ADDRESS.test(to || '') || (replyTo !== null && !ADDRESS.test(replyTo)) || typeof subject !== 'string' || !subject || subject.length > 200 || typeof html !== 'string' || typeof text !== 'string') fail(400, 'INVALID_EMAIL');
+    // Tags as Resend takes them, checked before any request and under the fake provider too: a tag that is not { name, value }
+    // of letters, digits, _ and - makes Resend refuse the whole send, and a refused send leaves no trace in its dashboard, so it
+    // reads exactly like mail nobody asked for. The waiting list's confirmations were all lost that way (13 Sep 2026).
+    const tagOk = (t) => t !== null && typeof t === 'object' && typeof t.name === 'string' && typeof t.value === 'string'
+      && /^[A-Za-z0-9_-]{1,256}$/.test(t.name) && /^[A-Za-z0-9_-]{1,256}$/.test(t.value);
+    if (!Array.isArray(tags) || !tags.every(tagOk)) fail(400, 'INVALID_EMAIL_TAGS');
     if (provider === 'fake') {
       const id = `fake_${randomUUID()}`, at = now(), row = { id, provider, from, to, ...(replyTo ? { replyTo } : {}), subject, html, text, headers, tags, idempotencyKey, at };
       sent.push(row);

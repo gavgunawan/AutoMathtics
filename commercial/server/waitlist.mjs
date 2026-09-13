@@ -101,7 +101,9 @@ export class Waitlist {
       `<p><a href="${esc(leave)}">Take yourself off the list</a> if you did not ask for this, or change your mind.</p>`].join('');
     try {
       await this.mailer.send({
-        to: email, subject: 'You are on the AutoMathtics list', html, text, tags: ['waitlist'],
+        // Resend takes tags as { name, value } and refuses the whole send over a bare string, leaving nothing in its dashboard:
+        // every confirmation went nowhere that way until 13 Sep 2026. The mailer now checks the shape for every caller.
+        to: email, subject: 'You are on the AutoMathtics list', html, text, tags: [{ name: 'kind', value: 'waitlist_confirm' }],
         ...(this.replyTo ? { replyTo: this.replyTo } : {}),
         headers: { 'List-Unsubscribe': `<${leave}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' },
         idempotencyKey: `waitlist-confirm:${id}`, timeoutMs: this.mailTimeoutMs,
