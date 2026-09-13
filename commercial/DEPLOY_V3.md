@@ -621,6 +621,7 @@ staging's identifiers are their defaults, and only for staging.
    hands the value from one Secret Manager straight to the other and never prints it:
 
    ```bash
+   gcloud services enable secretmanager.googleapis.com --project automathtics-live   # once, if the project does not use Secret Manager yet
    gcloud secrets versions access 1 --secret am-v3-session --project automathtics-v3-staging | gcloud secrets create am-v3-session --data-file=- --project automathtics-live
    gcloud secrets versions access 1 --secret am-v3-pin-pepper --project automathtics-v3-staging | gcloud secrets create am-v3-pin-pepper --data-file=- --project automathtics-live
    ```
@@ -633,12 +634,45 @@ staging's identifiers are their defaults, and only for staging.
 4. **Then blocks B to H** run in that tab as they do for staging. Block C deploys with `npm run deploy:live` (`APP_MODE=production`) and
    grants no Stripe secret; blocks E and G build their jobs with `APP_MODE=production`, `APP_ORIGIN=https://automathtics.net` and
    `PAYMENT_PROVIDER=none`, so the sweep names no price and binds no provider secret; block H prints the `LIVE_*` variables below.
-5. **The data itself** (a Firestore export and import, and the Auth users with their password hashes and second factors) moves in its
-   own reviewed step before families are told. It is not in these blocks.
+5. **The sign-in rules** (block I, `scripts/cloudshell/09-live-sign-in.sh`): staging's password policy, email enumeration protection and
+   SMS country allow-list, copied field for field, and the authorized domains localhost, the project's two hosts and automathtics.net.
+   Safe to rerun. It prints the settings, never the password hash parameters that come back with them.
+
+   ```bash
+   source <(curl -fsSL https://raw.githubusercontent.com/gavgunawan/AutoMathtics/release/v3.0/commercial/scripts/cloudshell/09-live-sign-in.sh)
+   ```
+
+6. **The data itself** moves at the cutover (block J, `scripts/cloudshell/10-move-to-live.sh`), in quiet time, right before the domain.
+   It pauses staging's nightly sweep and weekly email schedules (they would otherwise go on acting on a copy of families that now live
+   elsewhere), copies Firestore with its own export and import through a bucket that is removed at the end whatever happened, and runs
+   `scripts/move-auth.mjs --write`: every sign-in account with the same id, email, flags, password (staging's scrypt hash, imported with
+   staging's hash parameters) and mobile second factor, then live read back and compared with staging. It prints counts, never an
+   address, a number or a hash. A rerun imports only what live still lacks; an account on live that staging does not have stops it.
+
+   ```bash
+   CONFIRM_MOVE=automathtics-live source <(curl -fsSL https://raw.githubusercontent.com/gavgunawan/AutoMathtics/release/v3.0/commercial/scripts/cloudshell/10-move-to-live.sh)
+   ```
 
 The waiting list's Google Sheet: the live job names staging's `WAITLIST_SHEET_ID`, and each service rewrites that sheet from its own
 list. Share the sheet with one runtime account at a time (the other's writes are logged `waitlist_sheet_failed` and cost nobody their
 place), or give the live job a sheet of its own.
+
+### The cutover
+
+In this order, at a quiet time, once blocks A to I have run on the live project and its `LIVE_*` variables are set (below):
+
+1. **Block J** (above). From here a parent's next sign-in is on the live project: the same password, and a code to the same mobile.
+2. **The domain.** A domain belongs to one Hosting site at a time. Remove automathtics.net and www.automathtics.net from staging's Hosting,
+   add them to the live project's with Advanced setup, and replace the TXT records at the DNS host with the ones the console shows
+   (`hosting-site=automathtics-live` and the `_acme-challenge` values). Wait for Connected and the certificate.
+3. **The doors open**: the pull request that sets the opening to now merges. It also points the staging job back at its own host
+   (`APP_ORIGIN` its `web.app` host) with no `WAITLIST_SHEET_ID`, so only the live service writes the sheet.
+4. **Check** automathtics.net: `/api/health` reports the release, a parent signs in and sees the family, /join offers sign-up, and the
+   family page offers no plan.
+5. **The opening email** (The opening email, above), from the live project's report job: a dry run, then `--send`.
+6. **The sheet**: share it with the live runtime account, `automathtics-v3-runtime@automathtics-live.iam.gserviceaccount.com` (Editor,
+   no notification).
+7. **The auth domain**: set the variable `LIVE_AUTH_DOMAIN=automathtics.net` and deploy again (The auth domain, below).
 
 ## A live project with payments not open (PAYMENT_PROVIDER=none)
 
