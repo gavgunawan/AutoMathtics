@@ -41,7 +41,7 @@ const feedback = new Feedback({ foundation: service, store, mailer: cfg.feedback
   release: cfg.releaseSha || VERSION, log: (event) => console.error(JSON.stringify(event)) });
 // Leaving (12 Sep 2026): the cancel-or-pause flow, which does its work through the billing, payment and email routes above
 const leaving = new LeavingFlow({ foundation: service, store, billing, payments, email });
-// The waiting list behind /join: addresses only, until the doors open on 19 September
+// The waiting list behind /join: addresses only, until the doors open on 14 September
 const waitlist = new Waitlist({ store, secret: cfg.secret, origin: cfg.origin, release: cfg.releaseSha || VERSION,
   // mail is null when the service copies nothing (no FEEDBACK_TO, config.mjs), and a service with nothing to send must still start
   mailer: cfg.waitlist.mail?.provider === 'resend' ? createMailer(cfg.waitlist.mail) : null, replyTo: cfg.waitlist.replyTo,

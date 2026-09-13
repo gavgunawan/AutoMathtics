@@ -561,7 +561,7 @@ function familySetup(draft = {}) {
       try {
         if (!termsVersion) csrf = (await bootstrap()).csrf;
         await api('/family', { label: label.input.value, adultAttestation: true, consentVersion: termsVersion }); await refresh();
-        // During the opening (19 Sep – 10 Oct 2026) the free trial starts with the family, so the explorers added next have their slots.
+        // During the opening (14 Sep – 10 Oct 2026) the free trial starts with the family, so the explorers added next have their slots.
         // The server decides whether this mobile may have it; a refusal leaves Mission Control's start button where it always was.
         const at = Date.now();
         if (at >= TRIAL.opensAt && at < TRIAL.accessEndsAt && model?.family && model.family.entitlement?.status !== 'active') {
@@ -2203,14 +2203,14 @@ document.addEventListener('visibilitychange', () => (document.visibilityState ==
 // ---- /join (the owner's request of 12 Sep 2026): the page a post on social media points at. Every other screen in this app
 // assumes you already know what AutoMathtics is; whoever arrives from a post does not, so this is the one screen that explains
 // itself before it asks for anything. It carries one action, and the date decides what that action is: before the doors open it
-// takes an address for the waiting list and nothing else — no account, no password, no mobile, no child — and from 19 September
+// takes an address for the waiting list and nothing else — no account, no password, no mobile, no child — and from 14 September
 // it walks into the ordinary sign-up, where the email check and the mobile code live as they always have. The trial ends for
 // everyone at the same moment however late they joined, so the page can name one date and mean it.
 const TRIAL = Object.freeze({
-  opensAt: Date.UTC(2026, 8, 18, 17), // 19 Sep 2026, 00:00 in Jakarta — WIB is UTC+7, and the page speaks in WIB throughout
+  opensAt: Date.UTC(2026, 8, 13, 17), // 14 Sep 2026, 00:00 in Jakarta — WIB is UTC+7, and the page speaks in WIB throughout
   endsAt: Date.UTC(2026, 9, 10, 16, 59, 59), // 10 Oct 2026, 23:59 WIB
   accessEndsAt: Date.UTC(2026, 9, 10, 17), // the moment the server ends every opening trial (subscription.mjs OPENING): 11 Oct, 00:00 WIB
-  opensWords: '19 September 2026', endsWords: '10 October 2026, 23:59 WIB',
+  opensWords: '14 September 2026', endsWords: '10 October 2026, 23:59 WIB',
 });
 /** The opening trial's end in the page's own words — one moment for every family, in WIB — or null for any other trial. */
 function trialEnds(e) { return e?.trialEndsAt === TRIAL.accessEndsAt ? TRIAL.endsWords : null; }

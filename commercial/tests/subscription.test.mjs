@@ -7,7 +7,7 @@ import { fixture, rejected } from './support.mjs';
 import { transition, deriveState, entitlementFor, accessUntil, assignSeats, PLANS, TRIAL_DAYS, GRACE_DAYS, DUNNING_DAYS } from '../server/subscription.mjs';
 import { grantEntitlement } from '../server/service.mjs';
 
-const DAY = 86_400_000, T0 = Date.parse('2026-09-10T00:00:00Z');
+const DAY = 86_400_000, T0 = Date.parse('2026-09-01T00:00:00Z'); // a week-long trial from here ends before the opening trial starts (14 Sep)
 const samePhone = (f, ...uids) => { for (const u of uids) { f.token(u); f.users.get(u).multiFactor.enrolledFactors[0].phoneNumber = '+6591230000'; } };
 async function parentAgain(f, uid = 'parentA') { f.advance(2000); return f.login(uid); }
 

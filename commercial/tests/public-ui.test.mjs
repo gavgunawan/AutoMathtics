@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { uiFixture } from './ui-support.mjs';
 import { TERMS_VERSION } from '../server/site.mjs';
 
-const BEFORE = Date.parse('2026-09-15T04:00:00Z'); // 11:00 in Jakarta, before the grid opens
+const BEFORE = Date.parse('2026-09-13T04:00:00Z'); // 11:00 in Jakarta, before the grid opens
 const root = { pathname: '/', search: '', hash: '', href: 'https://automathtics.net/' };
 // a browser's localStorage, as far as the page uses it
 const memory = (entries = {}) => {

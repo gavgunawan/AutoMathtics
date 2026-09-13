@@ -40,7 +40,7 @@ test('the prices are the owner’s — IDR 199,000 for one child, 379,000 for tw
   assert.deepEqual([1, 2, 3, 4].map(monthlyPrice), [199_000, 379_000, 519_000, 599_000]);
   assert.equal(monthlyPrice(5), null, 'nothing is priced beyond four children'); assert.equal(monthlyPrice(0), null);
   const en = renderSitePage('/pricing'), id = renderSitePage('/id/pricing');
-  for (const s of ['IDR 199,000', 'IDR 379,000', 'IDR 519,000', 'IDR 599,000', 'For five or more children, write to', '19 September 2026, 00:00 WIB', '10 October 2026, 23:59 WIB', '11 October 2026']) assert.ok(en.includes(s), s);
+  for (const s of ['IDR 199,000', 'IDR 379,000', 'IDR 519,000', 'IDR 599,000', 'For five or more children, write to', '14 September 2026, 00:00 WIB', '10 October 2026, 23:59 WIB', '11 October 2026']) assert.ok(en.includes(s), s);
   for (const s of ['Rp199.000', 'Rp379.000', 'Rp519.000', 'Rp599.000', 'Untuk lima anak atau lebih, hubungi', '10 Oktober 2026 pukul 23.59 WIB', '11 Oktober 2026']) assert.ok(id.includes(s), s);
   // yearly: twelve months less 20% (server/pricing.mjs), in the same table
   for (const s of ['Yearly, 20% off', 'IDR 1,910,400', 'IDR 3,638,400', 'IDR 4,982,400', 'IDR 5,750,400']) assert.ok(en.includes(s), s);

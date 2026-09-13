@@ -1,5 +1,5 @@
 // The opening trial (the owner's launch plan, 13 Sep 2026): /join promises "free for every family until 10 October 2026, 23:59 WIB",
-// and the server keeps it. A trial started between 19 Sep 2026 00:00 WIB and that moment runs to it however late it began, with a slot
+// and the server keeps it. A trial started between 14 Sep 2026 00:00 WIB and that moment runs to it however late it began, with a slot
 // for each of up to four children; one started in the days before and still running when the doors open joins it; any other trial is
 // the ordinary seven days with two slots. One trial per verified mobile, as always.
 import test from 'node:test';
@@ -14,12 +14,12 @@ const DAY = 86_400_000, HOUR = 3_600_000, op = () => ({ operationId: randomUUID(
 const WIB = (local) => Date.parse(`${local}+07:00`);
 const start = (at) => transition(null, { type: 'trial.start' }, at);
 
-test('the moments are the page\'s: from 19 Sep 2026 00:00 WIB, until 10 Oct 2026 23:59 WIB — and /join counts with the same ones', async () => {
-  assert.equal(OPENING.opensAt, WIB('2026-09-19T00:00:00')); assert.equal(OPENING.endsAt, WIB('2026-10-11T00:00:00'));
+test('the moments are the page\'s: from 14 Sep 2026 00:00 WIB, until 10 Oct 2026 23:59 WIB — and /join counts with the same ones', async () => {
+  assert.equal(OPENING.opensAt, WIB('2026-09-14T00:00:00')); assert.equal(OPENING.endsAt, WIB('2026-10-11T00:00:00'));
   assert.equal(OPENING.seats, 4); assert.equal(OPENING.name, 'Opening free trial');
   assert.deepEqual([OPENING.opensAt - 1, OPENING.opensAt, OPENING.endsAt - 1, OPENING.endsAt].map(inOpening), [false, true, true, false]);
   const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
-  assert.ok(app.includes('opensAt: Date.UTC(2026, 8, 18, 17)'), 'the page opens when the server does');
+  assert.ok(app.includes('opensAt: Date.UTC(2026, 8, 13, 17)'), 'the page opens when the server does');
   assert.ok(app.includes('accessEndsAt: Date.UTC(2026, 9, 10, 17)'), 'and knows the moment the server closes every opening trial');
 });
 
@@ -98,9 +98,9 @@ test('the page: a family made during the opening starts its free trial with the 
 });
 
 test('the page: a family made before the doors open gets the ordinary offer and nothing starts by itself; once they open, Mission Control offers the opening trial', async (t) => {
-  let now = WIB('2026-09-15T10:00:00');
+  let now = WIB('2026-09-12T10:00:00');
   const h = await signUpAt(t, () => now);
-  assert.ok(h.root.textContent.includes('Start the 7-day free trial'), 'before 19 September: the ordinary trial, on the parent\'s tap');
+  assert.ok(h.root.textContent.includes('Start the 7-day free trial'), 'before 14 September: the ordinary trial, on the parent\'s tap');
   assert.equal(h.requests.filter((r) => r.path === '/api/billing/trial').length, 0);
   now = WIB('2026-09-19T09:00:00'); h.f.advance(now - h.f.now());
   await h.api.refresh(); // days later: the page asks the server again, and the old session is long gone
