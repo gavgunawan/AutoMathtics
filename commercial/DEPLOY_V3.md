@@ -575,6 +575,25 @@ The service writes as its runtime account with a spreadsheets-only token from th
 fails is logged as `waitlist_sheet_failed` (never with the address), costs nobody their place, and the next join, leave or
 startup writes the sheet again. Do not type into columns A–E or G–H: every rewrite replaces them. Use another tab for notes.
 
+### The opening email (13 Sep 2026)
+
+When the doors open, the email the owner approved goes once to every address on the list (`scripts/waitlist-open.mjs`,
+`Waitlist.announceOpening` in `server/waitlist.mjs`). It runs from the report job's image, which already carries
+`SESSION_SECRET` (it signs each unsubscribe link) and the Resend key. First a dry run, which only counts:
+
+```bash
+gcloud run jobs execute automathtics-v3-report --project "$PROJECT_ID" --region asia-southeast1 --wait \
+  --args scripts/waitlist-open.mjs \
+  --update-env-vars '^|^WAITLIST_FROM=AutoMathtics <no-reply@automathtics.net>|WAITLIST_REPLY_TO=support@automathtics.net'
+```
+
+then the same with `--args scripts/waitlist-open.mjs,--send`. Each address is claimed in a transaction before its send and marked
+once Resend took it, so a rerun, two runs at once, or a run after more people joined never writes to anyone twice; an address that
+left the list or expired gets nothing; a failed send is let go and the next run writes it. At most 90 a run (`--limit N` lowers it),
+under Resend's free 100 a day: a longer list finishes with a rerun the next day. The job's log is one JSON line of counts —
+`due`, `sent`, `failed`, `skipped`, `left` — never an address. Exit 2 means a send failed or nothing could be signed: run it again
+after reading the log.
+
 ## Moving to a live project (automathtics-live)
 
 The owner's plan (13 Sep 2026): everything on staging (the parents' accounts, the children and the waiting list) moves to a new project,
@@ -588,9 +607,12 @@ staging's identifiers are their defaults, and only for staging.
 
    ```bash
    export PROJECT_ID=automathtics-live PROJECT_NUMBER='…' FIREBASE_WEB_API_KEY='…' FIREBASE_WEB_APP_ID='…'
-   export APP_MODE=production PAYMENT_PROVIDER=none APP_ORIGIN=https://automathtics.net FIREBASE_AUTH_DOMAIN=automathtics.net
+   export APP_MODE=production PAYMENT_PROVIDER=none APP_ORIGIN=https://automathtics.net
    source <(curl -fsSL https://raw.githubusercontent.com/gavgunawan/AutoMathtics/release/v3.0/commercial/scripts/cloudshell/01-prepare.sh)
    ```
+
+   Leave `FIREBASE_AUTH_DOMAIN` unset for now: until automathtics.net is served by this project's Hosting, sign-in has to run
+   through the project's own `firebaseapp.com` host (The auth domain, below).
 
 3. **Copy the secrets the records depend on from staging, BEFORE block B runs on the live project.** They are never generated fresh
    there. `am-v3-pin-pepper` made every PIN hash. `am-v3-session` made the phone keys behind one trial per mobile (`phones/*`,
@@ -634,11 +656,12 @@ not open says what that refuses and what keeps working. The same helper deploys 
 
 **The auth domain.** With `FIREBASE_AUTH_DOMAIN=automathtics.net` the Firebase SDK signs in through `https://automathtics.net/__/auth/`, so
 sign-in, its reCAPTCHA and its SMS name the real domain. The domain must be listed under Authentication → Settings → Authorized domains,
-and Firebase Hosting must serve it (it already serves automathtics.net).
+and this project's Firebase Hosting must serve it, which is true only once automathtics.net has moved to the live
+project. Until then leave it unset; then set `FIREBASE_AUTH_DOMAIN=automathtics.net` (for the workflow, the variable `LIVE_AUTH_DOMAIN`) and deploy again.
 
 **From GitHub.** `.github/workflows/deploy.yml` has a second job, `deploy-live`, beside the staging job, which is unchanged. It runs on the
 same pushes, only when the repository variable `LIVE_PROJECT_ID` is set, and deploys with `APP_MODE=production`, `PAYMENT_PROVIDER=none`,
-`APP_ORIGIN=https://automathtics.net`, `FIREBASE_AUTH_DOMAIN=automathtics.net`, the project's own `web.app` and `firebaseapp.com` hosts as
+`APP_ORIGIN=https://automathtics.net`, `FIREBASE_AUTH_DOMAIN` from the variable `LIVE_AUTH_DOMAIN` (unset until the domain moves), the project's own `web.app` and `firebaseapp.com` hosts as
 `APP_ALSO_ORIGINS` (so it can be tried there before the domain moves), and the staging job's email and waiting-list settings. Then it
 checks that `https://LIVE_PROJECT_ID.web.app/api/health` reports the commit. Its repository variables (Settings → Secrets and variables
 → Actions → Variables; block H prints them for the live project; none is a secret):
@@ -649,6 +672,7 @@ checks that `https://LIVE_PROJECT_ID.web.app/api/health` reports the commit. Its
 | `LIVE_RUNTIME_SA` | the runtime service account, `automathtics-v3-runtime@LIVE_PROJECT_ID.iam.gserviceaccount.com` |
 | `LIVE_FIREBASE_WEB_API_KEY`, `LIVE_FIREBASE_WEB_APP_ID` | the live web app's public identifiers |
 | `LIVE_WORKLOAD_IDENTITY_PROVIDER`, `LIVE_DEPLOY_SERVICE_ACCOUNT` | block H's federation provider and deployer account on the live project |
+| `LIVE_AUTH_DOMAIN` | unset until automathtics.net is served by the live project, then `automathtics.net` (The auth domain, above) |
 
 The live project needs the secrets `am-v3-session` and `am-v3-pin-pepper` (copied, above) and `am-v3-email-key` (the job sends with
 Resend), and no payment provider secret.
