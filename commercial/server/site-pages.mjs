@@ -24,10 +24,10 @@ export function sitePages({ money, trial, updated, termsVersion, business }) {
     pricing: {
       en: {
         title: 'Pricing', kicker: 'AUTOMATHTICS · PRICING', intro: 'One monthly price, set by how many children practise.',
-        description: `AutoMathtics costs ${m.en(150_000)} a month for one child and ${m.en(275_000)} for two. Free for every family until ${t.en.ends}.`,
+        description: `AutoMathtics costs ${m.en(m.monthly(1))} a month for one child, ${m.en(m.monthly(2))} for two, ${m.en(m.monthly(3))} for three and ${m.en(m.monthly(4))} for four. Free for every family until ${t.en.ends}.`,
         blocks: [
           ['table', { head: ['Children', 'Price per month'], rows: [1, 2, 3, 4].map((n) => [`${n} ${n === 1 ? 'child' : 'children'}`, m.en(m.monthly(n))]) }],
-          ['note', `Each further child adds ${m.en(125_000)} a month. Prices are in Indonesian rupiah and include any applicable taxes.`],
+          ['note', 'For five or more children, write to support@automathtics.net. Prices are in Indonesian rupiah and include any applicable taxes.'],
           ['h2', `Free until ${t.en.ends}`],
           ['p', `Every family can use AutoMathtics free from ${t.en.opens} until ${t.en.ends}. No payment details are needed. If you subscribe during the trial, the first payment is taken on ${t.en.firstCharge}.`],
           ['h2', 'Every plan includes'],
@@ -52,10 +52,10 @@ export function sitePages({ money, trial, updated, termsVersion, business }) {
       },
       id: {
         title: 'Harga', kicker: 'AUTOMATHTICS · HARGA', intro: 'Satu harga bulanan, sesuai jumlah anak yang berlatih.',
-        description: `AutoMathtics ${m.id(150_000)} per bulan untuk satu anak dan ${m.id(275_000)} untuk dua anak. Gratis untuk setiap keluarga sampai ${t.id.ends}.`,
+        description: `AutoMathtics ${m.id(m.monthly(1))} per bulan untuk satu anak, ${m.id(m.monthly(2))} untuk dua anak, ${m.id(m.monthly(3))} untuk tiga anak, dan ${m.id(m.monthly(4))} untuk empat anak. Gratis untuk setiap keluarga sampai ${t.id.ends}.`,
         blocks: [
           ['table', { head: ['Jumlah anak', 'Harga per bulan'], rows: [1, 2, 3, 4].map((n) => [`${n} anak`, m.id(m.monthly(n))]) }],
-          ['note', `Setiap anak berikutnya menambah ${m.id(125_000)} per bulan. Harga dalam rupiah dan sudah termasuk pajak yang berlaku.`],
+          ['note', 'Untuk lima anak atau lebih, hubungi support@automathtics.net. Harga dalam rupiah dan sudah termasuk pajak yang berlaku.'],
           ['h2', `Gratis sampai ${t.id.ends}`],
           ['p', `Setiap keluarga dapat menggunakan AutoMathtics secara gratis mulai ${t.id.opens} sampai ${t.id.ends}. Tidak perlu data pembayaran. Jika Anda berlangganan selama uji coba, pembayaran pertama baru ditagih pada ${t.id.firstCharge}.`],
           ['h2', 'Setiap paket mencakup'],

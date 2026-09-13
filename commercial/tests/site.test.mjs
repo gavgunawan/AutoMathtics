@@ -34,13 +34,18 @@ test('every public page answers in English and in Bahasa Indonesia, to anyone, a
   assert.equal((await (await fetch(`${base}/api/bootstrap`)).json()).terms, TERMS_VERSION, 'the app is told which terms the sign-up agrees to');
 });
 
-test('the prices are the owner’s — IDR 150,000 for one child, 275,000 for two, 125,000 for each after that — in both languages, and /join says the same', async () => {
-  assert.deepEqual([1, 2, 3, 4].map(monthlyPrice), [150_000, 275_000, 400_000, 525_000]);
+// The owner's prices of 13 Sep 2026 replaced 150,000 for one child and 125,000 for each after it: every place a stranger reads a
+// price says the new one, and the old ones are gone from all of them.
+test('the prices are the owner’s — IDR 199,000 for one child, 379,000 for two, 519,000 for three, 599,000 for four — in both languages, /join says the same, and no old price is left', async () => {
+  assert.deepEqual([1, 2, 3, 4].map(monthlyPrice), [199_000, 379_000, 519_000, 599_000]);
+  assert.equal(monthlyPrice(5), null, 'nothing is priced beyond four children'); assert.equal(monthlyPrice(0), null);
   const en = renderSitePage('/pricing'), id = renderSitePage('/id/pricing');
-  for (const s of ['IDR 150,000', 'IDR 275,000', 'IDR 400,000', 'IDR 525,000', 'IDR 125,000', '19 September 2026, 00:00 WIB', '10 October 2026, 23:59 WIB', '11 October 2026']) assert.ok(en.includes(s), s);
-  for (const s of ['Rp150.000', 'Rp275.000', 'Rp400.000', 'Rp525.000', 'Rp125.000', '10 Oktober 2026 pukul 23.59 WIB', '11 Oktober 2026']) assert.ok(id.includes(s), s);
+  for (const s of ['IDR 199,000', 'IDR 379,000', 'IDR 519,000', 'IDR 599,000', 'For five or more children, write to', '19 September 2026, 00:00 WIB', '10 October 2026, 23:59 WIB', '11 October 2026']) assert.ok(en.includes(s), s);
+  for (const s of ['Rp199.000', 'Rp379.000', 'Rp519.000', 'Rp599.000', 'Untuk lima anak atau lebih, hubungi', '10 Oktober 2026 pukul 23.59 WIB', '11 Oktober 2026']) assert.ok(id.includes(s), s);
   const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
-  for (const s of ["endsWords: '10 October 2026, 23:59 WIB'", 'IDR 150,000 a month', 'IDR 275,000 a month', 'IDR 125,000 a month']) assert.ok(app.includes(s), `the introduction: ${s}`);
+  for (const s of ["endsWords: '10 October 2026, 23:59 WIB'", 'IDR 199,000 a month', 'IDR 379,000 a month', 'IDR 519,000 a month', 'IDR 599,000 a month']) assert.ok(app.includes(s), `the introduction: ${s}`);
+  for (const old of ['150,000', '275,000', '125,000', '150.000', '275.000', '125.000'])
+    assert.ok(![en, id, app].some((text) => text.includes(old)), `the old price ${old} is gone everywhere`);
 });
 
 test('the terms carry their version and give the Indonesian text precedence; refunds are listed case by case; no page holds a placeholder or a link to nowhere', () => {

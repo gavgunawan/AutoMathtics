@@ -2244,8 +2244,8 @@ function joinScreen() {
   // What it costs, where a stranger decides (server/site.mjs holds the same prices for /pricing)
   const cost = el('div', null, 'join-block');
   cost.append(el('span', 'WHAT IT COSTS', 'section-label'),
-    joinLine('1', 'IDR 150,000 a month', 'for one child.'), joinLine('2', 'IDR 275,000 a month', 'for two children.'),
-    joinLine('+', 'IDR 125,000 a month', 'for each child after that.'));
+    joinLine('1', 'IDR 199,000 a month', 'for one child.'), joinLine('2', 'IDR 379,000 a month', 'for two children.'),
+    joinLine('3', 'IDR 519,000 a month', 'for three children.'), joinLine('4', 'IDR 599,000 a month', 'for four children.'));
   if (!over) cost.append(el('p', `Free for every family until ${TRIAL.endsWords}: nothing is charged before 11 October.`, 'join-words'));
   box.append(cost);
 
