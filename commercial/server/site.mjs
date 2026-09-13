@@ -5,24 +5,23 @@
 // in site-pages.mjs; this file holds the facts those words quote, and turns blocks into HTML.
 import { VERSION } from './version.mjs';
 import { sitePages } from './site-pages.mjs';
+import { MONTHLY_PRICES, monthlyPrice, annualPrice } from './pricing.mjs';
 
 // The version of the terms a parent agrees to. Creating a family requires it (service.createFamily records it on the parent),
 // /api/bootstrap tells the app which version it is asking about, and the terms page prints it: new terms are a new agreement,
 // so change this with the words.
-export const TERMS_VERSION = 'terms-2026-09-13';
+export const TERMS_VERSION = 'terms-2026-09-13.2'; // .2: yearly plans, and offers that never stack — the same day
 const UPDATED = Object.freeze({ en: '13 September 2026', id: '13 September 2026' });
 
 // Who runs the business, exactly as registered with the payment provider. A line without a value is left off the Contact page
 // rather than printed with a placeholder: fill these in before the provider's review and they appear.
 export const BUSINESS = Object.freeze({ brand: 'AutoMathtics', legalName: null, address: null, phone: null, email: 'support@automathtics.net' });
 
-// The owner's prices (13 Sep 2026), a month, by how many children the plan covers: IDR 199,000 for one, 379,000 for two, 519,000
-// for three and 599,000 for four. Each step is set, not derived, and nothing is priced beyond four: a larger family writes to
-// support (the Pricing page says so) rather than meeting a number nobody chose.
-export const MONTHLY_PRICES = Object.freeze({ 1: 199_000, 2: 379_000, 3: 519_000, 4: 599_000 });
-export const monthlyPrice = (children) => (Object.hasOwn(MONTHLY_PRICES, children) ? MONTHLY_PRICES[children] : null);
+// The prices live in server/pricing.mjs (the owner's rules of 13 Sep 2026): the pages quote them from there and the payment adapter
+// charges by the same functions, so what a parent reads and what a parent pays cannot drift apart.
+export { MONTHLY_PRICES, monthlyPrice, annualPrice };
 const group = (n, separator) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, separator);
-const money = { en: (n) => `IDR ${group(n, ',')}`, id: (n) => `Rp${group(n, '.')}`, monthly: monthlyPrice };
+const money = { en: (n) => `IDR ${group(n, ',')}`, id: (n) => `Rp${group(n, '.')}`, monthly: monthlyPrice, annual: annualPrice };
 
 // The opening trial, the same moments /join states (app.js TRIAL), in WIB for everyone
 const TRIAL = Object.freeze({
