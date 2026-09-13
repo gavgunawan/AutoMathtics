@@ -32,6 +32,7 @@ pilot uses **synthetic child data** (`README.md`, `DEPLOY_V3.md`).
 | Remember-this-device answer: a SHA-256 of the email of the account that ticked the box (`automathtics.remember`), so it comes back ticked for that account only; not readable, though anyone who can guess the email could check it | this device's browser storage | nobody; never sent | until the box is unticked at a sign-in, or the site's data is cleared | removal |
 | How to, seen: which track's How to for which sector has already opened by itself for each child on this device (`automathtics.howto.<childId>`, a list such as `engine:A nav:B`), so a new sector's first paper shows it once rather than on every start; the child's random id, no name | this device's browser storage | nobody; never sent | until the site's data is cleared | removal |
 | Kid-mode marker: `automathtics.kidmode` = `1` once the device was handed over to the kids; it hides *Send feedback* on that device, the sign-in screen included, so that no note is written from a child's tablet, and holds nothing else | this device's browser storage | nobody; never sent | set when the launch pad or a child's screen opens, removed when a parent's session opens on the device | a parent's sign-in on the device, or the browser's "clear site data"; without storage the app keeps it in the page's memory only |
+| Seen marker: `automathtics.seen` = `1` once any session has opened on the device (13 Sep 2026), so the site's own address opens there at sign-in rather than at the introduction a stranger sees; a device with any other `automathtics.*` note counts as seen too. Holds nothing else | this device's browser storage | nobody; never sent | until the site's data is cleared | removal |
 | Rate-limit buckets | `rate/…` | nobody | minutes to a day, TTL | expiry |
 | Feedback day counts: per UTC day, how many notes were kept (and how many of them signed out) and how many copies went to the owner; counts only | Firestore `feedbackDays/{YYYY-MM-DD}` | nobody (the operator in the console) | 8 days, TTL | expiry |
 | SMS resend ladder: timestamps of the verification SMS to a number in its current run | `smsLadder/{hmac}` — an HMAC of the number under a secret; the number itself is not stored | nobody | two days, TTL | expiry |
@@ -89,7 +90,11 @@ for aggregate analysis of the learning path; they are never shown to other famil
 
 - Legal review of this inventory for the launch country (children's data, consent wording, the
   14-day deletion window, the financial retention exception, the 400-day audit window).
-- The parent-facing disclosure and consent version (`consentVersion`) updated from `pilot-v1`.
+- ~~The parent-facing disclosure and consent version (`consentVersion`) updated from `pilot-v1`.~~ Done 13 Sep 2026: the Terms of
+  Service, Privacy Policy and Refund Policy are public at `/terms`, `/privacy` and `/refunds`, in English and under `/id/` in Bahasa
+  Indonesia (`server/site-pages.mjs`, the parent-facing form of this inventory: a change to one is a change to the other). Sign-up
+  cannot be sent without the terms box, and creating a family requires and records `consentVersion: terms-2026-09-13`. The words
+  still need the launch-country legal review below before real money is taken.
 - Logging retention set and verified on the staging project (`DEPLOY_V3.md`).
 - The email wording (`email-v1`: the two sign-up boxes and the report's footer) in the same legal review; a verified sending domain at the email provider, and its data-processing terms, before any family but the owner's gets an email.
 - A named person who answers export/deletion requests that arrive outside the app, using only the

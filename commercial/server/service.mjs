@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { TERMS_VERSION } from './site.mjs';
 import { Fault, fail, sha256, mac, randomToken, object, text, uuid, pin, childInput, startInput, publicChild } from './security.mjs';
 import { initialProgress, normalizeProgress } from './progress.mjs';
 import { effectiveEntitlement } from './subscription.mjs';
@@ -165,7 +166,9 @@ export class Foundation {
   async createFamily(ctx, body) {
     object(body, ['label', 'adultAttestation', 'consentVersion']);
     const label = text(body.label, 1, 40).normalize('NFC').trim();
-    if (!label || body.adultAttestation !== true || body.consentVersion !== 'pilot-v1') fail(400, 'CONSENT_REQUIRED');
+    // An adult's attestation and the terms as they stand (site.mjs TERMS_VERSION), ticked at sign-up and sent on with the family's
+    // name: no family — and so nothing a child could play — exists under terms nobody agreed to.
+    if (!label || body.adultAttestation !== true || body.consentVersion !== TERMS_VERSION) fail(400, 'CONSENT_REQUIRED');
     const familyId = randomUUID();
     return this.store.transaction(async (tx) => {
       const { s, parent } = await this.authorize(tx, ctx, ['parent'], false);
@@ -180,7 +183,7 @@ export class Foundation {
       // Merge, never replace: the ledger also carries trialFamilyId/trialAt, and a second family must not reset them.
       if (ledgerPath) tx.set(ledgerPath, { ...(ledger || {}), families: [...(ledger?.families || []), familyId], count: (ledger?.count || 0) + 1, firstAt: ledger?.firstAt || this.now(), lastAt: this.now() });
       tx.set(`families/${familyId}/members/${s.uid}`, { role: 'owner', status: 'active' });
-      tx.set(`parents/${s.uid}`, { ...parent, familyId, consentVersion: 'pilot-v1', attestedAt: this.now() });
+      tx.set(`parents/${s.uid}`, { ...parent, familyId, consentVersion: TERMS_VERSION, attestedAt: this.now() });
       const token = this.rotateSession(tx, ctx, s, { familyId });
       this.audit(tx, 'family.created', s.uid, familyId);
       return { id: familyId, token };

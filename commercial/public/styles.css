@@ -672,3 +672,36 @@ input.pace-range:focus-visible{outline:2px solid var(--accent);outline-offset:3p
 .field.check span{font:500 12px/1.55 var(--ui);color:var(--dim);text-transform:none;letter-spacing:0}
 /* /join is nobody's Mission Control: the parents' masthead and the build footer belong to people who are already inside */
 html[data-mode=join] .masthead,html[data-mode=join] footer{display:none}
+/* The public pages (server/site.mjs): documents in the card's own look, left-aligned and wider, for reading rather than tapping.
+   Body text is set on the card so a kicker or an intro keeps its own face; every rule below is scoped to .doc or the site footer. */
+html[data-mode=site] .masthead,html[data-mode=site] footer{max-width:760px}
+.panel.doc{max-width:760px;text-align:left;padding:26px clamp(18px,4vw,40px) 30px;font:500 16px/1.65 var(--ui);color:var(--ink)}
+.doc p{margin:0 0 10px}
+.doc .intro{color:var(--muted)}
+.doc h2{font:700 18px/1.35 var(--ui);letter-spacing:.02em;text-transform:none;color:var(--cyan);margin:26px 0 8px;text-wrap:balance}
+.doc ul{margin:0 0 12px;padding-left:22px}
+.doc li{margin:0 0 7px}
+.doc li::marker{color:var(--cyan)}
+.doc b{font-weight:700;color:#fff}
+.doc a,.check a{color:var(--cyan);text-decoration:underline;text-underline-offset:3px}
+.doc a:focus-visible,.check a:focus-visible,.site-links a:focus-visible,.site-foot a:focus-visible{outline:2px solid var(--cyan);outline-offset:2px;border-radius:4px}
+.doc .doc-lang{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px}
+.doc .doc-lang a{font:700 11px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;text-decoration:none;color:var(--dim);border:1.5px solid var(--v2line);border-radius:999px;padding:7px 12px}
+.doc .doc-lang a[aria-current=page]{color:var(--void);background:var(--cyan);border-color:var(--cyan)}
+.doc-table{overflow-x:auto;margin:6px 0 10px}
+.doc table{width:100%;border-collapse:collapse}
+.doc th,.doc td{padding:12px 14px;border-bottom:1px solid var(--v2line);text-align:left;font:600 16px var(--ui);color:var(--ink)}
+.doc thead th{font:700 10px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+.doc thead th:last-child,.doc td{text-align:right}
+.doc td{font:600 17px var(--mono);font-variant-numeric:tabular-nums;color:var(--gold)}
+.doc .doc-note{font-size:14px;color:var(--muted)}
+.doc .doc-cta{margin:24px 0 4px;text-align:center}
+.doc .doc-cta a{display:inline-block;text-decoration:none;border-radius:12px;font:700 16px var(--ui);color:var(--on-bright)}
+.site-foot{flex-wrap:wrap;align-items:center}
+.site-foot nav{display:flex;flex-wrap:wrap;gap:6px 16px}
+.site-foot a{color:var(--muted);text-decoration:none}
+.site-foot a[aria-current=page]{color:var(--cyan)}
+/* the same pages, linked under the screens a stranger can reach (app.js siteLinks) */
+.site-links{display:flex;flex-wrap:wrap;justify-content:center;gap:6px 16px;margin:18px 0 0;font:600 10px var(--mono);letter-spacing:.12em;text-transform:uppercase}
+.site-links a{color:var(--dim);text-decoration:none}
+@media(hover:hover) and (pointer:fine){.site-links a:hover,.site-foot a:hover{color:var(--cyan)}}

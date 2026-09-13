@@ -1,6 +1,9 @@
 const root = document.querySelector('#app'), status = document.querySelector('#message');
 const icons = { fox: '\u{1f98a}', panda: '\u{1f43c}', tiger: '\u{1f42f}', wolf: '\u{1f43a}', robot: '\u{1f916}', rocket: '\u{1f680}' };
 let csrf = '', model = null, authModule = null, working = false, transientView = false;
+// termsVersion: the version of the terms this service asks sign-up to agree to (/api/bootstrap); termsTicked: the version the parent
+// ticked the box for on this page, so the family's step does not ask a second time a minute later (familySetup)
+let termsVersion = null, termsTicked = null;
 let reauthEpoch = 0, sessionRefreshPending = false, keepSdkSession = false; // keepSdkSession: a change of mobile needs the provider's fresh sign-in kept open
 // rememberChoice: the parent's answer to “Remember this device” on a sign-in's SMS step, sent with the session request;
 // undefined on the fresh check of a parent action, where the server keeps whatever the device already had
@@ -22,6 +25,7 @@ const messages = {
   PIN_SERVICE_BUSY: 'Another PIN check is in progress. Please try again in a moment.',
   PIN_CHECK_EXPIRED: 'This PIN check expired. Please enter your PIN again.',
   TOO_MANY_ATTEMPTS: 'Too many attempts. Please pause before trying again.',
+  CONSENT_REQUIRED: 'Tick the box to agree to the Terms of Service and the Privacy Policy. If you ticked it already, reload the page: the terms may have changed since it opened.',
   TOO_MANY_PAPERS: 'That is a lot of papers started in one hour. Take a short break — you can start again soon.',
   INCORRECT_PIN: 'That PIN did not match.', REAUTHENTICATE: 'Please sign in again for this parent action.',
   SIGN_IN_REQUIRED: 'Please sign in.', PARENT_REQUIRED: 'Return to parent sign-in to manage your family.',
@@ -237,7 +241,7 @@ function showUpdate() {
   if (!updateBar.children.length) { const go = el('button', 'Update now', 'primary'); go.type = 'button'; go.onclick = () => { if (typeof location === 'object' && location) location.reload(); }; updateBar.append(el('span', 'A new version of AutoMathtics is ready.'), go); }
   root.append(updateBar);
 }
-async function bootstrap() { const b = await api('/bootstrap'); sawRelease(b.release); return b; }
+async function bootstrap() { const b = await api('/bootstrap'); sawRelease(b.release); if (typeof b.terms === 'string') termsVersion = b.terms; return b; }
 // In the background (the five-minute tick, and a tab coming back into view) the page asks GET /api/health, which
 // reads no cookie and sets none, and asks nothing while a request is in flight (`working`): /api/bootstrap could hand out a fresh
 // pre-authentication cookie over the session cookie a hand-over, a PIN, Switch child or a sign-in has just set (review of 12 Sep
@@ -313,7 +317,7 @@ async function refresh() {
   csrf = (await bootstrap()).csrf;
   try { model = await api('/me'); csrf = model.csrf; setMode(); await renderModel(); }
   catch (error) {
-    if (error.code === 'SIGN_IN_REQUIRED' || error.code === 'SESSION_REVOKED') { model = null; signInScreen(); return; }
+    if (error.code === 'SIGN_IN_REQUIRED' || error.code === 'SESSION_REVOKED') { model = null; if (error.code === 'SIGN_IN_REQUIRED' && newDevice()) joinScreen(); else signInScreen(); return; }
     // a child whose seat, PIN or subscription changed under the device goes back to the launch pad — never a dead screen (Stage 4 review, third round)
     if (['CHILD_INACTIVE', 'CHILD_SESSION_REVOKED', 'SUBSCRIPTION_INACTIVE'].includes(error.code)) {
       try { await api('/session/select', {}); model = await api('/me'); csrf = model.csrf; setMode(); await renderModel(); }
@@ -426,11 +430,14 @@ function signInScreen(signup = false, afterReady = null, reauth = false) {
   // A new password is typed twice: one slip in a masked box would lock the parent out of the account made a minute before.
   const again = signup ? field('Type the password again', 'password', { autocomplete: 'new-password', minLength: 12, maxLength: 128 }) : null;
   const submit = el('button', signup ? 'Create parent account' : 'Sign in as parent', 'primary'); submit.type = 'submit';
+  const terms = signup ? termsBox() : null; // the terms: no account without them (13 Sep 2026)
   const consent = signup ? consentBoxes() : null; // email-v1: the two sign-up boxes
-  form.append(email.wrap, password.wrap, ...(again ? [again.wrap] : []), ...(consent ? consent.labels : []), submit);
+  form.append(email.wrap, password.wrap, ...(again ? [again.wrap] : []), ...(terms ? [terms.label] : []), ...(consent ? consent.labels : []), submit);
   form.onsubmit = (event) => { event.preventDefault(); run(async () => {
     if (again && again.input.value !== password.input.value) { note('The two passwords don’t match. Type the same password in both boxes; nothing has been sent.'); return; }
-    if (consent && !consent.agreed()) { note('Tick the first box to create the account: account and progress emails are part of the service. News and offers stay optional.'); return; }
+    if (terms && !terms.agreed()) { note('Tick the box to agree to the Terms of Service and the Privacy Policy. Nothing has been sent. · Centang kotak persetujuan Syarat dan Kebijakan Privasi terlebih dahulu.'); return; }
+    if (consent && !consent.agreed()) { note('Tick the box for account and progress emails to create the account: they are part of the service. News and offers stay optional.'); return; }
+    if (terms) { if (!termsVersion) csrf = (await bootstrap()).csrf; termsTicked = termsVersion; } // the version this box agreed to, carried to the family's step
     const a = await auth(); const value = password.input.value; password.input.value = ''; if (again) again.input.value = '';
     const result = await (signup ? a.signUp(email.input.value, value) : a.signIn(email.input.value, value));
     if (consent) await recordConsent(a, consent.agreed(), consent.news());
@@ -442,7 +449,42 @@ function signInScreen(signup = false, afterReady = null, reauth = false) {
     signup ? null : button('Forgot password?', async () => { if (!email.input.checkValidity()) { email.input.reportValidity(); return; }
       await (await auth()).resetPassword(email.input.value); note('If this email can receive a reset link, one has been requested. Mobile verification is still required.'); }, 'text-button')));
   box.append(el('p', 'EMAIL VERIFIED  //  MOBILE VERIFIED  //  FAMILY-ONLY ACCESS', 'trust'));
+  if (!reauth && !kidMode) box.append(siteLinks());
 }
+// The terms box (the owner's request of 13 Sep 2026): nobody creates an account without it. It speaks both languages the terms
+// are written in, and each name opens its page in a new tab, so reading the terms never loses what was typed in the form.
+function termsBox() {
+  const label = el('label', null, 'check terms'), input = el('input'), words = el('span'), indonesian = el('small');
+  input.type = 'checkbox';
+  const link = (text, href) => { const a = el('a', text); Object.assign(a, { href, target: '_blank', rel: 'noopener' }); return a; };
+  indonesian.setAttribute('lang', 'id');
+  indonesian.append('Saya berusia 18 tahun ke atas, orang tua atau wali sah dari anak yang akan saya tambahkan, dan saya menyetujui ',
+    link('Syarat dan Ketentuan Layanan', '/id/terms'), ' serta ', link('Kebijakan Privasi', '/id/privacy'), '.');
+  words.append('I am 18 or older and the parent or legal guardian of the children I will add, and I agree to the ',
+    link('Terms of Service', '/terms'), ' and the ', link('Privacy Policy', '/privacy'), '.', indonesian);
+  label.append(input, words);
+  return { label, input, agreed: () => input.checked === true };
+}
+// The public pages (server/site.mjs), linked under the two screens a stranger can reach: the introduction and sign-in. Not in kid mode.
+function siteLinks() {
+  const nav = el('nav', null, 'site-links'); nav.setAttribute('aria-label', 'AutoMathtics pages');
+  for (const [text, href] of [['Pricing', '/pricing'], ['Terms', '/terms'], ['Privacy', '/privacy'], ['Refunds', '/refunds'], ['Contact', '/contact']]) {
+    const a = el('a', text); a.href = href; nav.append(a);
+  }
+  return nav;
+}
+// A device that has never had a session here opens at the introduction (/join's screen), not at a sign-in form that means nothing
+// to someone who typed the address or followed a search; one that has — a parent's phone, the kids' tablet, anything that ever kept
+// an automathtics.* note — opens at sign-in as it always did. Without storage the page cannot tell, and sign-in is the safe answer.
+const SEEN = 'automathtics.seen';
+function newDevice() {
+  try {
+    if (typeof location !== 'object' || location?.pathname !== '/') return false;
+    for (let i = 0; i < localStorage.length; i++) if (String(localStorage.key(i)).startsWith('automathtics.')) return false;
+    return true;
+  } catch { return false; }
+}
+const markSeen = () => { try { localStorage.setItem(SEEN, '1'); } catch { /* no storage: newDevice() answers sign-in anyway */ } };
 // email-v1: the sign-up boxes. The first (account, progress and service emails) is required; the second (news and offers) is
 // optional and starts unticked, because consent made a condition of sign-up is not consent. The server records both.
 function consentBoxes() {
@@ -489,6 +531,7 @@ async function signOut() {
   await api('/auth/logout', {}); if (authModule) await authModule.clear(); channel?.postMessage('changed'); await refresh();
 }
 function renderModel() {
+  markSeen(); // this device has had a session: from now on it opens at sign-in, never at the introduction
   setKidMode(model.role !== 'parent'); // the launch pad or a child: no Send feedback on this device until a parent's session opens here
   parentLive = model.role === 'parent';
   if (model.role === 'child') return childScreen();
@@ -500,10 +543,11 @@ function familySetup(draft = {}) {
   const box = panel('STEP 2 OF 3 · YOUR CREW', 'Name your crew.', 'One private family, linked to your verified parent account. Your explorers join next.');
   box.append(rail(2));
   const label = field('Family display name', 'text', { placeholder: 'Our family', maxLength: 40, value: draft.label || '' });
-  const check = el('input'); check.type = 'checkbox';
-  const wrap = el('label', null, 'check');
-  check.checked = draft.attested === true;
-  wrap.append(check, el('span', 'I am an adult responsible for the children I add. I acknowledge this private test stores family profiles and account security events. Use synthetic child data during testing.'));
+  // The terms, as the sign-up asked for them: a parent who ticked the box on this page is not asked again; one who signed up
+  // somewhere else — the email link opened on another device — ticks it here, because no family is made without it (the server
+  // refuses one without the current version: service.createFamily).
+  const terms = termsTicked && termsTicked === termsVersion ? null : termsBox();
+  if (terms) terms.input.checked = draft.attested === true;
   // Stage 4: a parent with no family (deleted, or never created) may delete the sign-in account itself
   const leave = el('div', null, 'row-buttons');
   const accountOp = crypto.randomUUID();
@@ -511,14 +555,15 @@ function familySetup(draft = {}) {
     if (!window.confirm('Delete your AutoMathtics sign-in account? Your email and mobile number are removed from sign-in. A used free trial stays used.')) return;
     await api('/account/deletion', { operationId: accountOp }); if (authModule) await authModule.clear(); note('Your sign-in account has been deleted.'); await refresh();
   }, 'tiny c-red'));
-  box.append(label.wrap, wrap, el('p', 'Pilot acknowledgement only. Final privacy and parental-consent terms must be reviewed before public launch.', 'small muted'),
+  box.append(label.wrap, terms ? terms.label : el('p', 'You agreed to the Terms of Service and the Privacy Policy when you created this account.', 'small muted'),
     actionRow(button('Create family workspace', async () => {
-      if (!check.checked) { note('Please acknowledge the pilot notice.'); return; }
+      if (terms && !terms.agreed()) { note('Tick the box to agree to the Terms of Service and the Privacy Policy first.'); return; }
       try {
-        await api('/family', { label: label.input.value, adultAttestation: true, consentVersion: 'pilot-v1' }); await refresh();
+        if (!termsVersion) csrf = (await bootstrap()).csrf;
+        await api('/family', { label: label.input.value, adultAttestation: true, consentVersion: termsVersion }); await refresh();
       } catch (error) {
         if (error.code !== 'REAUTHENTICATE') throw error;
-        const saved = { label: label.input.value, attested: check.checked };
+        const saved = { label: label.input.value, attested: terms ? terms.agreed() : true };
         reauthenticate(() => familySetup(saved));
       }
     }, 'primary'), button('Sign out', signOut, 'ghost')));
@@ -1208,9 +1253,14 @@ function speak(text) {
 const gameItem = (id) => gameModel?.catalog?.find((x) => x.id === id) || null;
 // ---- the child's home (v2 2859-3073): the header above the card, the card, and the child's log below it ----
 const LEVEL_IDS = 'ABCDEF', LAST_LEVEL = 5, EGG_PASSES = 5; // display mirrors of the server's six sectors and the egg's five passes
-// v2's full-screen button (1095-1106, 1611-1613): only where the browser offers it, and not in an iPhone home-screen app
+// v2's full-screen button (1095-1106, 1611-1613): only where the browser offers it, and not in a home-screen app, which is full screen already
 const fsOn = () => Boolean(document.fullscreenElement || document.webkitFullscreenElement);
-const fsAble = () => Boolean(document.fullscreenEnabled || document.webkitFullscreenEnabled) && !globalThis.navigator?.standalone;
+const installed = () => Boolean(globalThis.navigator?.standalone) || ['fullscreen', 'standalone'].some((m) => Boolean(window.matchMedia?.(`(display-mode: ${m})`)?.matches));
+const fsAble = () => Boolean(document.fullscreenEnabled || document.webkitFullscreenEnabled) && !installed();
+// An iPhone gives a web page no full screen at all, in Safari or in Chrome (the owner's report of 13 Sep 2026, an iPhone X in Chrome):
+// there the same button says how to get one — the Home Screen app (manifest.webmanifest), which opens with no browser bars.
+const iPhone = () => /iPhone|iPod/.test(String(globalThis.navigator?.userAgent || ''));
+const HOME_SCREEN = 'On an iPhone, full screen comes from the Home Screen. Tap Share (the square with an arrow; in Chrome it is at the top, by the address), choose Add to Home Screen, then open AutoMathtics from its new icon: it fills the screen. Sign in there once.';
 function toggleFullscreen() {
   const d = document, e = d.documentElement;
   try { (fsOn() ? (d.exitFullscreen || d.webkitExitFullscreen)?.call(d) : (e?.requestFullscreen || e?.webkitRequestFullscreen)?.call(e))?.catch?.(() => {}); } catch { /* refused: the page stays as it is */ }
@@ -1237,6 +1287,7 @@ function homeHeader(child, st, w) {
   who.append(words);
   const tools = el('span', null, 'home-tools');
   if (fsAble()) { const fs = el('button', fsOn() ? '⤢' : '⛶', 'tiny fs'); fs.type = 'button'; fs.setAttribute('aria-label', fsOn() ? 'Exit full screen' : 'Full screen'); fs.onclick = toggleFullscreen; tools.append(fs); }
+  else if (iPhone() && !installed()) { const fs = el('button', '⛶', 'tiny fs'); fs.type = 'button'; fs.setAttribute('aria-label', 'Full screen'); fs.onclick = () => note(HOME_SCREEN); tools.append(fs); }
   tools.append(button('Switch user', switchUser, 'tiny'));
   header.append(who, tools); return header;
 }
@@ -2190,6 +2241,14 @@ function joinScreen() {
     joinLine('🗒', 'Every session logged.', 'What was practised, how long it took, and what was earned.'));
   box.append(parent);
 
+  // What it costs, where a stranger decides (server/site.mjs holds the same prices for /pricing)
+  const cost = el('div', null, 'join-block');
+  cost.append(el('span', 'WHAT IT COSTS', 'section-label'),
+    joinLine('1', 'IDR 150,000 a month', 'for one child.'), joinLine('2', 'IDR 275,000 a month', 'for two children.'),
+    joinLine('+', 'IDR 125,000 a month', 'for each child after that.'));
+  if (!over) cost.append(el('p', `Free for every family until ${TRIAL.endsWords}: nothing is charged before 11 October.`, 'join-words'));
+  box.append(cost);
+
   const privacy = el('div', null, 'join-block');
   privacy.append(el('span', 'WHAT WE NEVER ASK A CHILD FOR', 'section-label'),
     el('p', 'No child email address, phone number, photo or full birth date — ever. A nickname, an age and a year level is everything a child profile holds. The account is yours, and it is protected by your password and a code to your mobile.', 'join-words'));
@@ -2206,12 +2265,12 @@ function joinScreen() {
   if (open) {
     box.append(el('p', `Free until ${TRIAL.endsWords}. If you want to keep going afterwards you can set a subscription up during the trial — it starts charging on 11 October and not a day sooner.`, 'join-offer'),
       actionRow(button('Start the free trial ▶', () => signInScreen(true), 'primary')),
-      actionRow(button('I already have an account', () => signInScreen(), 'ghost')));
+      actionRow(button('I already have an account', () => signInScreen(), 'ghost')), siteLinks());
     return box;
   }
   if (over) {
     box.append(actionRow(button('Create an account ▶', () => signInScreen(true), 'primary')),
-      actionRow(button('I already have an account', () => signInScreen(), 'ghost')));
+      actionRow(button('I already have an account', () => signInScreen(), 'ghost')), siteLinks());
     return box;
   }
   // Before the doors open: an address, and the permission to write to it. Nothing else is asked and nothing else is kept.
@@ -2238,7 +2297,8 @@ function joinScreen() {
       done.append(el('p', 'Every email we send has an unsubscribe link in it.', 'join-words'));
     });
   };
-  box.append(form);
+  // the grid is not open yet, but the families already on it still sign in — from a new device too, where this is the first screen
+  box.append(form, actionRow(button('I already have an account', () => signInScreen(), 'ghost')), siteLinks());
   return box;
 }
 

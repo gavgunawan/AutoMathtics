@@ -133,18 +133,20 @@ test('the record\'s shape: defaults without one; versioned rows with their door;
   assert.equal(doc.changes[1].at, 11); assert.equal(doc.changes.at(-1).at, 29); assert.equal(doc.news, true); assert.ok(doc.changes.every((row) => row.version === V));
 });
 
-test('UI: the sign-up form carries the two boxes, the first required and the second optional and unticked; both reach the server as the account is made; a failure there never blocks the sign-up', async (t) => {
+test('UI: the sign-up form carries the terms box and the two email boxes — the terms and the first required, the second optional, all unticked; the email choices reach the server as the account is made; a failure there never blocks the sign-up', async (t) => {
   const h = await uiFixture(t, { signedIn: false });
   h.api.signInScreen(true);
   const boxes = () => h.nodes('INPUT').filter((i) => i.type === 'checkbox');
-  assert.equal(boxes().length, 2); assert.ok(boxes().every((b) => !b.checked), 'both start unticked');
+  assert.equal(boxes().length, 3); assert.ok(boxes().every((b) => !b.checked), 'all start unticked');
   assert.ok(h.root.textContent.includes('a weekly progress report, security notices and service updates. I can turn the weekly report off at any time.'));
   assert.ok(h.root.textContent.includes('Also send me news and offers from AutoMathtics. Optional; unsubscribe at any time.'));
   let made = 0; h.setAuth('newParent', { signUp: async () => { made++; return { stage: 'verify' }; }, idToken: async () => h.f.token('newParent') });
   await h.submitLogin();
-  assert.equal(made, 0, 'no account without the first box'); assert.ok(h.message.textContent.includes('Tick the first box'), h.message.textContent);
-  assert.equal(h.nodes('INPUT')[1].value, 'SyntheticPasswordOnly', 'the password is still there for the second try');
-  boxes()[0].checked = true; await h.submitLogin();
+  assert.equal(made, 0, 'no account without the terms'); assert.ok(h.message.textContent.includes('Terms of Service and the Privacy Policy'), h.message.textContent);
+  boxes()[0].checked = true; await h.submitLogin(); // the terms ticked, the emails not
+  assert.equal(made, 0, 'no account without the email box'); assert.ok(h.message.textContent.includes('account and progress emails'), h.message.textContent);
+  assert.equal(h.nodes('INPUT')[1].value, 'SyntheticPasswordOnly', 'the password is still there for the next try');
+  boxes()[1].checked = true; await h.submitLogin();
   assert.equal(made, 1); assert.ok(h.root.textContent.includes('Check your inbox.'), 'on to the email check');
   const doc = await h.f.store.get('emailPrefs/newParent'); assert.deepEqual(prefsOf(doc), { progress: true, news: false, cadence: 'weekly' }, 'news stays off unless ticked'); assert.equal(doc.changes[0].source, 'signup');
   assert.equal(await h.f.store.get('parents/newParent'), null);
@@ -158,7 +160,7 @@ test('UI: the sign-up form carries the two boxes, the first required and the sec
   for (const idToken of [async () => BAD_TOKEN, async () => { throw Error('provider hiccup'); }]) {
     const u = await uiFixture(t, { signedIn: false }); u.api.signInScreen(true);
     u.setAuth('unluckyParent', { signUp: async () => ({ stage: 'verify' }), idToken });
-    u.nodes('INPUT').filter((i) => i.type === 'checkbox')[0].checked = true;
+    for (const b of u.nodes('INPUT').filter((i) => i.type === 'checkbox').slice(0, 2)) b.checked = true; // the terms and the required email box
     await u.submitLogin(); assert.ok(u.root.textContent.includes('Check your inbox.'), 'the sign-up is not blocked'); assert.equal(await u.f.store.get('emailPrefs/unluckyParent'), null);
   }
   // the sign-in form has no boxes

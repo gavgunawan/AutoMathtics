@@ -121,7 +121,7 @@ test('the cookie lives exactly as long as its session: 30 days when remembered, 
   const login = await call('/api/auth/session', { idToken: f.token('parentA'), remember: true });
   assert.equal(login.status, 200);
   assert.match(login.headers.get('set-cookie'), /Max-Age=2592000(;|$)/);
-  const created = await call('/api/family', { label: 'Fam', adultAttestation: true, consentVersion: 'pilot-v1' });
+  const created = await call('/api/family', { label: 'Fam', adultAttestation: true, consentVersion: 'terms-2026-09-13' });
   assert.match(created.headers.get('set-cookie'), /Max-Age=2592000(;|$)/);
   const me = await (await call('/api/me')).json();
   assert.equal(me.rememberedUntil, f.now() + 30 * DAY);
@@ -135,7 +135,7 @@ test('the cookie lives exactly as long as its session: 30 days when remembered, 
 test('entering and leaving a child carry the same remaining life, and a read-back that fails after a rotation still answers, sized by the ceiling (review of PR #44)', async (t) => {
   const { f, call, token } = await serverTest(t);
   await call('/api/auth/session', { idToken: f.token('parentA'), remember: true });
-  await call('/api/family', { label: 'Fam', adultAttestation: true, consentVersion: 'pilot-v1' });
+  await call('/api/family', { label: 'Fam', adultAttestation: true, consentVersion: 'terms-2026-09-13' });
   const me = await (await call('/api/me')).json();
   await grantEntitlement(f.store, { familyId: me.family.id, seatLimit: 1, accessUntil: f.now() + 90 * DAY, reason: 'cookie test', actor: 'test-operator' }, f.now());
   const kid = (await (await call('/api/children', { nickname: 'Fox', icon: 'fox', pin: '763829' }, { 'Idempotency-Key': crypto.randomUUID() })).json()).child;

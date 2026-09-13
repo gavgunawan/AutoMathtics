@@ -16,7 +16,7 @@ test('UI: sign-up asks for the password twice; while the two differ, Create refu
   const pw = h.nodes('INPUT').filter((n) => n.type === 'password');
   assert.equal(pw.length, 2); assert.ok(h.root.textContent.includes('Type the password again')); assert.ok(pw.every((n) => n.autocomplete === 'new-password' && n.minLength === 12));
   let made = 0; h.setAuth('newParent', { signUp: async () => { made++; return { stage: 'verify' }; }, idToken: async () => h.f.token('newParent') });
-  h.nodes('INPUT').find((n) => n.type === 'checkbox').checked = true;
+  for (const box of h.nodes('INPUT').filter((n) => n.type === 'checkbox').slice(0, 2)) box.checked = true; // the terms and the required email box
   const form = h.nodes('FORM')[0], before = h.requests.length, submit = async () => { form.onsubmit({ preventDefault() {} }); await h.idle(); };
   h.nodes('INPUT')[0].value = 'synthetic@example.test'; pw[0].value = 'SyntheticPasswordOnly'; pw[1].value = 'SyntheticPasswordOnIy';
   await submit();

@@ -32,7 +32,12 @@ fi
 REGION=asia-southeast1
 SERVICE=automathtics-v3
 RUNTIME_SA="automathtics-v3-runtime@${PROJECT_ID}.iam.gserviceaccount.com"
-ORIGIN="https://${PROJECT_ID}.web.app"
+ORIGIN="https://${PROJECT_ID}.web.app" # where the deploy checks the live release: the project's own host answers whatever APP_ORIGIN names
+# The address every link and email carries (APP_ORIGIN: automathtics.net once Hosting serves it), and the other hosts the service still
+# takes forms from (APP_ALSO_ORIGINS, comma-separated: the project's own, for devices that opened the app there). Default: the project's host.
+APP_ORIGIN="${APP_ORIGIN:-$ORIGIN}"
+[[ "$APP_ORIGIN" =~ ^https://[a-z0-9.-]+$ ]] || { echo 'APP_ORIGIN must be https://host, with no path or trailing slash.' >&2; exit 1; }
+[[ -z "${APP_ALSO_ORIGINS:-}" || "$APP_ALSO_ORIGINS" =~ ^https://[a-z0-9.-]+(,https://[a-z0-9.-]+)*$ ]] || { echo 'APP_ALSO_ORIGINS must list https://host origins, separated by commas.' >&2; exit 1; }
 # IAM and the exact secret versions must already exist. Do not create/rotate them here.
 gcloud iam service-accounts describe "$RUNTIME_SA" --project "$PROJECT_ID" >/dev/null
 # the provider decides which secrets must exist: Stripe needs its key and endpoint secret, the fake provider its signing secret
@@ -78,12 +83,12 @@ npm run test:emulator
 DIRTY="$(git status --porcelain --untracked-files=no)"
 [[ "$(git rev-parse HEAD)" == "$RELEASE_SHA" && -z "$DIRTY" ]] || { echo 'The checkout changed while the tests ran: start again.' >&2; exit 1; }
 # Ephemeral config contains ONLY public identifiers. Secret values never enter it.
-export PROJECT_ID FIREBASE_WEB_API_KEY FIREBASE_WEB_APP_ID TRUSTED_PROXY_HOPS PAYMENT_PROVIDER STRIPE_PRICE_STARTER STRIPE_PRICE_FAMILY STRIPE_PRICE_BIG RELEASE_SHA FEEDBACK_TO EMAIL_PROVIDER EMAIL_FROM WAITLIST_FROM WAITLIST_REPLY_TO
+export PROJECT_ID APP_ORIGIN APP_ALSO_ORIGINS FIREBASE_WEB_API_KEY FIREBASE_WEB_APP_ID TRUSTED_PROXY_HOPS PAYMENT_PROVIDER STRIPE_PRICE_STARTER STRIPE_PRICE_FAMILY STRIPE_PRICE_BIG RELEASE_SHA FEEDBACK_TO EMAIL_PROVIDER EMAIL_FROM WAITLIST_FROM WAITLIST_REPLY_TO
 node --input-type=module - "$ENV_FILE" <<'NODE'
 import { writeFileSync } from 'node:fs';
 const p = process.env;
 writeFileSync(process.argv[2], JSON.stringify({ APP_MODE: 'staging',
-  APP_ORIGIN: `https://${p.PROJECT_ID}.web.app`, FIREBASE_PROJECT_ID: p.PROJECT_ID,
+  APP_ORIGIN: p.APP_ORIGIN, ...(p.APP_ALSO_ORIGINS ? { APP_ALSO_ORIGINS: p.APP_ALSO_ORIGINS } : {}), FIREBASE_PROJECT_ID: p.PROJECT_ID,
   FIREBASE_WEB_API_KEY: p.FIREBASE_WEB_API_KEY, FIREBASE_WEB_APP_ID: p.FIREBASE_WEB_APP_ID,
   TRUSTED_PROXY_HOPS: p.TRUSTED_PROXY_HOPS, RELEASE_SHA: p.RELEASE_SHA, PAYMENT_PROVIDER: p.PAYMENT_PROVIDER || 'fake', ...(p.PAYMENT_PROVIDER === 'stripe' ? { STRIPE_PRICE_STARTER: p.STRIPE_PRICE_STARTER, STRIPE_PRICE_FAMILY: p.STRIPE_PRICE_FAMILY, STRIPE_PRICE_BIG: p.STRIPE_PRICE_BIG } : { FAKE_PAYMENTS_ACK: 'no-real-money' }),
   // The waiting list writes as no-reply with Reply pointed at a person; without these it writes as EMAIL_FROM, which is blunt but never wrong
