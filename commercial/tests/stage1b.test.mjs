@@ -128,7 +128,7 @@ test('F3: one session cannot make more than 120 authenticated requests a minute'
 // ---- F5: a session superseded by family creation elsewhere goes back to sign-in ----
 test('F5: the second device is sent to sign-in, not stranded, after the first creates the family', async () => {
   const f = fixture(); const a = await f.login('parentA'), b = await f.login('parentA');
-  await f.service.createFamily(a.ctx, { label: 'Fam', adultAttestation: true, consentVersion: 'terms-2026-09-13.2' });
+  await f.service.createFamily(a.ctx, { label: 'Fam', adultAttestation: true, consentVersion: 'terms-2026-09-13.3' });
   await assert.rejects(f.service.me(b.ctx), rejected('SIGN_IN_REQUIRED'));
   f.advance(1000);
   const again = await f.login('parentA'); // and a fresh sign-in on that device sees the family
@@ -157,7 +157,7 @@ test('F12: cookie lifetimes match the session they carry', async (t) => {
   const s = await serverTest(t); const c = await s.client();
   const login = await c.call('/api/auth/session', { idToken: s.f.token('parentA') });
   assert.match(login.headers.get('set-cookie'), /Max-Age=1800(;|$)/);
-  await c.call('/api/family', { label: 'Fam', adultAttestation: true, consentVersion: 'terms-2026-09-13.2' });
+  await c.call('/api/family', { label: 'Fam', adultAttestation: true, consentVersion: 'terms-2026-09-13.3' });
   const { grantEntitlement } = await import('../server/service.mjs');
   const familyId = (await (await c.call('/api/me')).json()).family.id;
   await grantEntitlement(s.f.store, { familyId, seatLimit: 1, accessUntil: s.f.now() + 600_000, reason: 'cookie test', actor: 'test-operator' }, s.f.now());

@@ -10,7 +10,7 @@ import { MONTHLY_PRICES, monthlyPrice, annualPrice } from './pricing.mjs';
 // The version of the terms a parent agrees to. Creating a family requires it (service.createFamily records it on the parent),
 // /api/bootstrap tells the app which version it is asking about, and the terms page prints it: new terms are a new agreement,
 // so change this with the words.
-export const TERMS_VERSION = 'terms-2026-09-13.2'; // .2: yearly plans, and offers that never stack — the same day
+export const TERMS_VERSION = 'terms-2026-09-13.3'; // .3: payments are not refunded but for the listed exceptions; .2: yearly plans and offers that never stack — both 13 Sep 2026
 const UPDATED = Object.freeze({ en: '13 September 2026', id: '13 September 2026' });
 
 // Who runs the business, exactly as registered with the payment provider. A line without a value is left off the Contact page

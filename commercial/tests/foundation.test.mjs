@@ -56,7 +56,7 @@ test('disabled and administratively revoked parent identities are rejected', asy
 });
 test('family setup is idempotent and starts with zero paid access', async () => {
   const f = fixture(), a = await f.family('parentA', 0);
-  const again = await f.service.createFamily(a.ctx, { label: 'Test family', adultAttestation: true, consentVersion: 'terms-2026-09-13.2' });
+  const again = await f.service.createFamily(a.ctx, { label: 'Test family', adultAttestation: true, consentVersion: 'terms-2026-09-13.3' });
   assert.equal(again.id, a.familyId);
   await assert.rejects(f.child(a.ctx), rejected('SUBSCRIPTION_INACTIVE'));
   assert.equal((await f.service.me(a.ctx)).family.entitlement.seatLimit, 0);
@@ -229,7 +229,7 @@ test('old parent authorization contexts cannot survive session rotation', async 
 });
 test('handover barrier also covers an identity-provider clock ahead of the server', async () => {
   const f = fixture(), a = await f.login('parentA', { auth_time: Math.floor(f.now() / 1000) + 20 });
-  const created = await f.service.createFamily(a.ctx, { label: 'Test', adultAttestation: true, consentVersion: 'terms-2026-09-13.2' });
+  const created = await f.service.createFamily(a.ctx, { label: 'Test', adultAttestation: true, consentVersion: 'terms-2026-09-13.3' });
   await move(f, a, Promise.resolve(created.token));
   await move(f, a, f.service.lock(a.ctx));
   await assert.rejects(f.service.login(a.idToken), rejected('REAUTHENTICATE'));
