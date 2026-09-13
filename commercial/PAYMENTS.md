@@ -490,7 +490,9 @@ in) and its offer record in the transaction that decides; charge `chargeFor({ ch
 `retention` always passed — null when there is none, never undefined — and `at` the start of the period being charged, worked
 out before the charge is recorded (a past charge is shown from its record, never worked out again); record each successful
 charge in the shape above, with the `applied` and `offer` that `chargeFor` answered, and `proration: true` on a proration; mark
-any refund on the charge it refunds; log a family holding a monthly offer record that is charged full price while fewer than
+any refund on the charge it refunds (a reduced month refunded and charged again once three reductions are recorded comes
+out at full price, because the refunded record still counts: correct it by hand, as a charge of the wrong amount); log a family
+holding a monthly offer record that is charged full price while fewer than
 three of its charges since the offer carry `retention_monthly` — a break, or a history cut short, for a person to look at; in
 `LeavingFlow.offers` show `retentionOffers({ paid, retention, now, children })`; accept with `acceptRetention` and store its
 record on the family in the same transaction; move a family that took the yearly offer to the yearly cycle at its next renewal.

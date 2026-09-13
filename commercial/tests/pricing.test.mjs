@@ -301,6 +301,8 @@ test('(4) no stacking: one offer, once, however it is asked; the 10% is three ch
     overlapAmounts.push(c.amount); overlap.push({ ...month(at), amount: c.amount, list: c.list, applied: c.applied, offer: c.offer });
   }
   assert.deepEqual(overlapAmounts, [179_100, 179_100, 179_100, 199_000], 'taken inside an overlap: still the next three');
+  const newestFirst = [2, 3, 4, 5].map((k) => chargeFor({ children: 1, cycle: 'monthly', retention: inOverlap, paid: overlap.slice(0, k).reverse(), at: overlap[k].periodStart }).amount);
+  assert.deepEqual(newestFirst, [179_100, 179_100, 179_100, 199_000], 'the same charges passed newest first: the walk still starts from the period reaching furthest');
   // The walk counts months, not reductions: three months charged after the offer month are the three even when none carried the 10%
   // (its record not read for them), and the 10% does not move later. The offer month is the one covering the moment it was taken, to
   // the millisecond: taken at a month's first, the month before does not stand in for it.
