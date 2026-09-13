@@ -76,13 +76,14 @@ test('through the service: a family in the opening seats four children and not a
 
 // The page, with its own clock and the server's moved together: sign-up, then the family's step, as a parent meets them.
 async function signUpAt(t, clock) {
-  const h = await uiFixture(t, { signedIn: false, family: false, clock });
-  h.f.advance(clock() - h.f.now());
+  // the server's clock is set before the page loads, so the page's first request already happens on that day
+  const h = await uiFixture(t, { signedIn: false, family: false, clock, location: async (f) => { f.advance(clock() - f.now()); return null; } });
   h.api.signInScreen(true);
   h.setAuth('newParent', { signUp: async () => ({ stage: 'ready', idToken: h.f.token('newParent') }), idToken: async () => h.f.token('newParent') });
-  h.nodes('INPUT').filter((i) => i.type === 'checkbox')[0].checked = true; // the terms
+  const [terms, emails] = h.nodes('INPUT').filter((i) => i.type === 'checkbox');
+  terms.checked = true; emails.checked = true; // the terms, and the account and progress emails the service needs
   await h.submitLogin();
-  assert.ok(h.root.textContent.includes('Name your crew.'));
+  assert.ok(h.root.textContent.includes('Name your crew.'), `${h.message.textContent} | ${h.root.textContent.slice(0, 200)}`);
   h.nodes('INPUT')[0].value = 'Test crew'; await h.click('Create family workspace');
   return h;
 }
@@ -102,7 +103,8 @@ test('the page: a family made before the doors open gets the ordinary offer and 
   assert.ok(h.root.textContent.includes('Start the 7-day free trial'), 'before 19 September: the ordinary trial, on the parent\'s tap');
   assert.equal(h.requests.filter((r) => r.path === '/api/billing/trial').length, 0);
   now = WIB('2026-09-19T09:00:00'); h.f.advance(now - h.f.now());
-  h.setAuth('newParent'); h.api.signInScreen(); await h.submitLogin(); // days later: a new session
+  await h.api.refresh(); // days later: the page asks the server again, and the old session is long gone
+  h.setAuth('newParent'); h.api.signInScreen(); await h.submitLogin();
   assert.ok(h.root.textContent.includes('a slot for each of up to 4 children, free until 10 October 2026, 23:59 WIB.'), h.root.textContent.slice(0, 300));
   await h.click('Start the free trial');
   assert.ok(h.root.textContent.includes('Opening free trial, ends 10 October 2026, 23:59 WIB.'));
