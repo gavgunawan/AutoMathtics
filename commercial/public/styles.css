@@ -692,7 +692,8 @@ html[data-mode=site] .masthead,html[data-mode=site] footer{max-width:760px}
 .doc table{width:100%;border-collapse:collapse}
 .doc th,.doc td{padding:12px 14px;border-bottom:1px solid var(--v2line);text-align:left;font:600 16px var(--ui);color:var(--ink)}
 .doc thead th{font:700 10px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
-.doc thead th:last-child,.doc td{text-align:right}
+.doc thead th:not(:first-child),.doc td{text-align:right}
+@media(max-width:520px){.doc th,.doc td{padding:10px 8px}.doc td{font-size:14px}}
 .doc td{font:600 17px var(--mono);font-variant-numeric:tabular-nums;color:var(--gold)}
 .doc .doc-note{font-size:14px;color:var(--muted)}
 .doc .doc-cta{margin:24px 0 4px;text-align:center}
