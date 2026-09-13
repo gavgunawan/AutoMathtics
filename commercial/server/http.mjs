@@ -159,7 +159,8 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
       // Signature failures are budgeted per client address, like bad logins.
       const hook = path.match(/^\/api\/webhooks\/([^/]{1,32})$/);
       if (hook) {
-        if (!payments) fail(404, 'NOT_FOUND');
+        // payments not open (PAYMENT_PROVIDER=none): there is no provider to hear from, so the route does not exist, before a byte is read
+        if (!payments || payments.open === false) fail(404, 'NOT_FOUND');
         if (req.method !== 'POST') fail(405, 'METHOD_NOT_ALLOWED');
         const raw = await rawBody(req, WEBHOOK_BODY_LIMIT);
         try { return json(200, await payments.receive(hook[1], raw, req.headers)); }

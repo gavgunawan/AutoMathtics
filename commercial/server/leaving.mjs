@@ -71,14 +71,17 @@ export function fewestSeatsPlan(plan, children) {
  *   too expensive        the smaller plan, or fewer seats at the next renewal (whichever of the two is a different plan)
  *   technical problems   the feedback panel with the reason filled in, and nothing cancelled yet (`hold`)
  *   anything else        no offer: the page goes straight to what the parent asked for
+ *   payments not open    whatever the reason, no pause and no plan or seat offer (PAYMENT_PROVIDER=none): a provider would carry them out
  *
  * At most two, and none at all when this family was shown offers inside the last 90 days (`capped`), so a family cannot be
  * talked round twice a quarter. → { offers, capped, hold }
  */
-export function offersFor({ reason, state = 'none', plan = null, cancelAtPeriodEnd = false, paused = false, cadence = 'weekly', seatedChildren = 0, lastOffersAt = null, now = 0 }) {
+export function offersFor({ reason, state = 'none', plan = null, cancelAtPeriodEnd = false, paused = false, cadence = 'weekly', seatedChildren = 0, lastOffersAt = null, now = 0, paymentsOpen = true }) {
   if (!LEAVING_REASONS.includes(reason)) return { offers: [], capped: false, hold: false };
   const capped = Number.isSafeInteger(lastOffersAt) && lastOffersAt > now - OFFER_WINDOW_MS;
-  const paid = plan !== null && plan !== 'trial' && !!PLANS[plan]?.purchasable;
+  // payments not open: every pause, plan and seat offer needs a paid plan, and with no provider to carry one out none counts as paid
+  // here; the email and feedback offers need no provider and stay
+  const paid = paymentsOpen !== false && plan !== null && plan !== 'trial' && !!PLANS[plan]?.purchasable;
   const offers = [];
   if (reason === 'too_many_emails') {
     if (cadence === 'weekly') offers.push({ kind: 'email_monthly' }); // monthly comes before off: the least the parent asked for
@@ -146,13 +149,15 @@ export class LeavingFlow {
     this.foundation = foundation; this.store = store; this.billing = billing; this.payments = payments; this.email = email; this.now = now;
     this.audit = audit || ((tx, action, actor, familyId, extra) => foundation.audit(tx, action, actor, familyId, null, extra));
   }
+  /** Whether payments are open (PAYMENT_PROVIDER): closed, the flow offers nothing a provider would carry out, and refuses it if asked. */
+  get paymentsOpen() { return this.billing?.paymentsOpen !== false && this.payments?.open !== false; }
   path(familyId, id) { return `families/${familyId}/leaving/${id}`; }
   async records(tx, familyId) { return (await tx.entries(`families/${familyId}/leaving`, 50)).map(([, r]) => r); }
   /** What the rules need to know about the family, and what the page needs to show. */
   facts(family, prefs, records, now) {
     const sub = family.subscription || null, state = sub ? deriveState(sub, now) : 'none', e = sub ? entitlementFor(sub, now) : null;
-    return { rules: { state, plan: sub?.plan ?? null, cancelAtPeriodEnd: !!sub?.cancelAtPeriodEnd, paused: !!sub?.pause, cadence: prefs.cadence, seatedChildren: (family.activeChildIds || []).length, lastOffersAt: lastOffersAt(records), now },
-      view: { state, plan: sub?.plan ?? null, planName: sub ? PLANS[sub.plan]?.name || sub.plan : null, seats: sub?.seats ?? null, seatedChildren: (family.activeChildIds || []).length,
+    return { rules: { state, plan: sub?.plan ?? null, cancelAtPeriodEnd: !!sub?.cancelAtPeriodEnd, paused: !!sub?.pause, cadence: prefs.cadence, seatedChildren: (family.activeChildIds || []).length, lastOffersAt: lastOffersAt(records), now, paymentsOpen: this.paymentsOpen },
+      view: { payments: { open: this.paymentsOpen }, state, plan: sub?.plan ?? null, planName: sub ? PLANS[sub.plan]?.name || sub.plan : null, seats: sub?.seats ?? null, seatedChildren: (family.activeChildIds || []).length,
         cadence: prefs.cadence, periodEnd: sub?.periodEnd ?? null, accessUntil: e?.accessUntil ?? null, cancelAtPeriodEnd: !!sub?.cancelAtPeriodEnd, pause: e?.pause ?? null, reasons: [...LEAVING_REASONS] } };
   }
   /** Read-only: the reasons, what this family is, and the offers this reason earns. Nothing is recorded by looking. */
@@ -175,6 +180,9 @@ export class LeavingFlow {
   }
   async submit(ctx, body) {
     const input = readLeavingInput(body), operationId = this.billing.eventId(body);
+    // payments not open: a pause or a change of plan would reach a provider, so it is refused before anything is read or written,
+    // whatever the browser says was offered (a cancellation is the billing route's to refuse, for anything but a trial)
+    if (!this.paymentsOpen && (input.action === 'pause' || input.action === 'downgrade')) fail(409, 'PAYMENTS_NOT_OPEN');
     const prepared = await this.store.transaction(async (tx) => {
       const { s, family } = await this.billing.parent(tx, ctx, true); // a money decision: a fresh sign-in, as cancel and pause demand
       const seen = await tx.get(this.path(s.familyId, operationId));

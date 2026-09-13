@@ -5,6 +5,8 @@ import { mailerConfig } from './mailer.mjs';
 // startup before it could listen (13 Sep 2026). A pattern that only one line depends on is a pattern nobody re-reads.
 const ADDRESS = /^[^\s@<>"]{1,64}@[^\s@<>"]{1,190}\.[^\s@<>"]{2,}$/;
 const FROM = /^(?:[^<>]{1,64}<)?[^\s@<>"]{1,64}@[^\s@<>"]{1,190}\.[^\s@<>"]{2,}>?$/;
+// A bare host name (FIREBASE_AUTH_DOMAIN): dot-separated labels of lower-case letters, digits and inner hyphens. No scheme, path or port.
+const HOST = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/;
 
 export function config(env = process.env) {
   const mode = env.APP_MODE;
@@ -40,6 +42,11 @@ export function config(env = process.env) {
   }
   const origins = [...new Set([origin, ...also])];
   if (!env.FIREBASE_WEB_API_KEY || !env.FIREBASE_WEB_APP_ID) throw Error('Set the new project web configuration.');
+  // The domain the Firebase web SDK signs in through: its reCAPTCHA and SMS name it, and the page frames its /__/auth/ handler (the
+  // CSP's frame-src). The project's own firebaseapp.com host unless FIREBASE_AUTH_DOMAIN names another, which Hosting must serve and
+  // Authentication must list as an authorized domain (automathtics.net on the live project). Empty is unset, as for APP_ALSO_ORIGINS.
+  const authDomain = env.FIREBASE_AUTH_DOMAIN ? env.FIREBASE_AUTH_DOMAIN : `${projectId}.firebaseapp.com`;
+  if (env.FIREBASE_AUTH_DOMAIN && !HOST.test(env.FIREBASE_AUTH_DOMAIN)) throw Error('FIREBASE_AUTH_DOMAIN must be a bare host name: lower-case letters, digits, dots and hyphens, with no scheme, path or port.');
   // Retired PIN peppers still verify old hashes; see pinHasher. Each must be a distinct real secret.
   const previousPeppers = (env.PIN_PEPPER_PREVIOUS || '').split(',').map((v) => v.trim()).filter(Boolean);
   if (previousPeppers.some((p) => !/^[a-f0-9]{64,}$/.test(p) || p === pepper || p === secret) ||
@@ -57,8 +64,11 @@ export function config(env = process.env) {
   if (!Number.isInteger(proxyHops) || proxyHops < 0 || proxyHops > 5) throw Error('TRUSTED_PROXY_HOPS must be 0-5.');
   // Stage 3.3: the payment provider. Only the zero-cost fake gateway exists until Stage 4; outside
   // the emulator it must be acknowledged explicitly so nobody mistakes a pilot for a shop.
+  // `none` (13 Sep 2026): payments are not open. No provider settings are read, so no gateway is built (main.mjs), no provider
+  // secret, price id or acknowledgement is asked for, and a provider variable left in the environment is ignored; every route that
+  // would reach a provider or make a plan paid answers PAYMENTS_NOT_OPEN (PAYMENTS.md → Payments not open). Accepted in every mode.
   const provider = env.PAYMENT_PROVIDER || (emulator ? 'fake' : '');
-  if (!['fake', 'stripe'].includes(provider)) throw Error('PAYMENT_PROVIDER must be "fake" or "stripe".');
+  if (!['fake', 'stripe', 'none'].includes(provider)) throw Error('PAYMENT_PROVIDER must be "fake", "stripe" or "none".');
   let webhookSecret = null, stripe = null;
   if (provider === 'fake') {
     if (!emulator && env.FAKE_PAYMENTS_ACK !== 'no-real-money') throw Error('The fake payment provider outside the emulator requires FAKE_PAYMENTS_ACK=no-real-money.');
@@ -66,7 +76,7 @@ export function config(env = process.env) {
     if (!/^[a-f0-9]{64,}$/.test(webhookSecret || '') || webhookSecret === secret || webhookSecret === pepper || previousPeppers.includes(webhookSecret)) {
       throw Error('Set WEBHOOK_SECRET_FAKE: a random hex secret of at least 32 bytes, distinct from every other secret.');
     }
-  } else {
+  } else if (provider === 'stripe') {
     // Stage 4.1: Stripe. Test-mode keys (sk_test_) are the zero-cost path for the emulator and staging;
     // production requires a live key and refuses a test one, and a live key is refused anywhere else.
     const key = env.STRIPE_SECRET_KEY || '', whsec = env.WEBHOOK_SECRET_STRIPE || '';
@@ -101,5 +111,5 @@ export function config(env = process.env) {
   const port = Number(env.PORT || 8787);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw Error('Invalid PORT.');
   return { mode, emulator, projectId, origin, origins, secret, pepper, previousPeppers, proxyHops, port, releaseSha, feedback, waitlist, payments: { provider, webhookSecrets: { fake: webhookSecret }, stripe },
-    web: { apiKey: env.FIREBASE_WEB_API_KEY, appId: env.FIREBASE_WEB_APP_ID, projectId, authDomain: `${projectId}.firebaseapp.com` } };
+    web: { apiKey: env.FIREBASE_WEB_API_KEY, appId: env.FIREBASE_WEB_APP_ID, projectId, authDomain } };
 }

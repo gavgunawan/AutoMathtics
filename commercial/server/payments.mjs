@@ -144,8 +144,19 @@ export class Payments {
   constructor({ foundation, store, billing, gateways, provider, now = Date.now, audit = null, inflightMs = INTENT_INFLIGHT_MS }) {
     this.foundation = foundation; this.store = store; this.billing = billing; this.gateways = gateways; this.provider = provider; this.now = now; this.inflightMs = inflightMs;
     this.audit = audit || ((tx, action, actor, familyId, extra) => foundation.audit(tx, action, actor, familyId, null, extra)); // extra facts (a refusal's code) ride on the row, never in childId
-    if (!gateways[provider]) throw Error(`No gateway for provider ${provider}`);
+    // Payments not open (PAYMENT_PROVIDER=none, 13 Sep 2026): there is no gateway at all, so nothing here can reach a provider, and the
+    // parent actions that would open, change or pause a paid plan are refused before they read or write (closed()). A gateway handed
+    // to a closed service is a wiring mistake that could reach one: refused at startup, like a missing gateway for an open provider.
+    this.open = provider !== 'none';
+    if (!this.open) {
+      if (gateways && Object.keys(gateways).length) throw Error('Payments are not open (PAYMENT_PROVIDER=none): no gateway may be configured.');
+      this.gateways = Object.freeze({});
+    } else if (!gateways[provider]) throw Error(`No gateway for provider ${provider}`);
+    // the billing view tells the page whether payments are open (Subscriptions.paymentsOpen): the two must agree, or the page would offer what this refuses
+    if (billing && typeof billing.paymentsOpen === 'boolean' && billing.paymentsOpen !== this.open) throw Error('Subscriptions and Payments disagree about whether payments are open.');
   }
+  /** Payments not open: the refusal every provider-reaching or plan-making parent action gives, before anything is read or written. */
+  closed() { if (!this.open) fail(409, 'PAYMENTS_NOT_OPEN'); }
   gateway(name) { const g = Object.hasOwn(this.gateways, name) ? this.gateways[name] : null; if (!g) fail(404, 'NOT_FOUND'); return g; }
   /**
    * Parent action: start a checkout for a purchasable plan. The family's customer reference for
@@ -158,6 +169,7 @@ export class Payments {
    * intent and hand the provider the same key, so it can return the same session.
    */
   async checkout(ctx, body) {
+    this.closed(); // payments not open: no checkout, before the body is even read
     object(body, ['plan', 'operationId']);
     const plan = typeof body.plan === 'string' ? PLANS[body.plan] : null;
     if (!plan || !plan.purchasable) fail(400, 'INVALID_PLAN');
@@ -293,6 +305,9 @@ export class Payments {
     const prepared = await this.store.transaction(async (tx) => {
       const { s, family } = await this.billing.parent(tx, ctx, true), now = this.now();
       const sub = family.subscription; if (!sub) fail(409, 'NO_SUBSCRIPTION');
+      // payments not open: a free trial is cancelled (or kept) as ever, having no provider side, and nothing else is: a paid
+      // subscription on the record has a provider this server cannot reach, so ending it here alone could leave it billing there
+      if (!this.open && sub.plan !== 'trial') fail(409, 'PAYMENTS_NOT_OPEN');
       if (await tx.get(`families/${s.familyId}/billing/${eventId}`)) return { replay: true }; // commit() answers a replay (or a conflict) itself
       transition(sub, { type: undo ? 'cancel.undo' : 'cancel.request' }, now); // refused here, the provider is never asked
       const gw = Object.hasOwn(this.gateways, sub.provider || '') ? this.gateways[sub.provider] : null, customerRef = family.billing?.[sub.provider] || null;
@@ -319,6 +334,7 @@ export class Payments {
    * provider's own echo (customer.subscription.updated → pause.start), which is also what reconciles a late or out-of-order one.
    */
   async pause(ctx, body) {
+    this.closed(); // payments not open: nothing is collected, so nothing pauses
     object(body, ['months', 'operationId']); const eventId = this.billing.eventId(body);
     if (!PAUSE_MONTHS.includes(body.months)) fail(400, 'INVALID_MONTHS');
     const prepared = await this.store.transaction(async (tx) => {
@@ -338,6 +354,7 @@ export class Payments {
   }
   /** Parent action: end the pause early. The provider first again, so the invoice it raises next is the one that brings the family back. */
   async resume(ctx, body) {
+    this.closed(); // payments not open: a resume brings back collection, which does not exist
     object(body, ['operationId']); const eventId = this.billing.eventId(body);
     const prepared = await this.store.transaction(async (tx) => {
       const { s, family } = await this.billing.parent(tx, ctx, true);
@@ -435,6 +452,7 @@ export class Payments {
    * choice are reprocessed by the server itself (S3.4-D).
    */
   async changePlan(ctx, body) {
+    this.closed(); // payments not open: no upgrade, no scheduled change, no clearing of one
     object(body, ['plan', 'seatChildIds', 'operationId']);
     const plan = typeof body.plan === 'string' ? PLANS[body.plan] : null;
     if (!plan || !plan.purchasable) fail(400, 'INVALID_PLAN');
