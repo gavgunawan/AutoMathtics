@@ -23,7 +23,7 @@ async function enter(h, name) {
 test('a device that has never had a session opens at the introduction, with what it costs and the public pages; Sign in is one tap away', async (t) => {
   const h = await uiFixture(t, { signedIn: false, family: false, storage: memory(), location: root, clock: () => BEFORE });
   assert.equal(h.html.attrs['data-mode'], 'join', 'the introduction, not a sign-in form');
-  for (const words of ['Maths practice they ask to do.', 'WHAT IT COSTS', 'IDR 150,000 a month', 'IDR 275,000 a month', 'IDR 125,000 a month', 'nothing is charged before 11 October'])
+  for (const words of ['Maths practice they ask to do.', 'WHAT IT COSTS', 'IDR 199,000 a month', 'IDR 379,000 a month', 'IDR 519,000 a month', 'IDR 599,000 a month', 'nothing is charged before 11 October'])
     assert.ok(h.root.textContent.includes(words), words);
   assert.deepEqual(h.nodes('A').map((a) => a.href), ['/pricing', '/terms', '/privacy', '/refunds', '/contact']);
   await h.click('I already have an account');

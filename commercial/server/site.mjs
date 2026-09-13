@@ -16,9 +16,11 @@ const UPDATED = Object.freeze({ en: '13 September 2026', id: '13 September 2026'
 // rather than printed with a placeholder: fill these in before the provider's review and they appear.
 export const BUSINESS = Object.freeze({ brand: 'AutoMathtics', legalName: null, address: null, phone: null, email: 'support@automathtics.net' });
 
-// The owner's price (12 Sep 2026): IDR 150,000 a month for the first child and IDR 125,000 for each child after it, so two are 275,000.
-export const PRICE_FIRST_CHILD = 150_000, PRICE_FURTHER_CHILD = 125_000;
-export const monthlyPrice = (children) => PRICE_FIRST_CHILD + PRICE_FURTHER_CHILD * (children - 1);
+// The owner's prices (13 Sep 2026), a month, by how many children the plan covers: IDR 199,000 for one, 379,000 for two, 519,000
+// for three and 599,000 for four. Each step is set, not derived, and nothing is priced beyond four: a larger family writes to
+// support (the Pricing page says so) rather than meeting a number nobody chose.
+export const MONTHLY_PRICES = Object.freeze({ 1: 199_000, 2: 379_000, 3: 519_000, 4: 599_000 });
+export const monthlyPrice = (children) => (Object.hasOwn(MONTHLY_PRICES, children) ? MONTHLY_PRICES[children] : null);
 const group = (n, separator) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, separator);
 const money = { en: (n) => `IDR ${group(n, ',')}`, id: (n) => `Rp${group(n, '.')}`, monthly: monthlyPrice };
 
