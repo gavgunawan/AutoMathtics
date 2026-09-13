@@ -512,8 +512,9 @@ reach this project. A service account key would have no such notion — any work
 
 The identity it issues is its own account with what `scripts/deploy-staging.sh` actually uses and nothing else: Cloud Run,
 Cloud Build, Artifact Registry, the build's storage bucket, Hosting, Firestore rules, reading the project, and looking at
-secret *versions* by name. Reading a secret's value is the runtime's business. It may act as the runtime account and as no
-other identity, granted on that account rather than across the project.
+secret *versions* by name. Reading a secret's value is the runtime's business. It may act as the runtime account and
+the build account (Cloud Build runs as the default compute account) and as no other identity, each granted on that one
+account rather than across the project.
 
 After block H, put the two lines it prints into GitHub under Settings → Secrets and variables → Actions → **Variables**:
 `GCP_WORKLOAD_IDENTITY_PROVIDER` and `GCP_DEPLOY_SERVICE_ACCOUNT`. Neither is secret; they name things, and a name grants

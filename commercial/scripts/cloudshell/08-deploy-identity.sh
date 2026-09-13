@@ -11,7 +11,7 @@
 # prefer this over a key, which has no notion of who is using it.
 #
 # The identity it hands out is its own account with only what deploying needs — Cloud Run, Cloud Build, Artifact
-# Registry, Hosting, Firestore rules, and permission to act as the runtime account. Not the runtime account, whose
+# Registry, Hosting, Firestore rules, and permission to act as the runtime and build accounts. Not the runtime account, whose
 # Firestore and Identity Platform powers a deploy has no use for, and not owner.
 #
 #   source <(curl -fsSL https://raw.githubusercontent.com/gavgunawan/AutoMathtics/release/v3.0/commercial/scripts/cloudshell/08-deploy-identity.sh)
@@ -55,7 +55,12 @@ done
 # Deploying a service that RUNS AS the runtime account needs permission to act as that one account — granted on the
 # account itself, not across the project, so the deployer cannot act as any other identity that exists here.
 gcloud iam service-accounts add-iam-policy-binding "$RUNTIME_SA" --project "$PROJECT_ID" \
-  --member="serviceAccount:$DEPLOYER" --role=roles/iam.serviceAccountUser --quiet >/dev/null && echo 'the deployer may act as the runtime account, and only that one'
+  --member="serviceAccount:$DEPLOYER" --role=roles/iam.serviceAccountUser --quiet >/dev/null && echo 'the deployer may act as the runtime account'
+# `gcloud run deploy --source` builds the container with Cloud Build, which runs as the project's default compute account, and
+# submitting a build that runs as an account needs permission to act as it: without this the first automated deploy stops at the
+# build with a permission error. Granted on that one account as well, never across the project.
+gcloud iam service-accounts add-iam-policy-binding "${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" --project "$PROJECT_ID" \
+  --member="serviceAccount:$DEPLOYER" --role=roles/iam.serviceAccountUser --quiet >/dev/null && echo 'the deployer may act as the build account too, and as no other identity'
 
 PRINCIPAL="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL}/attribute.repository/${REPO}"
 gcloud iam service-accounts add-iam-policy-binding "$DEPLOYER" --project "$PROJECT_ID" \
