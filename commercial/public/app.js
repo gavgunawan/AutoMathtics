@@ -40,6 +40,7 @@ const messages = {
   LEAVING_REASON_REQUIRED: 'Choose one reason first.', LEAVING_ACTION_REQUIRED: 'Choose what you would like to do.', OFFER_NOT_OFFERED: 'That option is not available for this family. Refresh and try again.',
   NOT_PAUSED: 'This subscription is not paused.', CANCEL_SCHEDULED: 'This subscription is already set to end at the period end. Keep it first if you would rather pause.',
   INVALID_MONTHS: 'A pause can be one, two or three months.', PROVIDER_UNAVAILABLE: 'That change needs the payment provider, which is not available here.', EMAIL_UNAVAILABLE: 'Email settings are not available just now.',
+  PAYMENTS_NOT_OPEN: 'Subscriptions are not open yet. Nothing was changed.', // PAYMENT_PROVIDER=none: the server refused what a payment provider would carry out
   INSUFFICIENT_GRID_COINS: 'Not enough Grid Coins yet.', INSUFFICIENT_REWARD_POINTS: 'Not enough Reward Points yet.',
   ITEM_ALREADY_OWNED: 'You already own that item.', SHIELD_LIMIT: 'You can hold at most two streak shields.',
   EGG_ALREADY_WARMING: 'Your Mystery Egg is already warming.', REWARD_DAILY_LIMIT: 'That reward has reached its daily limit.',
@@ -587,10 +588,17 @@ function kidRow(child) {
   acts.append(button(`Reset ${child.nickname}’s PIN`, () => resetPinScreen(child), 'tiny'), button(`Change ${child.nickname}’s starting point`, () => startScreen(child), 'tiny'));
   row.append(avatarBadge(child, { ring: a.ring }, 40), words, acts); return row;
 }
+// Payments not open (PAYMENT_PROVIDER=none, 13 Sep 2026): the billing view says whether they are (payments.open), and until it says so
+// nothing that would reach a payment provider is drawn: no plan, no checkout, no change of plan, no pause. Where the page would ask a
+// family to subscribe it says one plain sentence instead and promises no date; that the free access continues only to a family that has it.
+const CLOSED_WITH_ACCESS = 'Subscriptions are not open yet and your free access continues.', CLOSED_WITHOUT_ACCESS = 'Subscriptions are not open yet.';
+let paymentsOpen = true;
+const closedWords = (e) => (e?.status === 'active' && e.accessUntil > Date.now() ? CLOSED_WITH_ACCESS : CLOSED_WITHOUT_ACCESS);
 // Stage 3.3: a plan choice starts a checkout on the server. With the pilot's fake provider no money
 // moves: the server returns a payment reference the operator completes; a real provider (Stage 4)
 // returns a URL to go to. Nothing about the plan or the family is decided in the browser.
-function planButtons(box, billing) {
+function planButtons(box, billing, e = null) {
+  if (!paymentsOpen) { box.append(el('p', closedWords(e), 'notice')); return; } // payments not open: the sentence, never a plan
   if (!billing?.plans?.length) return;
   const row = el('div', null, 'row-buttons plan-acts');
   for (const plan of billing.plans) {
@@ -607,7 +615,7 @@ function planButtons(box, billing) {
 // Stage 3.4: change plan. Up: now (the provider bills the prorated difference). Down: at the next
 // renewal, with the parent choosing who keeps a seat — nobody loses one mid-cycle.
 function planChangeControls(box, billing, e, family) {
-  if (!billing?.plans?.length) return;
+  if (!paymentsOpen || !billing?.plans?.length) return; // payments not open: no change of plan, and no scheduled one to keep or clear
   if (e.scheduled) {
     const keepOp = crypto.randomUUID();
     box.append(el('p', `Switching to ${e.scheduled.planName} (${e.scheduled.seats} child slots) on ${new Date(e.scheduled.at).toLocaleDateString()}.`, 'notice'),
@@ -648,6 +656,7 @@ function downgradeScreen(plan, family, op) {
 // link in an email. It always names what will and will not change, asks why, offers the alternative the server decided on (never
 // one the browser invented), and only then does what the parent asked. Nothing is sent until a tap: the first screen writes
 // nothing at all, and cancelling goes through its own confirmation screen and the existing /api/billing/cancel route.
+const leavingKicker = () => (paymentsOpen ? 'CANCEL OR PAUSE' : 'CANCEL'); // payments not open: there is no pause to promise
 const LEAVING_REASONS = [
   ['too_expensive', 'It costs too much'],
   ['not_using', 'We are not using it'],
@@ -667,7 +676,7 @@ function leavingFacts(box, e) {
 }
 function leavingScreen(family, e, source = 'app') {
   transientView = true;
-  const box = panel('CANCEL OR PAUSE', family.label, 'Before anything changes: tell us why you are thinking of leaving. There may be an easier answer than cancelling.', 'w520');
+  const box = panel(leavingKicker(), family.label, 'Before anything changes: tell us why you are thinking of leaving. There may be an easier answer than cancelling.', 'w520');
   onBack = refresh;
   leavingFacts(box, e);
   const picks = new Map();
@@ -704,14 +713,19 @@ function leavingSend(view, body, told) {
 function leavingOffersScreen(family, e, view) {
   transientView = true;
   const hold = view.hold === true; // technical problems: the feedback panel first, and nothing cancelled yet
-  const box = panel('CANCEL OR PAUSE', hold ? 'Let us fix it first' : 'What would you like to do?',
+  const box = panel(leavingKicker(), hold ? 'Let us fix it first' : 'What would you like to do?',
     hold ? 'Tell us what went wrong and we will look into it. Nothing is cancelled by doing that.'
       : view.offers.length ? 'One of these may suit you better than leaving. Or carry on below.' : 'Here is what you can do.', 'w520');
   onBack = refresh;
   leavingFacts(box, e);
+  // payments not open (this answer's own word, or the billing view's): the one sentence where the alternatives to leaving would be, and
+  // never a pause or a plan, whatever else arrived
+  const open = paymentsOpen && view.payments?.open !== false;
+  if (!open) box.append(el('p', closedWords(e), 'notice'));
   // the offers stand in one of v2's rows of buttons, the notice that explains a pause above it; never loose in the card
   const offers = el('div', null, 'row-buttons');
-  for (const offer of view.offers) {
+  const shown = view.offers.filter((o) => open || !['pause', 'downgrade', 'seats'].includes(o.kind));
+  for (const offer of shown) {
     if (offer.kind === 'email_monthly') offers.append(button('Send the progress report monthly instead of weekly', leavingSend(view, { action: 'reduce_email', cadence: 'monthly', offerAccepted: 'email_monthly' }, () => 'The progress report now comes once a month, on the first Monday. Your subscription is unchanged.'), 'primary'));
     if (offer.kind === 'email_off') offers.append(button('Turn the progress report off, keep the subscription', leavingSend(view, { action: 'reduce_email', cadence: 'off', offerAccepted: 'email_off' }, () => 'The progress report is off. Your subscription is unchanged.'), 'ghost'));
     if (offer.kind === 'pause') {
@@ -728,12 +742,12 @@ function leavingOffersScreen(family, e, view) {
       note('Nothing has been cancelled. Tell us below and we will look into it.');
     }, 'primary'));
   }
-  if (view.offers.length) box.append(offers);
+  if (shown.length) box.append(offers);
   if (view.capped) box.append(el('p', 'We offered you alternatives not long ago, so here are the plain choices.', 'small muted'));
   box.append(actionRow(
     button('Keep everything as it is', leavingSend(view, { action: 'keep' }, () => 'Nothing was changed. Thank you for telling us.'), 'ghost'),
     hold ? button('I still want to cancel', () => leavingOffersScreen(family, e, { ...view, hold: false, offers: [] }), 'text-button')
-      : ['trial', 'active', 'grace', 'paused'].includes(e?.state) ? button('Cancel my subscription', () => leavingCancelScreen(family, e, view), 'text-button') : null,
+      : (open ? ['trial', 'active', 'grace', 'paused'].includes(e?.state) : e?.state === 'trial') ? button('Cancel my subscription', () => leavingCancelScreen(family, e, view), 'text-button') : null, // payments not open: a free trial only
     button('Back', refresh, 'ghost')));
 }
 // Cancelling goes through its own screen, like deleting the family and scrapping a rocket: one tap on the button above sends
@@ -741,9 +755,9 @@ function leavingOffersScreen(family, e, view) {
 function leavingCancelScreen(family, e, view) {
   transientView = true;
   const paused = e?.state === 'paused', when = e?.accessUntil ? new Date(e.accessUntil).toLocaleDateString() : null;
-  const box = panel('CANCEL OR PAUSE', 'Cancel the subscription?', paused
+  const box = panel(leavingKicker(), 'Cancel the subscription?', paused
     ? 'This subscription is paused, so cancelling ends it now. Nothing more will ever be collected for it. Your children keep their profiles and progress.'
-    : `The grid stays open until ${when || 'the end of the period you have paid for'} and is not renewed after that. Your children keep their profiles, their progress and their coins. You can subscribe again whenever you like.`, 'w460');
+    : `The grid stays open until ${when || 'the end of the period you have paid for'} and is not renewed after that. Your children keep their profiles, their progress and their coins. ${paymentsOpen ? 'You can subscribe again whenever you like.' : closedWords(e)}`, 'w460');
   onBack = refresh;
   box.append(actionRow(button('Back', () => leavingOffersScreen(family, e, view), 'ghost'), // Back first: the second tap of a double-tap lands here, not on Cancel
     button(paused ? 'Yes, end it now' : 'Yes, cancel at the period end', leavingSend(view, { action: 'cancel' }, () => (paused ? 'The subscription has ended. Nothing more will be charged.' : `Cancelled. The grid stays open until ${when || 'the end of this period'}, and you can keep it any time before then.`)), 'primary')));
@@ -761,6 +775,7 @@ function deletionScreen(family) {
 async function parentScreen() {
   const family = model.family, e = family.entitlement || { status: 'inactive', seatLimit: 0, accessUntil: 0 };
   const billing = await api('/billing'); // plans, trial eligibility and the payment reference come from the server, never guessed from /me
+  paymentsOpen = billing?.payments?.open !== false; // PAYMENT_PROVIDER=none: the server says payments are not open, and no plan control below is drawn
   const active = e.status === 'active' && e.accessUntil > Date.now(); // Display only; API is authoritative.
   const box = panel('MISSION CONTROL', family.label, 'Your explorers, your grid. Hand the device over when it’s time to play; parent access stays locked until you sign in again.', 'admin',
     { back: false }); // the workspace every other parent screen goes back TO
@@ -793,23 +808,27 @@ async function parentScreen() {
   const plan = el('section', null, 'admin-sec feature-box'); plan.append(el('h2', '💳 Plan & seats', 'log-title'));
   if (e.state) { // a subscription: what it is and when it turns
     const when = e.accessUntil ? new Date(e.accessUntil).toLocaleDateString() : null;
-    const line = e.state === 'trial' ? `${e.planName}${e.cancelAtPeriodEnd ? ', ending' : ', ends'} ${trialEnds(e) || when}. Subscribe before then to keep going.`
+    // payments not open: the line says what the plan is and stops there; the one sentence about subscriptions comes with planButtons
+    const subscribeWords = (words) => (paymentsOpen ? ` ${words}` : '');
+    const line = e.state === 'trial' ? `${e.planName}${e.cancelAtPeriodEnd ? ', ending' : ', ends'} ${trialEnds(e) || when}.${subscribeWords('Subscribe before then to keep going.')}`
       : e.state === 'active' ? `${e.planName} plan, ${e.seatLimit} child slots. ${e.cancelAtPeriodEnd ? `Ends ${when}.` : `Renews ${when}.`}`
       : e.state === 'grace' ? `${e.planName} plan. The renewal payment has not arrived; access continues until ${when}.`
       : e.state === 'past_due' ? `${e.planName} plan. Access is paused until a payment goes through.`
       : e.state === 'paused' ? `${e.planName} plan, paused.${e.pause?.resumesAt ? ` Collection starts again on ${new Date(e.pause.resumesAt).toLocaleDateString()}.` : ''} The grid is closed until then; every profile and all progress is kept.`
-      : e.state === 'cancelled' ? 'The subscription has ended. Subscribe again to reopen the grid.' : 'The subscription expired. Subscribe again to reopen the grid.';
+      : e.state === 'cancelled' ? `The subscription has ended.${subscribeWords('Subscribe again to reopen the grid.')}` : `The subscription expired.${subscribeWords('Subscribe again to reopen the grid.')}`;
     plan.append(el('p', line, 'plan-line'));
     // Leaving (12 Sep 2026): a pause the parent asked for, said plainly, with the way out of it
     if (e.pause && e.state !== 'paused') plan.append(el('p', `Paused: the period you have paid for runs to ${e.accessUntil ? new Date(e.accessUntil).toLocaleDateString() : 'its end'}${e.pause.resumesAt ? `, then nothing is collected until ${new Date(e.pause.resumesAt).toLocaleDateString()}` : ''}.`, 'plan-line'));
-    if (e.pause) {
+    if (e.pause && paymentsOpen) { // payments not open: nothing is collected, so there is no collection to start again
       const resumeOp = crypto.randomUUID();
       plan.append(actionRow(button('Start my subscription again now', async () => { await api('/billing/resume', { operationId: resumeOp }); note('The pause is over. Your next invoice comes as usual.'); await refresh(); }, 'tiny c-mint')));
     }
     if (['trial', 'active', 'grace'].includes(e.state)) {
       const cancelOp = crypto.randomUUID(), acts = el('div', null, 'plan-acts'); // one id per rendered button: a retried click is the same event
-      if (e.cancelAtPeriodEnd) acts.append(button('Keep my subscription', async () => { await api('/billing/cancel', { undo: true, operationId: cancelOp }); await refresh(); }, 'tiny c-mint'));
-      else if (!e.pause) acts.append(button('Cancel or pause', () => leavingScreen(family, e), 'tiny c-red')); // the leaving flow: a reason, an offer, and only then the action
+      // payments not open: a free trial is cancelled (or kept) here as ever, with no pause beside it; a paid plan on the record waits for a provider
+      const cancellable = paymentsOpen || e.plan === 'trial';
+      if (e.cancelAtPeriodEnd) { if (cancellable) acts.append(button('Keep my subscription', async () => { await api('/billing/cancel', { undo: true, operationId: cancelOp }); await refresh(); }, 'tiny c-mint')); }
+      else if (!e.pause && cancellable) acts.append(button(paymentsOpen ? 'Cancel or pause' : 'Cancel the free trial', () => leavingScreen(family, e), 'tiny c-red')); // the leaving flow: a reason, an offer, and only then the action
       // a child without a seat can be given a free one (adding only; a downgrade is the only way a seat is taken away)
       const seated = family.children.filter((c) => c.status === 'active').map((c) => c.id);
       if (active && seated.length < e.seatLimit) for (const c of family.children.filter((c) => c.status !== 'active')) {
@@ -821,10 +840,10 @@ async function parentScreen() {
     }
     // a paused family cancels (or ends the pause) through the same flow; it never starts a fresh checkout, because its
     // subscription is still there, waiting (CHECKOUT_STATES in payments.mjs would refuse one)
-    if (e.state === 'paused') plan.append(actionRow(button('Cancel or pause', () => leavingScreen(family, e), 'tiny c-red')));
-    if (!['active', 'grace', 'paused'].includes(e.state)) planButtons(plan, billing);
+    if (e.state === 'paused' && paymentsOpen) plan.append(actionRow(button('Cancel or pause', () => leavingScreen(family, e), 'tiny c-red')));
+    if (!['active', 'grace', 'paused'].includes(e.state)) planButtons(plan, billing, e);
   } else if (!active) {
-    planButtons(plan, billing);
+    planButtons(plan, billing, e);
     if (billing?.trial?.eligible) {
       const trialOp = crypto.randomUUID(), opening = billing.trialOffer?.opening === true; // the server says what a trial started now gives
       plan.append(el('p', opening ? `Your parent account is ready. Start the free trial: a slot for each of up to ${billing.trialOffer.seats} children, free until ${TRIAL.endsWords}.`
@@ -910,7 +929,9 @@ async function emailScreen(token) {
     monthlyFirst ? button('No, stop the report', apply({ cadence: 'off' }), 'ghost') : null,
     button('Cancel', async () => { await refresh(); note('Nothing was changed.'); }, 'ghost')));
   if (d.action === 'unsub' && model?.role === 'parent' && model.family) { // signed in on this device: the whole flow is one tap away
-    box.append(actionRow(button('It is not just the email — cancel or pause', () => leavingScreen(model.family, model.family.entitlement, 'email'), 'text-button')));
+    // payments not open: the flow can cancel a free trial and nothing else, so it is offered to a family on one, with no pause named
+    if (paymentsOpen) box.append(actionRow(button('It is not just the email — cancel or pause', () => leavingScreen(model.family, model.family.entitlement, 'email'), 'text-button')));
+    else if (model.family.entitlement?.state === 'trial') box.append(actionRow(button('It is not just the email — cancel the free trial', () => leavingScreen(model.family, model.family.entitlement, 'email'), 'text-button')));
   }
 }
 // Stage 4 review: the parent still has the old phone and wants a new number on the account (RECOVERY.md). A fresh sign-in
@@ -2330,7 +2351,8 @@ if (returned?.has('resetsms')) {
 }
 if (returned?.get('checkout')) {
   if (typeof history === 'object' && history?.replaceState) history.replaceState(null, '', location.pathname);
-  if (returned.get('result') === 'success') { note('Payment received. Your plan updates as soon as the payment provider confirms it; this page checks again in a moment.'); setTimeout(() => { if (!working) run(refresh); }, 4000); }
+  if (!paymentsOpen) { /* payments not open: there is no checkout to come back from, so nothing is said about one */ }
+  else if (returned.get('result') === 'success') { note('Payment received. Your plan updates as soon as the payment provider confirms it; this page checks again in a moment.'); setTimeout(() => { if (!working) run(refresh); }, 4000); }
   else note('Checkout cancelled. Nothing was charged.');
 }
 // email-v1: a button in the weekly email carries its token in the fragment (#email=…), which the browser never sends to a server,

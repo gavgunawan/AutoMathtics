@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Run from Cloud Shell after completing DEPLOY_V3.md. Never source a local .env.
+# The same helper deploys a live project (npm run deploy:live; DEPLOY_V3.md → A live project with payments not open): APP_MODE=production
+# and, until a payment provider is connected, PAYMENT_PROVIDER=none. Every refusal below holds for both.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 : "${PROJECT_ID:?Set the NEW Firebase project ID}"
@@ -15,6 +17,23 @@ fi
 if env | grep -qE '^[A-Z0-9_]*EMULATOR[A-Z0-9_]*=.'; then
   echo 'Remove emulator environment variables before cloud deployment.' >&2; exit 1
 fi
+# The mode the service runs in: staging by default, production for a live project. Then the payment provider, which decides the secrets that
+# must exist and what the service is told: Stripe its key, endpoint secret and price ids; the fake provider its signing secret, and never in
+# production, where it would hand out paid plans for no money; none (payments not open, PAYMENTS.md) nothing at all.
+APP_MODE="${APP_MODE:-staging}"
+[[ "$APP_MODE" == staging || "$APP_MODE" == production ]] || { echo 'APP_MODE must be staging or production.' >&2; exit 1; }
+PAYMENT_PROVIDER="${PAYMENT_PROVIDER:-fake}"
+case "$PAYMENT_PROVIDER" in
+  stripe)
+    for v in STRIPE_PRICE_STARTER STRIPE_PRICE_FAMILY STRIPE_PRICE_BIG; do [[ "${!v:-}" =~ ^price_[A-Za-z0-9]{8,}$ ]] || { echo "Set $v to the Stripe price id (price_...)." >&2; exit 1; }; done
+    PROVIDER_SECRETS='am-v3-stripe-key am-v3-webhook-stripe'; PROVIDER_BINDINGS=',STRIPE_SECRET_KEY=am-v3-stripe-key:1,WEBHOOK_SECRET_STRIPE=am-v3-webhook-stripe:1' ;;
+  fake)
+    [[ "$APP_MODE" != production ]] || { echo 'The fake payment provider hands out paid plans for no money: never in production. Deploy a live project with PAYMENT_PROVIDER=none.' >&2; exit 1; }
+    PROVIDER_SECRETS='am-v3-webhook-fake'; PROVIDER_BINDINGS=',WEBHOOK_SECRET_FAKE=am-v3-webhook-fake:1' ;;
+  none)
+    PROVIDER_SECRETS=''; PROVIDER_BINDINGS='' ;;
+  *) echo 'PAYMENT_PROVIDER must be stripe, fake or none.' >&2; exit 1 ;;
+esac
 for tool in node npm gcloud java git tar; do command -v "$tool" >/dev/null || { echo "Install $tool first." >&2; exit 1; }; done
 if [[ ! -f package-lock.json ]]; then
   echo 'Run npm install --ignore-scripts, review and commit package-lock.json first.' >&2; exit 1
@@ -31,22 +50,20 @@ if [[ ! -x node_modules/.bin/firebase ]]; then
 fi
 REGION=asia-southeast1
 SERVICE=automathtics-v3
-RUNTIME_SA="automathtics-v3-runtime@${PROJECT_ID}.iam.gserviceaccount.com"
+# The account the service runs as: automathtics-v3-runtime unless RUNTIME_SA names another (the live workflow names it from a repository
+# variable), and always an account of the project being deployed.
+RUNTIME_SA="${RUNTIME_SA:-automathtics-v3-runtime@${PROJECT_ID}.iam.gserviceaccount.com}"
+[[ "$RUNTIME_SA" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]@${PROJECT_ID}\.iam\.gserviceaccount\.com$ ]] || { echo 'RUNTIME_SA must be a service account of the project being deployed.' >&2; exit 1; }
 ORIGIN="https://${PROJECT_ID}.web.app" # where the deploy checks the live release: the project's own host answers whatever APP_ORIGIN names
 # The address every link and email carries (APP_ORIGIN: automathtics.net once Hosting serves it), and the other hosts the service still
 # takes forms from (APP_ALSO_ORIGINS, comma-separated: the project's own, for devices that opened the app there). Default: the project's host.
 APP_ORIGIN="${APP_ORIGIN:-$ORIGIN}"
 [[ "$APP_ORIGIN" =~ ^https://[a-z0-9.-]+$ ]] || { echo 'APP_ORIGIN must be https://host, with no path or trailing slash.' >&2; exit 1; }
 [[ -z "${APP_ALSO_ORIGINS:-}" || "$APP_ALSO_ORIGINS" =~ ^https://[a-z0-9.-]+(,https://[a-z0-9.-]+)*$ ]] || { echo 'APP_ALSO_ORIGINS must list https://host origins, separated by commas.' >&2; exit 1; }
+# The domain sign-in runs through (config.mjs FIREBASE_AUTH_DOMAIN): the project's firebaseapp.com host unless named, and then a bare host name.
+[[ -z "${FIREBASE_AUTH_DOMAIN:-}" || "$FIREBASE_AUTH_DOMAIN" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$ ]] || { echo 'FIREBASE_AUTH_DOMAIN must be a bare host name: lower-case letters, digits, dots and hyphens.' >&2; exit 1; }
 # IAM and the exact secret versions must already exist. Do not create/rotate them here.
 gcloud iam service-accounts describe "$RUNTIME_SA" --project "$PROJECT_ID" >/dev/null
-# the provider decides which secrets must exist: Stripe needs its key and endpoint secret, the fake provider its signing secret
-if [[ "${PAYMENT_PROVIDER:-fake}" == stripe ]]; then
-  for v in STRIPE_PRICE_STARTER STRIPE_PRICE_FAMILY STRIPE_PRICE_BIG; do [[ "${!v:-}" =~ ^price_[A-Za-z0-9]{8,}$ ]] || { echo "Set $v to the Stripe price id (price_...)." >&2; exit 1; }; done
-  PROVIDER_SECRETS='am-v3-stripe-key am-v3-webhook-stripe'
-else
-  PROVIDER_SECRETS='am-v3-webhook-fake'
-fi
 for name in am-v3-session am-v3-pin-pepper $PROVIDER_SECRETS; do
   gcloud secrets versions describe 1 --secret "$name" --project "$PROJECT_ID" >/dev/null
 done
@@ -83,14 +100,15 @@ npm run test:emulator
 DIRTY="$(git status --porcelain --untracked-files=no)"
 [[ "$(git rev-parse HEAD)" == "$RELEASE_SHA" && -z "$DIRTY" ]] || { echo 'The checkout changed while the tests ran: start again.' >&2; exit 1; }
 # Ephemeral config contains ONLY public identifiers. Secret values never enter it.
-export PROJECT_ID APP_ORIGIN APP_ALSO_ORIGINS FIREBASE_WEB_API_KEY FIREBASE_WEB_APP_ID TRUSTED_PROXY_HOPS PAYMENT_PROVIDER STRIPE_PRICE_STARTER STRIPE_PRICE_FAMILY STRIPE_PRICE_BIG RELEASE_SHA FEEDBACK_TO EMAIL_PROVIDER EMAIL_FROM WAITLIST_FROM WAITLIST_REPLY_TO WAITLIST_SHEET_ID
+export PROJECT_ID APP_MODE APP_ORIGIN APP_ALSO_ORIGINS FIREBASE_WEB_API_KEY FIREBASE_WEB_APP_ID FIREBASE_AUTH_DOMAIN TRUSTED_PROXY_HOPS PAYMENT_PROVIDER STRIPE_PRICE_STARTER STRIPE_PRICE_FAMILY STRIPE_PRICE_BIG RELEASE_SHA FEEDBACK_TO EMAIL_PROVIDER EMAIL_FROM WAITLIST_FROM WAITLIST_REPLY_TO WAITLIST_SHEET_ID
 node --input-type=module - "$ENV_FILE" <<'NODE'
 import { writeFileSync } from 'node:fs';
 const p = process.env;
-writeFileSync(process.argv[2], JSON.stringify({ APP_MODE: 'staging',
+writeFileSync(process.argv[2], JSON.stringify({ APP_MODE: p.APP_MODE || 'staging',
   APP_ORIGIN: p.APP_ORIGIN, ...(p.APP_ALSO_ORIGINS ? { APP_ALSO_ORIGINS: p.APP_ALSO_ORIGINS } : {}), FIREBASE_PROJECT_ID: p.PROJECT_ID,
-  FIREBASE_WEB_API_KEY: p.FIREBASE_WEB_API_KEY, FIREBASE_WEB_APP_ID: p.FIREBASE_WEB_APP_ID,
-  TRUSTED_PROXY_HOPS: p.TRUSTED_PROXY_HOPS, RELEASE_SHA: p.RELEASE_SHA, PAYMENT_PROVIDER: p.PAYMENT_PROVIDER || 'fake', ...(p.PAYMENT_PROVIDER === 'stripe' ? { STRIPE_PRICE_STARTER: p.STRIPE_PRICE_STARTER, STRIPE_PRICE_FAMILY: p.STRIPE_PRICE_FAMILY, STRIPE_PRICE_BIG: p.STRIPE_PRICE_BIG } : { FAKE_PAYMENTS_ACK: 'no-real-money' }),
+  FIREBASE_WEB_API_KEY: p.FIREBASE_WEB_API_KEY, FIREBASE_WEB_APP_ID: p.FIREBASE_WEB_APP_ID, ...(p.FIREBASE_AUTH_DOMAIN ? { FIREBASE_AUTH_DOMAIN: p.FIREBASE_AUTH_DOMAIN } : {}),
+  // the provider: Stripe names its prices, the fake provider is acknowledged as moving no money, none (payments not open) is told nothing more
+  TRUSTED_PROXY_HOPS: p.TRUSTED_PROXY_HOPS, RELEASE_SHA: p.RELEASE_SHA, PAYMENT_PROVIDER: p.PAYMENT_PROVIDER || 'fake', ...(p.PAYMENT_PROVIDER === 'stripe' ? { STRIPE_PRICE_STARTER: p.STRIPE_PRICE_STARTER, STRIPE_PRICE_FAMILY: p.STRIPE_PRICE_FAMILY, STRIPE_PRICE_BIG: p.STRIPE_PRICE_BIG } : p.PAYMENT_PROVIDER === 'none' ? {} : { FAKE_PAYMENTS_ACK: 'no-real-money' }),
   // The waiting list writes as no-reply with Reply pointed at a person; without these it writes as EMAIL_FROM, which is blunt but never wrong
   ...(p.WAITLIST_FROM ? { WAITLIST_FROM: p.WAITLIST_FROM } : {}), ...(p.WAITLIST_REPLY_TO ? { WAITLIST_REPLY_TO: p.WAITLIST_REPLY_TO } : {}),
   // the owner's Google Sheet copy of the list, shared with the runtime account (DEPLOY_V3.md → The waiting list in a Google Sheet)
@@ -99,7 +117,7 @@ writeFileSync(process.argv[2], JSON.stringify({ APP_MODE: 'staging',
 NODE
 # Deny browser database access BEFORE publishing the new service.
 ./node_modules/.bin/firebase deploy --config firebase.staging.json --project "$PROJECT_ID" --only firestore:rules
-gcloud run deploy "$SERVICE" --project "$PROJECT_ID" --region "$REGION"   --source "$SRC" --service-account "$RUNTIME_SA" --allow-unauthenticated   --port 8080 --memory 512Mi --cpu 1 --concurrency 4 --min-instances 0 --max-instances 3   --timeout 60 --labels "release-sha=$RELEASE_SHA" --env-vars-file "$ENV_FILE"   --set-secrets "SESSION_SECRET=am-v3-session:1,PIN_PEPPER=am-v3-pin-pepper:1,$([ "${PAYMENT_PROVIDER:-fake}" = stripe ] && echo 'STRIPE_SECRET_KEY=am-v3-stripe-key:1,WEBHOOK_SECRET_STRIPE=am-v3-webhook-stripe:1' || echo 'WEBHOOK_SECRET_FAKE=am-v3-webhook-fake:1')$([ -n "${FEEDBACK_TO:-}" ] && [ "${EMAIL_PROVIDER:-fake}" = resend ] && echo ',EMAIL_API_KEY=am-v3-email-key:1')"
+gcloud run deploy "$SERVICE" --project "$PROJECT_ID" --region "$REGION"   --source "$SRC" --service-account "$RUNTIME_SA" --allow-unauthenticated   --port 8080 --memory 512Mi --cpu 1 --concurrency 4 --min-instances 0 --max-instances 3   --timeout 60 --labels "release-sha=$RELEASE_SHA" --env-vars-file "$ENV_FILE"   --set-secrets "SESSION_SECRET=am-v3-session:1,PIN_PEPPER=am-v3-pin-pepper:1${PROVIDER_BINDINGS}$([ -n "${FEEDBACK_TO:-}" ] && [ "${EMAIL_PROVIDER:-fake}" = resend ] && echo ',EMAIL_API_KEY=am-v3-email-key:1')"
 mkdir -p .hosting  # deliberately empty; git keeps no empty directory, so make sure it exists
 ./node_modules/.bin/firebase deploy --config firebase.staging.json --project "$PROJECT_ID" --only hosting
 # The revision this run created must be the one serving — traffic pinned to an earlier revision (a rollback per DEPLOY_V3.md §7)

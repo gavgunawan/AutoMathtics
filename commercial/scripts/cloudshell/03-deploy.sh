@@ -5,12 +5,21 @@
 #   source <(curl -fsSL https://raw.githubusercontent.com/gavgunawan/AutoMathtics/release/v3.0/commercial/scripts/cloudshell/03-deploy.sh)
 set -uo pipefail
 : "${PROJECT_ID:?run 01-prepare.sh first}"; : "${RUNTIME_SA:?run 01-prepare.sh first}"
-for NAME in am-v3-stripe-key am-v3-webhook-stripe; do
-  gcloud secrets versions describe 1 --secret "$NAME" --project "$PROJECT_ID" >/dev/null 2>&1 || { echo "$NAME is missing: create it first (the two lines the owner types)"; return 1 2>/dev/null || exit 1; }
-  gcloud secrets add-iam-policy-binding "$NAME" --project "$PROJECT_ID" --member="serviceAccount:$RUNTIME_SA" --role=roles/secretmanager.secretAccessor --quiet >/dev/null && echo "$NAME granted to the runtime"
-done
-export PAYMENT_PROVIDER=stripe
-export STRIPE_PRICE_STARTER='price_1UDktFEAg0w7lrNU8ixmQg6g' STRIPE_PRICE_FAMILY='price_1UDktZEAg0w7lrNU0kJdqUxK' STRIPE_PRICE_BIG='price_1UDktlEAg0w7lrNUb4AwLnP3'
+# The mode and the provider come from the environment, staging's by default: Stripe with its sandbox prices. A live project exports
+# APP_MODE=production and PAYMENT_PROVIDER=none (payments not open), which grants no provider secret and names no price, and deploys with
+# npm run deploy:live; its APP_ORIGIN, APP_ALSO_ORIGINS and FIREBASE_AUTH_DOMAIN travel in the environment to scripts/deploy-staging.sh.
+export APP_MODE="${APP_MODE:-staging}" PAYMENT_PROVIDER="${PAYMENT_PROVIDER:-stripe}"
+case "$PAYMENT_PROVIDER" in
+  stripe)
+    for NAME in am-v3-stripe-key am-v3-webhook-stripe; do
+      gcloud secrets versions describe 1 --secret "$NAME" --project "$PROJECT_ID" >/dev/null 2>&1 || { echo "$NAME is missing: create it first (the two lines the owner types)"; return 1 2>/dev/null || exit 1; }
+      gcloud secrets add-iam-policy-binding "$NAME" --project "$PROJECT_ID" --member="serviceAccount:$RUNTIME_SA" --role=roles/secretmanager.secretAccessor --quiet >/dev/null && echo "$NAME granted to the runtime"
+    done
+    export STRIPE_PRICE_STARTER="${STRIPE_PRICE_STARTER:-price_1UDktFEAg0w7lrNU8ixmQg6g}" STRIPE_PRICE_FAMILY="${STRIPE_PRICE_FAMILY:-price_1UDktZEAg0w7lrNU0kJdqUxK}" STRIPE_PRICE_BIG="${STRIPE_PRICE_BIG:-price_1UDktlEAg0w7lrNUb4AwLnP3}" ;;
+  none)
+    echo 'payments are not open (PAYMENT_PROVIDER=none): no provider secret is granted and no price is named' ;;
+  *) echo 'BLOCK C FAILED: PAYMENT_PROVIDER must be stripe or none here'; return 1 2>/dev/null || exit 1 ;;
+esac
 export TRUSTED_PROXY_HOPS="${TRUSTED_PROXY_HOPS:-2}"
 cd ~/AutoMathtics/commercial || { echo 'run 01-prepare.sh first'; return 1 2>/dev/null || exit 1; }
 # a refused pull (local edits, a diverged branch) used to print nothing and deploy whatever was on disk
@@ -26,7 +35,8 @@ fi
 # success — the owner deployed three times over two days and kept seeing the release before it (12-13 Sep 2026). So the block
 # now asks the live service which commit it is running and says plainly whether that is this checkout's.
 WANT="$(git rev-parse HEAD)"
-if npm run deploy:staging; then
+DEPLOY=deploy:staging; [[ "$APP_MODE" == production ]] && DEPLOY=deploy:live
+if npm run "$DEPLOY"; then
   echo; echo 'proxy depth probe:'
   for TRY in 1 2 3; do
     ANSWER="$(curl -s -H 'X-Forwarded-For: 203.0.113.250' "https://${PROJECT_ID}.web.app/api/health")"

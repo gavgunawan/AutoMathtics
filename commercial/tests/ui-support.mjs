@@ -34,8 +34,9 @@ export function control(root, label) {
 // svg: a DOM that makes SVG nodes (document.createElementNS), as a browser does (omit: it cannot, and the page must manage without)
 // audio: a stand-in for window.AudioContext (omit: the page has no WebAudio and plays nothing)
 // navigator: a stand-in for the browser's navigator, e.g. { userAgent: '…iPhone…' } (omit: the page has none)
-export async function uiFixture(t, { family = true, signedIn = true, clock = null, storage = null, location = null, recordBodies = [], svg = false, audio = null, navigator = null } = {}) {
-  const f = fixture();
+// provider: 'none' builds the server with payments not open (PAYMENT_PROVIDER=none): no gateway, and the billing view says so (omit: fake)
+export async function uiFixture(t, { family = true, signedIn = true, clock = null, storage = null, location = null, recordBodies = [], svg = false, audio = null, navigator = null, provider = 'fake' } = {}) {
+  const f = fixture({ provider });
   const a = signedIn ? (family ? await f.family('parentA', 2) : await f.login('parentA')) : null;
   if (typeof location === 'function') location = await location(f, a);
   const cfg = { origin: 'http://127.0.0.1', secret, emulator: true, web: { authDomain: 'demo-am-foundation.firebaseapp.com' } };

@@ -67,8 +67,23 @@ gcloud iam service-accounts add-iam-policy-binding "$DEPLOYER" --project "$PROJE
   --member="$PRINCIPAL" --role=roles/iam.workloadIdentityUser --quiet >/dev/null && echo "GitHub may become the deployer, from ${REPO} on ${BRANCH} alone"
 
 echo
-echo 'BLOCK H DONE. Put these two lines into GitHub as repository VARIABLES (Settings -> Secrets and variables ->'
-echo 'Actions -> Variables). Neither is a secret: they name things, and name alone grants nothing.'
-echo
-echo "  GCP_WORKLOAD_IDENTITY_PROVIDER = projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL}/providers/${PROVIDER}"
-echo "  GCP_DEPLOY_SERVICE_ACCOUNT     = ${DEPLOYER}"
+if [[ "${APP_MODE:-staging}" == production ]]; then
+  # a live project: the workflow's deploy-live job reads LIVE_* variables, and the one that switches it on is set last
+  echo 'BLOCK H DONE. Put these lines into GitHub as repository VARIABLES (Settings -> Secrets and variables -> Actions ->'
+  echo 'Variables) for the live job, deploy-live. None is a secret: they name things, and name alone grants nothing.'
+  echo
+  echo "  LIVE_WORKLOAD_IDENTITY_PROVIDER = projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL}/providers/${PROVIDER}"
+  echo "  LIVE_DEPLOY_SERVICE_ACCOUNT     = ${DEPLOYER}"
+  echo "  LIVE_RUNTIME_SA                 = ${RUNTIME_SA}"
+  echo "  LIVE_FIREBASE_WEB_API_KEY       = ${FIREBASE_WEB_API_KEY:-the apiKey of the live web app}"
+  echo "  LIVE_FIREBASE_WEB_APP_ID        = ${FIREBASE_WEB_APP_ID:-the appId of the live web app}"
+  echo "  LIVE_PROJECT_ID                 = ${PROJECT_ID}"
+  echo
+  echo '  Set LIVE_PROJECT_ID last: from the moment it exists, every push to release/v3.0 deploys this project too.'
+else
+  echo 'BLOCK H DONE. Put these two lines into GitHub as repository VARIABLES (Settings -> Secrets and variables ->'
+  echo 'Actions -> Variables). Neither is a secret: they name things, and name alone grants nothing.'
+  echo
+  echo "  GCP_WORKLOAD_IDENTITY_PROVIDER = projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL}/providers/${PROVIDER}"
+  echo "  GCP_DEPLOY_SERVICE_ACCOUNT     = ${DEPLOYER}"
+fi
