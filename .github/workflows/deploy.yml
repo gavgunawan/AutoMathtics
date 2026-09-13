@@ -103,8 +103,8 @@ jobs:
       RUNTIME_SA: ${{ vars.LIVE_RUNTIME_SA }}
       FIREBASE_WEB_API_KEY: ${{ vars.LIVE_FIREBASE_WEB_API_KEY }}
       FIREBASE_WEB_APP_ID: ${{ vars.LIVE_FIREBASE_WEB_APP_ID }}
-      # sign-in, its reCAPTCHA and its SMS name the site's own domain, which Hosting serves and Authentication lists as authorized
-      FIREBASE_AUTH_DOMAIN: automathtics.net
+      # the domain sign-in runs through: unset (the project's own firebaseapp.com host) until automathtics.net is served by this project's Hosting and listed in its authorized domains, then the variable LIVE_AUTH_DOMAIN=automathtics.net
+      FIREBASE_AUTH_DOMAIN: ${{ vars.LIVE_AUTH_DOMAIN }}
       TRUSTED_PROXY_HOPS: '2'
       APP_MODE: production
       PAYMENT_PROVIDER: none
