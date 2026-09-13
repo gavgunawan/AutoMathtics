@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { config } from '../server/config.mjs';
 import { preauth, preauthCsrf, pinHasher } from '../server/security.mjs';
 import { secret, pepper, rejected } from './support.mjs';
@@ -96,4 +97,8 @@ test('the environment the deploy writes is one the service can start from, addre
   // a service that copies nothing needs no Resend key at all, and must not demand one
   const quiet = { ...plain }; delete quiet.FEEDBACK_TO; delete quiet.EMAIL_PROVIDER; delete quiet.EMAIL_API_KEY;
   assert.equal(config(quiet).waitlist.mail, null, 'nothing to send with, and nothing pretending otherwise');
+  // …and main.mjs builds the mailers from exactly that, before it listens: a null mail read as cfg.waitlist.mail.provider is a
+  // TypeError at startup, a service that never opens its port (found 13 Sep 2026; every deploy sets FEEDBACK_TO, so it never fired)
+  const main = readFileSync(new URL('../server/main.mjs', import.meta.url), 'utf8');
+  assert.ok(!/cfg\.(?:waitlist|feedback)\.mail\./.test(main), 'every read of a mail setting in main.mjs tolerates a null mail');
 });

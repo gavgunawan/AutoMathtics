@@ -42,7 +42,8 @@ const feedback = new Feedback({ foundation: service, store, mailer: cfg.feedback
 const leaving = new LeavingFlow({ foundation: service, store, billing, payments, email });
 // The waiting list behind /join: addresses only, until the doors open on 19 September
 const waitlist = new Waitlist({ store, secret: cfg.secret, origin: cfg.origin, release: cfg.releaseSha || VERSION,
-  mailer: cfg.waitlist.mail.provider === 'resend' ? createMailer(cfg.waitlist.mail) : null, replyTo: cfg.waitlist.replyTo,
+  // mail is null when the service copies nothing (no FEEDBACK_TO, config.mjs), and a service with nothing to send must still start
+  mailer: cfg.waitlist.mail?.provider === 'resend' ? createMailer(cfg.waitlist.mail) : null, replyTo: cfg.waitlist.replyTo,
   log: (event) => console.error(JSON.stringify(event)) });
 const server = createApp(service, cfg, { reportError: (event) => console.error(JSON.stringify(event)), learning, game, billing, payments, support, recovery, email, feedback, leaving, waitlist });
 server.listen(cfg.port, cfg.emulator ? '127.0.0.1' : '0.0.0.0', () => {

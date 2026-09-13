@@ -3,4 +3,4 @@
 // major moves only for a change big enough to deserve it, not on a count. A pull request that only carries the number is not
 // itself worth a new one: the version names the work, and chasing its own request number would never terminate.
 // The number is set after the request is opened, when it is a fact rather than a guess: twice it was guessed, twice wrong.
-export const VERSION = '3.61.0';
+export const VERSION = '3.62.0';
