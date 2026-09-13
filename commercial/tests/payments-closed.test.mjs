@@ -7,10 +7,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { fileURLToPath } from 'node:url';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { config } from '../server/config.mjs';
 import { createApp } from '../server/http.mjs';
 import { Payments, FakeGateway, signWebhook } from '../server/payments.mjs';
@@ -250,9 +252,19 @@ test('operator reprocessing has no gateway to go through while payments are not 
 
 const execFileP = promisify(execFile);
 const SUPPORT = fileURLToPath(new URL('../scripts/support.mjs', import.meta.url)), DASHBOARD = fileURLToPath(new URL('../scripts/dashboard.mjs', import.meta.url));
-const cli = (script, env, args = []) => execFileP(process.execPath, [script, ...args], { env: { PATH: process.env.PATH, SYSTEMROOT: process.env.SYSTEMROOT || '', ...env }, timeout: 90_000 })
+// The unit job installs nothing before npm test (secure-foundation.yml), so firebase-admin resolves to a stand-in that builds nothing. What
+// is under test is the tools' own construction of the server's services, which calls nothing in the SDK before the usage; the module hook
+// sees every import, so the tools behave the same with or without an install.
+const SDK_STAND_IN = `import { registerHooks } from 'node:module';
+const stub = 'data:text/javascript,' + encodeURIComponent('export const initializeApp = () => ({}), applicationDefault = () => ({}), getAuth = () => ({}), getFirestore = () => ({}), Timestamp = { fromMillis: (ms) => ({ ms }) };');
+registerHooks({ resolve(specifier, context, next) { return specifier === 'firebase-admin' || specifier.startsWith('firebase-admin/') ? { url: stub, shortCircuit: true } : next(specifier, context); } });
+`;
+const cliWith = (hook) => (script, env, args = []) => execFileP(process.execPath, ['--import', hook, script, ...args], { env: { PATH: process.env.PATH, SYSTEMROOT: process.env.SYSTEMROOT || '', ...env }, timeout: 90_000 })
   .then((r) => ({ code: 0, err: String(r.stderr) }), (e) => ({ code: e.code, err: String(e.stderr) }));
-test('the operator tools and the nightly sweep build their services with PAYMENT_PROVIDER=none: no provider secret asked for, no gateway built', async () => {
+test('the operator tools and the nightly sweep build their services with PAYMENT_PROVIDER=none: no provider secret asked for, no gateway built', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'am-closed-cli-')); t.after(() => rm(dir, { recursive: true, force: true }));
+  const hookFile = join(dir, 'firebase-admin-stand-in.mjs'); await writeFile(hookFile, SDK_STAND_IN);
+  const cli = cliWith(pathToFileURL(hookFile).href);
   const base = { APP_MODE: 'emulator', FIREBASE_PROJECT_ID: 'demo-am-foundation', FIRESTORE_EMULATOR_HOST: '127.0.0.1:8088', SESSION_SECRET: secret, PIN_PEPPER: pepper };
   // support.mjs (the sweep job's command) builds every service before it reads its command: no command is a construction, then the usage
   const built = await cli(SUPPORT, { ...base, PAYMENT_PROVIDER: 'none' });
