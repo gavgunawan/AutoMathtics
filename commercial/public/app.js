@@ -812,15 +812,22 @@ async function parentScreen() {
 // because a change is never sent by itself.
 function emailBlock(prefs) {
   const wrap = adminSection('📧 Email updates', 'c-violet');
-  const sw = (words, detail, on) => { const l = el('label', null, 'check'), i = el('input'), s = el('span', words); i.type = 'checkbox'; i.checked = on; s.append(el('small', detail)); l.append(i, s); wrap.append(l); return i; };
-  const progress = sw('Weekly progress report', 'Every Monday: what each child got right and fast, right but slow, and wrong again and again, with a suggested pace.', prefs?.progress !== false);
-  // Leaving (12 Sep 2026): monthly instead of weekly, for a parent who finds it too much but does not want to lose it
-  const monthly = sw('Send it monthly instead', 'One email on the first Monday of the month, covering four weeks.', prefs?.cadence === 'monthly');
-  const news = sw('News and offers', 'Occasional news and offers from AutoMathtics.', prefs?.news === true);
+  const row = (type, words, detail, on, name = '') => { const l = el('label', null, 'check'), i = el('input'), s = el('span', words); i.type = type; if (name) i.name = name; i.checked = on; s.append(el('small', detail)); l.append(i, s); wrap.append(l); return i; };
+  // How often the progress report comes is one choice, not two switches. As two tick boxes, "Weekly progress report" and "Send it
+  // monthly instead" could both be ticked, and the page said two things the server holds as one (the owner, 13 Sep 2026). Three
+  // radio buttons in one named group: the browser itself keeps exactly one chosen, and "none" is a choice, not an unticked box.
+  const current = ['weekly', 'monthly', 'off'].includes(prefs?.cadence) ? prefs.cadence : prefs?.progress === false ? 'off' : 'weekly';
+  const pick = {
+    weekly: row('radio', 'Weekly progress report', 'Every Monday: what each child got right and fast, right but slow, and wrong again and again, with a suggested pace.', current === 'weekly', 'report-cadence'),
+    // Leaving (12 Sep 2026): monthly, for a parent who finds weekly too much but does not want to lose it
+    monthly: row('radio', 'Monthly progress report', 'One email on the first Monday of the month, covering four weeks.', current === 'monthly', 'report-cadence'),
+    off: row('radio', 'No progress report', 'Nothing about how the children are getting on. Choose weekly or monthly again here whenever you like.', current === 'off', 'report-cadence'),
+  };
+  const news = row('checkbox', 'News and offers', 'Occasional news and offers from AutoMathtics.', prefs?.news === true);
   const save = el('div', null, 'row email-save');
   save.append(el('span', 'Account and security emails always come.', 'row-words'), button('Save email settings', async () => {
-    // one switch, sent as the cadence it means: off, weekly, or monthly — never both a boolean and a cadence that disagree
-    const cadence = progress.checked !== true ? 'off' : monthly.checked === true ? 'monthly' : 'weekly';
+    // the one choice, sent as the cadence it names; in a browser only one of the three can be chosen at a time
+    const cadence = pick.monthly.checked === true ? 'monthly' : pick.off.checked === true ? 'off' : 'weekly';
     try { await api('/account/email', { cadence, news: news.checked === true }); await refresh(); note('Email settings saved.'); }
     catch (error) { if (error.code !== 'REAUTHENTICATE') throw error; reauthenticate(async () => { await refresh(); note('Parent verified. Set the switches again, then save.'); }); }
   }, 'tiny'));
@@ -868,12 +875,17 @@ function changeMobileScreen() {
     const consent = el('input'); consent.type = 'checkbox'; const consentLabel = el('label', null, 'check');
     consentLabel.append(consent, el('span', 'I agree to receive a verification SMS on this number. Google processes it for authentication and abuse prevention; carrier charges may apply.'));
     const otp = field('SMS verification code', 'text', { inputMode: 'numeric', pattern: '[0-9]{6}', maxLength: 6, autocomplete: 'one-time-code' });
+    const robot = captchaBox();
     const send = sendControl('Send code to the new number', () => tidy(phone.input.value), async () => {
       if (!e164(phone.input.value)) { note('Enter the number in international form, for example +62 812 3456 7890.'); return; }
-      note('Tick \u201cI\u2019m not a robot\u201d just below, then the code is sent.'); await (await auth()).changeMobileSend(tidy(phone.input.value), consent.checked); note('Code sent to the new number. Enter it below.');
+      note('Tick \u201cI\u2019m not a robot\u201d just below, then the code is sent.');
+      // The note scrolls itself into view at the foot of the page, which on a phone can carry the robot check off the top of
+      // the screen while the provider waits for it to be ticked. The box to tick is what must be in view (13 Sep 2026).
+      try { robot.scrollIntoView?.({ block: 'center' }); } catch { /* a DOM that cannot scroll */ }
+      await (await auth()).changeMobileSend(tidy(phone.input.value), consent.checked); note('Code sent to the new number. Enter it below.');
     });
     phone.input.addEventListener('input', () => send.check(true)); // the clock belongs to the number typed
-    box.append(phone.wrap, consentLabel, actionRow(send.button), captchaBox(), otp.wrap,
+    box.append(phone.wrap, consentLabel, actionRow(send.button), robot, otp.wrap,
       actionRow(button('Verify new number', async () => {
         const r = await (await auth()).changeMobileConfirm(otp.input.value); keepSdkSession = false;
         await api('/auth/logout', {}); channel?.postMessage('changed'); model = null; signInScreen(); note(r.notice); // the next sign-in carries the new factor

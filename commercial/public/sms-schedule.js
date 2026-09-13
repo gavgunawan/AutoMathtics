@@ -6,7 +6,7 @@
 // Pure: no storage and no clock of its own, so the unit tests run it as it ships.
 const SECOND = 1000, MINUTE = 60 * SECOND, HOUR = 60 * MINUTE, DAY = 24 * HOUR;
 /** The wait after the n-th send of a run (index n − 1) before the next may go; the last entry repeats. */
-export const SMS_LADDER_MS = Object.freeze([30 * SECOND, 30 * SECOND, 2 * MINUTE, 15 * MINUTE, HOUR, 6 * HOUR, 12 * HOUR, DAY]);
+export const SMS_LADDER_MS = Object.freeze([5 * SECOND, 5 * SECOND, 2 * MINUTE, 15 * MINUTE, HOUR, 6 * HOUR, 12 * HOUR, DAY]);
 export const SMS_QUIET_MS = DAY; // this long without a code ends the run
 
 /** The current run at `now`, oldest first: the same rule as functions/ladder.mjs currentRun(), over a bare list of send times. */
