@@ -2275,7 +2275,7 @@ function joinScreen() {
   box.append(steps);
 
   if (open) {
-    box.append(el('p', `Free until ${TRIAL.endsWords}. If you want to keep going afterwards you can set a subscription up during the trial — it starts charging on 11 October and not a day sooner.`, 'join-offer'),
+    box.append(el('p', `Free until ${TRIAL.endsWords}. No card needed, and you are only ever charged if you choose a plan yourself.`, 'join-offer'),
       actionRow(button('Start the free trial ▶', () => signInScreen(true), 'primary')),
       actionRow(button('I already have an account', () => signInScreen(), 'ghost')), siteLinks());
     return box;
