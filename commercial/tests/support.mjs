@@ -11,6 +11,7 @@ import { Email } from '../server/email.mjs';
 import { Waitlist } from '../server/waitlist.mjs';
 import { Feedback } from '../server/feedback.mjs';
 import { LeavingFlow } from '../server/leaving.mjs';
+import { createMailer } from '../server/mailer.mjs';
 import { mac } from '../server/security.mjs';
 
 // Firestore rejects `undefined` values and arrays nested directly inside arrays; fail the same way
@@ -82,9 +83,11 @@ export function fixture() {
   const recovery = new Recovery({ foundation: service, store, identity, secret, now: () => clock });
   const email = new Email({ foundation: service, store, identity, secret, now: () => clock });
   const feedback = new Feedback({ foundation: service, store, now: () => clock, release: 'test-release' }); // no mailer: nothing is copied to anyone
-  const waitlistMail = [];
+  // the real mailer's checks under the fake provider, which sends nothing: a shape Resend would refuse fails a test here, where
+  // a hand-rolled stand-in once accepted the bare-string tags that lost every confirmation in production (13 Sep 2026)
+  const waitlistMail = [], listMailer = createMailer({ provider: 'fake' });
   const waitlist = new Waitlist({ store, now: () => clock, release: 'test-release', secret, origin: 'https://pilot.example.test',
-    replyTo: 'support@example.test', mailer: { send: async (m) => { waitlistMail.push(m); return { id: 'fake', provider: 'fake' }; } } });
+    replyTo: 'support@example.test', mailer: { send: async (m) => { const sent = await listMailer.send(m); waitlistMail.push(m); return sent; } } });
   const leaving = new LeavingFlow({ foundation: service, store, billing, payments, email, now: () => clock });
   // what the identity provider's own password reset changes, as the server sees it
   function resetPassword(uid) { const u = users.get(uid); u.tokensValidAfterTime = new Date(clock).toUTCString(); u.passwordHash = `hash-${randomUUID()}`; }

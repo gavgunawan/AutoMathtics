@@ -1,9 +1,13 @@
 // The SMS resend ladder — the owner's policy for verification SMS to one mobile number (9 Sep 2026; the first
 // three codes brought to 30 seconds apart on 11 Sep 2026, after a change of number sat out a fifteen-minute rung
-// four times), enforced at the identity provider by the blocking function in index.js before any SMS goes out:
+// four times; then to 5 seconds on 13 Sep 2026, because changing the number asks for a code to the old one straight
+// after the code that signed in, and a parent sat out thirty seconds between two codes they had both asked for. The
+// rungs after the third are unchanged, so a run can send no more codes than before — only the first three arrive
+// sooner, and each still needs its own robot check), enforced at the identity provider by the blocking function in
+// index.js before any SMS goes out:
 //   1st  at once
-//   2nd  30 seconds after the 1st
-//   3rd  30 seconds after the 2nd
+//   2nd  5 seconds after the 1st
+//   3rd  5 seconds after the 2nd
 //   4th  2 minutes after the 3rd
 //   5th  15 minutes after the 4th
 //   6th  1 hour after the 5th
@@ -28,7 +32,7 @@ import { createHmac } from 'node:crypto';
 
 const SECOND = 1000, MINUTE = 60 * SECOND, HOUR = 60 * MINUTE, DAY = 24 * HOUR;
 /** The wait after the n-th send of a run (index n − 1) before the next may go; the last entry repeats. */
-export const SMS_LADDER_MS = Object.freeze([30 * SECOND, 30 * SECOND, 2 * MINUTE, 15 * MINUTE, HOUR, 6 * HOUR, 12 * HOUR, DAY]);
+export const SMS_LADDER_MS = Object.freeze([5 * SECOND, 5 * SECOND, 2 * MINUTE, 15 * MINUTE, HOUR, 6 * HOUR, 12 * HOUR, DAY]);
 export const SMS_QUIET_MS = DAY;           // this long without a code ends the run
 // The record expires by TTL a day after its run could last have counted. Every send rewrites expireAt from its own
 // time, and a record matters only until a day of quiet after its latest send, so two days covers a run however many

@@ -21,7 +21,7 @@ test('the countdown reads hours, minutes and seconds: 0:00:30, 0:12:48, 6:00:00,
 test('after a code the verify-mobile Send button is disabled and counts down each second in H:MM:SS, sends nothing while disabled, and comes back at zero with no clock left running', async (t) => {
   let now = Date.now(), last = 0; const sends = [];
   const h = await uiFixture(t, { signedIn: false, clock: () => now });
-  // the device's count as auth.js keeps it for this number: the next code 30 seconds after the last
+  // a wait as the device's count might hold one for this number: thirty seconds after the last code, whichever rung that is
   h.setAuth('parentA', { signIn: async () => ({ stage: 'enroll' }), sendCode: async (phone) => { sends.push(phone); last = now; },
     nextSendAt: async (phone) => (phone === '+6281234567890' && last ? last + 30_000 : 0) });
   await h.submitLogin(); await settle();
@@ -33,7 +33,7 @@ test('after a code the verify-mobile Send button is disabled and counts down eac
   await send.onclick(); assert.deepEqual(sends, ['+6281234567890'], 'a disabled button sends nothing');
   now += 11_000; h.tick(); assert.equal(send.textContent, 'Send again in 0:00:01'); assert.equal(send.disabled, true);
   now += 1_000; h.tick(); assert.equal(send.disabled, false); assert.equal(send.textContent, 'Send verification code'); assert.equal(h.intervals(), 0, 'the clock stops at zero');
-  await h.click('Send verification code'); assert.equal(sends.length, 2, 'the second code of the burst goes 30 seconds after the first'); assert.equal(sendButton(h).textContent, 'Send again in 0:00:30');
+  await h.click('Send verification code'); assert.equal(sends.length, 2, 'the next code goes once the wait is over'); assert.equal(sendButton(h).textContent, 'Send again in 0:00:30');
 });
 
 test('a refused send counts down from the provider\'s seconds when they arrive, from the device\'s estimate when they do not, and with neither shows the plain sentence and no clock', async (t) => {

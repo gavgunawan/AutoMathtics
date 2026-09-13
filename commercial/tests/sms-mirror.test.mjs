@@ -61,15 +61,15 @@ async function load({ store = storage(), start = Date.parse('2026-09-11T10:00:00
 }
 const refusedWith = (seconds) => (e) => e?.waitSeconds === seconds;
 
-test('each accepted code steps this device along the ladder: three codes 30 seconds apart, then two minutes, and an early press is refused with the seconds left without asking the provider', async () => {
+test('each accepted code steps this device along the ladder: three codes 5 seconds apart, then two minutes, and an early press is refused with the seconds left without asking the provider', async () => {
   const s = await load(); const t0 = s.now();
   assert.equal(await s.mod.nextSendAt(NUMBER), 0, 'nothing sent yet: nothing to wait for');
   await s.mod.sendCode('+62 812-3456-7890', true); assert.equal(s.state.asked, 1);
-  assert.equal(await s.mod.nextSendAt(NUMBER), t0 + 30 * SECOND);
-  s.advance(10 * SECOND); await assert.rejects(s.mod.sendCode(NUMBER, true), refusedWith(20)); assert.equal(s.state.asked, 1, 'the provider was not asked');
-  s.advance(20 * SECOND); await s.mod.sendCode(NUMBER, true);
-  s.advance(30 * SECOND); await s.mod.sendCode(NUMBER, true); assert.equal(s.state.asked, 3);
-  assert.equal(await s.mod.nextSendAt(NUMBER), t0 + 60 * SECOND + 2 * MINUTE, 'after the third, two minutes');
+  assert.equal(await s.mod.nextSendAt(NUMBER), t0 + 5 * SECOND);
+  s.advance(2 * SECOND); await assert.rejects(s.mod.sendCode(NUMBER, true), refusedWith(3)); assert.equal(s.state.asked, 1, 'the provider was not asked');
+  s.advance(3 * SECOND); await s.mod.sendCode(NUMBER, true);
+  s.advance(5 * SECOND); await s.mod.sendCode(NUMBER, true); assert.equal(s.state.asked, 3);
+  assert.equal(await s.mod.nextSendAt(NUMBER), t0 + 10 * SECOND + 2 * MINUTE, 'after the third, two minutes');
   s.advance(SECOND); await assert.rejects(s.mod.sendCode(NUMBER, true), refusedWith(119));
 });
 
@@ -91,14 +91,14 @@ test('a failure that may be the ladder holds the shortest rung and never climbs 
   await s.mod.sendCode(NUMBER, true);
   s.advance(40 * SECOND);
   s.state.verify = async () => { throw Object.assign(new Error('Firebase: Error (auth/internal-error-encountered.).'), { code: 'auth/internal-error-encountered.' }); };
-  await assert.rejects(s.mod.sendCode(NUMBER, true), refusedWith(30));
-  assert.equal(await s.mod.nextSendAt(NUMBER), t0 + 70 * SECOND, 'a send that failed is held off for the shortest rung');
-  s.advance(30 * SECOND);
-  await assert.rejects(s.mod.sendCode(NUMBER, true), refusedWith(30));
-  assert.equal(await s.mod.nextSendAt(NUMBER), t0 + 100 * SECOND, 'and a second failure is another 30 seconds, not the two minutes a spent rung used to cost');
-  s.advance(30 * SECOND); s.state.verify = async () => 'verification-id';
+  await assert.rejects(s.mod.sendCode(NUMBER, true), refusedWith(5));
+  assert.equal(await s.mod.nextSendAt(NUMBER), t0 + 45 * SECOND, 'a send that failed is held off for the shortest rung');
+  s.advance(5 * SECOND);
+  await assert.rejects(s.mod.sendCode(NUMBER, true), refusedWith(5));
+  assert.equal(await s.mod.nextSendAt(NUMBER), t0 + 50 * SECOND, 'and a second failure is another 5 seconds, not the two minutes a spent rung used to cost');
+  s.advance(5 * SECOND); s.state.verify = async () => 'verification-id';
   await s.mod.sendCode(NUMBER, true);
-  assert.equal(await s.mod.nextSendAt(NUMBER), t0 + 130 * SECOND, 'the run holds the two codes that went out, so this is still the second rung');
+  assert.equal(await s.mod.nextSendAt(NUMBER), t0 + 55 * SECOND, 'the run holds the two codes that went out, so this is still the second rung');
   const other = await load();
   other.state.verify = async () => { throw Object.assign(new Error('Firebase: Error (auth/invalid-phone-number).'), { code: 'auth/invalid-phone-number' }); };
   await assert.rejects(other.mod.sendCode(NUMBER, true), (e) => e.code === 'auth/invalid-phone-number');
@@ -107,11 +107,11 @@ test('a failure that may be the ladder holds the shortest rung and never climbs 
 
 test('the codes of an enrolment count on the sign-in challenge right after it', async () => {
   const s = await load(); const t0 = s.now();
-  await s.mod.sendCode(NUMBER, true); s.advance(30 * SECOND); await s.mod.sendCode(NUMBER, true);
+  await s.mod.sendCode(NUMBER, true); s.advance(5 * SECOND); await s.mod.sendCode(NUMBER, true);
   await s.mod.confirmCode('123456');
   s.state.user = { factors: [{ uid: 'factor-new', factorId: 'phone' }], emailVerified: true, reload: async () => {} }; s.state.mfa = true;
   assert.equal((await s.mod.signIn('p@example.test', 'pw')).stage, 'challenge');
-  assert.equal(await s.mod.nextSendAt(''), t0 + 60 * SECOND, 'the challenge counts the two enrolment codes');
+  assert.equal(await s.mod.nextSendAt(''), t0 + 10 * SECOND, 'the challenge counts the two enrolment codes');
 });
 
 test('storage that throws leaves no record and never stops a send', async () => {
@@ -165,5 +165,5 @@ test('a changed mobile number carries its codes to the new factor, so the sign-i
   assert.equal(s.state.user, null, 'signed out to sign in with the new number');
   s.state.user = { factors: [{ uid: 'factor-new', factorId: 'phone' }], emailVerified: true, reload: async () => {} }; s.state.mfa = true;
   assert.equal((await s.mod.signIn('p@example.test', 'pw')).stage, 'challenge');
-  assert.equal(await s.mod.nextSendAt(''), t0 + 30 * SECOND, 'the new factor counts the code the new number already had');
+  assert.equal(await s.mod.nextSendAt(''), t0 + 5 * SECOND, 'the new factor counts the code the new number already had');
 });

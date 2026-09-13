@@ -80,3 +80,17 @@ test('the job\'s mailer settings: fake by default, resend only with its key, a s
   assert.throws(() => createMailer({ provider: 'resend' }), /API key/); assert.throws(() => createMailer({ provider: 'smtp' }), /Unknown/);
   assert.equal(maskAddress('gav.parent@example.test'), 'g…@example.test'); assert.equal(maskAddress('nonsense'), '…');
 });
+
+// The waiting list's confirmations were refused by Resend over tags written as bare strings (13 Sep 2026), and a refused send
+// leaves no trace in Resend's dashboard. A tag that is not { name, value } of letters, digits, _ and - is refused before any request.
+test('a tag Resend would refuse is refused here first, before the provider is asked, under either provider', async () => {
+  for (const tags of [['waitlist'], [{ name: 'kind' }], [{ name: 'kind', value: 'two words' }], [{ name: 'kind', value: 42 }], 'waitlist', [null]]) {
+    const p = provider({ status: 200, json: { id: 'em_1' } }), real = createMailer({ provider: 'resend', apiKey: KEY, fetch: p.fetch });
+    await assert.rejects(real.send(message({ tags })), (e) => e.code === 'INVALID_EMAIL_TAGS', JSON.stringify(tags));
+    assert.equal(p.calls.length, 0, 'Resend was not asked');
+    await assert.rejects(createMailer({ provider: 'fake' }).send(message({ tags })), (e) => e.code === 'INVALID_EMAIL_TAGS', 'and the fake refuses what Resend would');
+  }
+  const p = provider({ status: 200, json: { id: 'em_1' } }), real = createMailer({ provider: 'resend', apiKey: KEY, fetch: p.fetch });
+  await real.send(message({ tags: [{ name: 'kind', value: 'waitlist_confirm' }] }));
+  assert.deepEqual(p.calls[0].body.tags, [{ name: 'kind', value: 'waitlist_confirm' }]);
+});
