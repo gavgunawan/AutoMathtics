@@ -1,11 +1,12 @@
 // The owner's prices and the leaving offers (13 Sep 2026), checked before the payment provider charges a rupiah by them: (1) every
 // amount against a figure worked out by hand, (2) against the rule it comes from, recomputed independently, (3) every eligibility
-// rule on its own and at its boundaries, (4) the no-stacking rules against every way three adversarial reviews broke earlier
+// rule on its own and at its boundaries, (4) the no-stacking rules against every way four adversarial reviews broke earlier
 // versions — both offers taken, one taken twice, the 10% stretched past three charges by a handed-in eligibility, a forged count, a
 // charge recorded badly or twice, a lost or re-saved offer record, a price change, a history cut short or missing months, a
 // proration — and (5) a simulation of every family of one to four children through two years of charges, cancel attempts and answers.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { MONTHLY_PRICES, KNOWN_MONTHLY_LISTS, ANNUAL_PERCENT_OFF, RETENTION, OFFER_KINDS, IN_A_ROW, PERIOD_SPAN, monthlyPrice, annualList,
   annualPrice, lessPercent, chargeFor, chargesOf, retentionEligibility, retentionOffers, acceptRetention } from '../server/pricing.mjs';
 import { GRACE_DAYS, monthsAfter } from '../server/subscription.mjs';
@@ -35,7 +36,7 @@ const BY_HAND = {
   4: { monthly: 599_000, annual: 5_750_400, tenOff: 539_100 },
 };
 
-test('(1) by hand: monthly 199,000 · 379,000 · 519,000 · 599,000; annual 1,910,400 · 3,638,400 · 4,982,400 · 5,750,400; the leaving 10% 179,100 · 341,100 · 467,100 · 539,100', () => {
+test('(1) by hand: monthly 199,000 · 379,000 · 519,000 · 599,000; annual 1,910,400 · 3,638,400 · 4,982,400 · 5,750,400; the leaving 10% 179,100 · 341,100 · 467,100 · 539,100', async () => {
   for (const [n, want] of Object.entries(BY_HAND)) {
     const children = Number(n), taken = { kind: 'retention_monthly', acceptedAt: T0 }, yearlyTaken = { kind: 'retention_annual', acceptedAt: T0 };
     assert.equal(monthlyPrice(children), want.monthly, `${n}: monthly`);
@@ -46,9 +47,12 @@ test('(1) by hand: monthly 199,000 · 379,000 · 519,000 · 599,000; annual 1,91
     assert.deepEqual(chargeFor({ children, cycle: 'annual', retention: yearlyTaken, at: monthsAfter(T0, 1) }), { amount: want.annual, list: 12 * want.monthly, percentOff: 20, applied: 'annual', offer: 'retention_annual' });
   }
   assert.deepEqual(Object.keys(MONTHLY_PRICES).map(Number), [1, 2, 3, 4], 'exactly four prices');
-  // the list prices a month may have been charged at, written out: today's four — and when a price changes, the old one stays here
+  // the list prices a month may have been charged at: today's four, written out in the source rather than derived from MONTHLY_PRICES,
+  // so that a price change cannot drop an old price — when a price changes, the old one stays here
   assert.ok(Object.isFrozen(KNOWN_MONTHLY_LISTS));
   assert.deepEqual([...KNOWN_MONTHLY_LISTS], [199_000, 379_000, 519_000, 599_000]);
+  const source = await readFile(new URL('../server/pricing.mjs', import.meta.url), 'utf8');
+  assert.match(source, /export const KNOWN_MONTHLY_LISTS = Object\.freeze\(\[(?:\d[\d_]*, )*\d[\d_]*\]\);/, 'written out as numbers, not derived');
   for (const price of Object.values(MONTHLY_PRICES)) assert.ok(KNOWN_MONTHLY_LISTS.includes(price), `${price} is a known list price`);
   for (const children of [0, 5, 6, -1, 1.5, '1', NaN, [2], null, undefined]) {
     assert.equal(monthlyPrice(children), null, `${children}: not priced`); assert.equal(annualPrice(children), null);
@@ -56,8 +60,11 @@ test('(1) by hand: monthly 199,000 · 379,000 · 519,000 · 599,000; annual 1,91
   }
   assert.throws(() => chargeFor({ children: 1, cycle: 'weekly', retention: null }), code('INVALID_CYCLE'));
   for (const nothing of [undefined, null, 'monthly', 1]) assert.throws(() => chargeFor(nothing), code('INVALID_CYCLE'), `${nothing}: a refusal, not a crash`);
-  // the offer record is a required key: a charge worked out without it is refused, never read as "no offer"
-  for (const cycle of ['monthly', 'annual']) assert.throws(() => chargeFor({ children: 1, cycle, at: T0 }), code('RETENTION_REQUIRED'), cycle);
+  // the offer record is required, and none is null: a charge worked out without it — left out, or undefined — is refused, never read as "no offer"
+  for (const cycle of ['monthly', 'annual']) {
+    assert.throws(() => chargeFor({ children: 1, cycle, at: T0 }), code('RETENTION_REQUIRED'), `${cycle}: left out`);
+    assert.throws(() => chargeFor({ children: 1, cycle, at: T0, retention: undefined }), code('RETENTION_REQUIRED'), `${cycle}: a field read under the wrong name`);
+  }
   assert.equal(lessPercent(199_000, 10), 179_100);
   assert.throws(() => lessPercent(199_999, 10), /not a whole rupiah/, 'a fraction of a rupiah is refused, never rounded');
 });
@@ -87,8 +94,9 @@ test('(3) eligibility: the two latest monthly charges in a row and in full, whil
   no({ paid: months(1), now: T0 + DAY }, 'NOT_TWO_MONTHS');
   for (const paid of [[], null, 'x', undefined]) no({ paid }, 'NOT_CURRENT');
   for (const at of [two[1].periodEnd, undefined, NaN, T0 - DAY, String(now)]) no({ now: at }, 'NOT_CURRENT');
-  // the stored record is a required key: "no offer taken" is never read from its absence
+  // the stored record is required, and none is null: "no offer taken" is never read from an absent key or an undefined field
   assert.throws(() => retentionEligibility({ paid: two, now }), code('RETENTION_REQUIRED'));
+  assert.throws(() => retentionEligibility({ paid: two, now, retention: undefined }), code('RETENTION_REQUIRED'), 'a field read under the wrong name');
   assert.throws(() => retentionEligibility(), code('RETENTION_REQUIRED'));
   assert.throws(() => retentionOffers({ paid: two, now, children: 1 }), code('RETENTION_REQUIRED'));
   // on annual — running now, already paid to start next, or prorated onto the anchor — is not monthly; an annual that has ended is history
@@ -157,6 +165,8 @@ test('(3) eligibility: the two latest monthly charges in a row and in full, whil
     'an amount refunded, by a third': { ...month(before), refunded_amount: 50_000 },
     'a list of refunds': { ...month(before), refunds: [{ amount: 50_000 }] },
     'a proration': { ...month(before), proration: true },
+    'a proration flagged yes': { ...month(before), proration: 'yes' },
+    'a proration flagged 1': { ...month(before), proration: 1 },
     'times in seconds': { ...month(0), periodStart: seconds - 2_678_400, periodEnd: seconds },
     'times as strings': { ...month(before), periodStart: String(before) },
     'an amount as a string': { ...month(before), amount: '199000' },
@@ -173,8 +183,9 @@ test('(3) eligibility: the two latest monthly charges in a row and in full, whil
     is({ paid: [junk, ...two] }, OK, `${label}: ignored`); is({ paid: [...two, junk] }, OK, `${label}: ignored, whatever the order`);
   }
   // a flag that plainly says no is no refund, and no proration: the month counts
-  for (const extra of [{ refunded: false }, { refunded: 'false' }, { refunded: ' No ' }, { refundedAt: 0 }, { refundedAt: '' }, { refundedAt: null },
-    { refundedAmount: 0 }, { refunds: [] }, { status: 'paid' }, { proration: false }, { proration: 'false' }])
+  for (const extra of [{ refunded: false }, { refunded: 'false' }, { refunded: ' No ' }, { refunded: 0 }, { refunded: '0' }, { refundedAt: 0 }, { refundedAt: '' },
+    { refundedAt: null }, { refundedAmount: 0 }, { refunds: [] }, { status: 'paid' }, { proration: false }, { proration: 'false' }, { proration: 0 },
+    { proration: '0' }, { proration: null }])
     is({ paid: [two[0], { ...two[1], ...extra }] }, OK, `${JSON.stringify(extra)}: still a month paid`);
   // adding a child mid-month: the proration, recorded with the month's own period, is a charge but not a month — it neither makes the
   // month look discounted nor stands in for it. Left unflagged, it reads as that month charged below its list.
@@ -186,7 +197,7 @@ test('(3) eligibility: the two latest monthly charges in a row and in full, whil
   // any offer record, of any shape, means the offer is spent; only no record at all leaves it open
   for (const retention of [{ kind: 'retention_monthly', acceptedAt: T0 }, { kind: 'retention_annual', acceptedAt: T0 }, { kind: 'retention_monthly' },
     { acceptedAt: '2026-10-11' }, {}, [], 'taken', '{"kind":"retention_monthly"}', 0, false]) no({ retention }, 'OFFER_ALREADY_USED');
-  for (const retention of [null, undefined]) is({ retention }, OK, `${retention}: none taken`);
+  is({ retention: null }, OK, 'null: none taken');
   // a family the price list does not cover is offered nothing
   assert.deepEqual(retentionOffers({ paid: two, retention: null, now, children: 5 }), { eligible: false, reason: 'CHILDREN_NOT_PRICED', offers: [] });
   assert.deepEqual(retentionOffers({ paid: two, retention: null, now: two[1].periodEnd, children: 1 }), { eligible: false, reason: 'NOT_CURRENT', offers: [] });
@@ -200,6 +211,7 @@ test('(4) no stacking: one offer, once, however it is asked; the 10% is three ch
     assert.throws(() => acceptRetention({ paid: two, retention: taken, now, children, kind }), code('OFFER_ALREADY_USED'), `a second offer: ${kind}`);
     assert.throws(() => acceptRetention({ paid: two, retention: taken, now, children, kind, eligibility: { eligible: true } }), code('OFFER_ALREADY_USED'), 'a handed-in eligibility is never read');
     assert.throws(() => acceptRetention({ paid: two, now, children, kind }), code('RETENTION_REQUIRED'), 'the record left out is refused, never read as none');
+    assert.throws(() => acceptRetention({ paid: two, retention: undefined, now, children, kind }), code('RETENTION_REQUIRED'), 'nor read as none when undefined');
   }
   assert.throws(() => acceptRetention({ paid: two, retention: null, now, children: 5, kind: 'retention_monthly' }), code('CHILDREN_NOT_PRICED'), 'an offer never shown cannot be taken');
   assert.throws(() => acceptRetention({ paid: two, retention: null, children, kind: 'retention_monthly' }), code('NOT_CURRENT'));
@@ -225,17 +237,19 @@ test('(4) no stacking: one offer, once, however it is asked; the 10% is three ch
     'the second stamped as a 26-day period': (r, i) => (i === 1 ? { ...r, periodEnd: r.periodStart + 26 * DAY } : r),
     'amounts stored as strings': (r) => ({ ...r, amount: String(r.amount) }),
     'the cycle in capitals': (r) => ({ ...r, cycle: 'Monthly' }),
+    'periods stored as strings': (r) => ({ ...r, periodStart: String(r.periodStart), periodEnd: String(r.periodEnd) }),
     'no labels, and amounts as strings': (r) => ({ ...r, applied: null, offer: null, amount: String(r.amount) }),
   })) assert.deepEqual(run(taken, 6, { record }).amounts, THREE, `${label}: still three`);
   const lastDay = acceptRetention({ paid: two, retention: null, now: two[1].periodEnd - DAY, children, kind: 'retention_monthly' });
   assert.deepEqual(run(lastDay, 4).amounts, [341_100, 341_100, 341_100, 379_000], 'taken on the last day of a month: still the next three');
   const firstHour = acceptRetention({ paid: two, retention: null, now: two[1].periodStart + 3_600_000, children, kind: 'retention_monthly' });
   assert.deepEqual(run(firstHour, 4, { from: two[1].periodEnd + 7 * DAY, late: 7 * DAY }).amounts, [341_100, 341_100, 341_100, 379_000], 'renewals a week late each time: all three, inside the four months');
-  // the same charge recorded twice, or worked out again after it was recorded, changes nothing
+  // The same charge recorded twice changes nothing. A charge is worked out before it is recorded: every record counts, the one for
+  // the period asked about included, so with three reductions recorded no `at` — a wrong one, or a recorded month's — reduces a fourth.
   const [first, second] = [paid[2], paid[3]];
   assert.equal(chargeFor({ children, cycle: 'monthly', retention: taken, paid: [...two, first, first, second], at: paid[4].periodStart }).amount, 341_100, 'a duplicate is not another reduced charge');
-  assert.equal(chargeFor({ children, cycle: 'monthly', retention: taken, paid: [...two, first], at: first.periodStart }).amount, 341_100, 'working out a recorded charge again: the same answer');
-  assert.equal(chargeFor({ children, cycle: 'monthly', retention: taken, paid: paid.slice(0, 5), at: paid[4].periodStart }).amount, 341_100, 'the third, worked out again after it was recorded');
+  assert.equal(chargeFor({ children, cycle: 'monthly', retention: taken, paid: [...two, first], at: first.periodStart }).amount, 341_100, 'the first worked out again: one use of three');
+  for (const k of [2, 3, 4]) assert.equal(chargeFor({ children, cycle: 'monthly', retention: taken, paid: paid.slice(0, 5), at: paid[k].periodStart }).amount, 379_000, `three recorded, a charge worked out with the start of reduced month ${k - 1}: full price`);
   // a record re-saved later, or lost: the three reductions already carried still count, and no second offer is made
   assert.equal(chargeFor({ children, cycle: 'monthly', retention: { ...taken, acceptedAt: paid[5].periodStart + DAY }, paid: paid.slice(0, 6), at: paid[6].periodStart }).amount, 379_000, 'a re-saved acceptance does not start three more');
   assert.throws(() => acceptRetention({ paid: paid.slice(0, 7), retention: null, now: paid[6].periodStart + DAY, children, kind: 'retention_monthly' }), code('OFFER_ALREADY_USED'), 'the record lost: the charges still say it was taken');
@@ -278,6 +292,24 @@ test('(4) no stacking: one offer, once, however it is asked; the 10% is three ch
   assert.equal(chargeFor({ children: 1, cycle: 'monthly', retention: far, paid: stretched, at: furthest }).amount, 179_100, 'the third, as late as it can come');
   assert.equal(chargeFor({ children: 1, cycle: 'monthly', retention: far, paid: stretched, at: furthest + 1 }).amount, 199_000);
   assert.ok(furthest < monthsAfter(T0, RETENTION.monthlyCharges + 1));
+  // Renewals stamped three days early, the offer taken inside the overlap: the month it was taken in is the later one, and the three
+  // after it carry the 10% — of the periods covering the moment it was taken, the walk starts from the one reaching furthest.
+  const overlap = [month(Date.UTC(2026, 10, 11))]; overlap.push(month(overlap[0].periodEnd - IN_A_ROW.earlyMs));
+  const inOverlap = acceptRetention({ paid: overlap, retention: null, now: overlap[0].periodEnd - DAY, children: 1, kind: 'retention_monthly' }), overlapAmounts = [];
+  for (let i = 0; i < 4; i++) {
+    const at = overlap.at(-1).periodEnd - IN_A_ROW.earlyMs, c = chargeFor({ children: 1, cycle: 'monthly', retention: inOverlap, paid: overlap, at });
+    overlapAmounts.push(c.amount); overlap.push({ ...month(at), amount: c.amount, list: c.list, applied: c.applied, offer: c.offer });
+  }
+  assert.deepEqual(overlapAmounts, [179_100, 179_100, 179_100, 199_000], 'taken inside an overlap: still the next three');
+  // The walk counts months, not reductions: three months charged after the offer month are the three even when none carried the 10%
+  // (its record not read for them), and the 10% does not move later. The offer month is the one covering the moment it was taken, to
+  // the millisecond: taken at a month's first, the month before does not stand in for it.
+  const unread = [...two, ...months(3, { from: two[1].periodEnd, children })];
+  assert.equal(chargeFor({ children, cycle: 'monthly', retention: taken, paid: unread, at: unread[4].periodEnd }).amount, 379_000, 'a fourth month, none reduced before it');
+  assert.equal(chargeFor({ children, cycle: 'monthly', retention: taken, paid: unread.slice(0, 4), at: unread[3].periodEnd }).amount, 341_100, 'the third month still is');
+  const atFirstMs = acceptRetention({ paid: two, retention: null, now: two[1].periodStart, children, kind: 'retention_monthly' });
+  assert.throws(() => chargeFor({ children, cycle: 'monthly', retention: atFirstMs, paid: [two[0]], at: two[1].periodEnd }), code('PAID_INCOMPLETE'));
+  assert.equal(chargeFor({ children, cycle: 'monthly', retention: atFirstMs, paid: [two[1]], at: two[1].periodEnd }).amount, 341_100);
   // A child added during the three months: a proration takes none of them; left unflagged, it reads as a charge below its list and
   // takes one. A month below its list before the offer was taken — a goodwill month, say — takes none.
   const proration = { periodStart: paid[2].periodStart + 10 * DAY, periodEnd: paid[2].periodEnd, cycle: 'monthly', amount: 120_000, list: 379_000, applied: null, offer: null, proration: true };

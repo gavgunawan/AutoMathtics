@@ -455,7 +455,8 @@ one record per period, the more cautious copy if copies disagree — so a prorat
 period reads as that month charged below its list, and costs the family its offer while that month is one of its latest two.
 
 **The leaving offers.** A family asking to cancel at `now` is eligible (`retentionEligibility`) when: its stored offer record is
-null — the key must be passed, and any record of any shape means the offer is spent — and none of its charges was ever made
+null — it must be passed, as null and never undefined when there is none, and any record of any shape means the offer is spent —
+and none of its charges was ever made
 under either offer; no annual charge of its is running or already paid to start; a monthly charge covers `now`; its two latest monthly charges
 were both in full (not below the list price) and in a row (the later started between three days before and seven days — the
 grace period — after the earlier ended); and, for the prices (`retentionOffers`), it has one to four children. A family in its
@@ -475,24 +476,30 @@ They never stack:
   (`PAID_REQUIRED` / `PERIOD_REQUIRED`), and charges reaching back to the month the offer was taken in (`PAID_INCOMPLETE`). It
   reduces the three charges after that month, found by walking the recorded monthly periods from it one at a time — each starting
   between three days before and seven days after the last ended — so a history cut short or missing a month stops the 10% at the
-  gap instead of stretching it. A break in the subscription ends it the same way: a family who cancels during the three months and
-  comes back pays full price. It also stops, counted loosely on the side that cannot stack, once three other charges claim the 10%
-  — refunded, badly shaped or from any date — or were monthly charges below their list after the offer was taken (prorations
-  aside), one per period; and nothing is reduced after the four months that follow the offer;
+  gap instead of stretching it. The walk counts months, not reductions: three months charged after the offer month are the three
+  even if none carried the 10%. A break in the subscription ends it the same way: a family who cancels during the three months and
+  comes back pays full price. It also stops, counted loosely on the side that cannot stack, once three charges claim the 10% —
+  refunded, badly shaped or from any date — or were monthly charges below their list after the offer was taken (prorations aside),
+  one per period, the period being charged included; and nothing is reduced after the four months that follow the offer. So a
+  charge is worked out **before** it is recorded: worked out again afterwards, one that carried the 10% counts itself, and no `at`
+  can take a recorded reduction out of the count;
 - a forged or malformed offer record reduces nothing.
 
 **What the Xendit adapter must do.** Read all the family's charges (at the least, everything from the month an offer was taken
 in) and its offer record in the transaction that decides; charge `chargeFor({ children, cycle, retention, paid, at })` with
-`retention` always passed — null when there is none — and `at` the start of the period being charged; record each successful
+`retention` always passed — null when there is none, never undefined — and `at` the start of the period being charged, worked
+out before the charge is recorded (a past charge is shown from its record, never worked out again); record each successful
 charge in the shape above, with the `applied` and `offer` that `chargeFor` answered, and `proration: true` on a proration; mark
-any refund on the charge it refunds; in `LeavingFlow.offers` show `retentionOffers({ paid, retention, now, children })`; accept
-with `acceptRetention` and store its record on the family in the same transaction; move a family that took the yearly offer to
-the yearly cycle at its next renewal. The offer's own words say the 10% is for the next three monthly payments in a row, and
-ends if the subscription stops.
+any refund on the charge it refunds; log a family holding a monthly offer record that is charged full price while fewer than
+three of its charges since the offer carry `retention_monthly` — a break, or a history cut short, for a person to look at; in
+`LeavingFlow.offers` show `retentionOffers({ paid, retention, now, children })`; accept with `acceptRetention` and store its
+record on the family in the same transaction; move a family that took the yearly offer to the yearly cycle at its next renewal.
+Its tests read the stored offer record back by its real field name. The offer's own words say the 10% is for the next three
+monthly payments in a row, and ends if the subscription stops.
 
 `tests/pricing.test.mjs` checks this five ways: the figures by hand; the rules recomputed independently, and the offers field by
 field; every eligibility rule alone and at its boundaries (in a row, a month's length, an annual's, refunds and prorations); the
-no-stacking rules against each way three adversarial reviews broke earlier versions — every part of a history left out among
+no-stacking rules against each way four adversarial reviews broke earlier versions — every part of a history left out among
 them; and a simulation of every family of one to four children through two years of charges, cancel attempts and answers.
 
 The seat plans in `server/subscription.mjs` (`starter`, `family`, `big`, with the Stripe sandbox price ids) predate these prices

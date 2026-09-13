@@ -14,7 +14,7 @@
 // charges, and "once" is read from the facts twice over — the stored offer record, and any charge either offer was ever made under —
 // so a charge recorded twice or recorded badly, a recomputed charge, a lost or re-saved record or a forged count cannot give a family
 // more than one offer or more than three reduced charges. Where the facts needed for that count are missing or cut short, this
-// refuses rather than guesses. Three adversarial reviews (13 Sep 2026) broke the earlier versions in every way the tests now pin.
+// refuses rather than guesses. Four adversarial reviews (13 Sep 2026) broke the earlier versions in every way the tests now pin.
 import { fail } from './security.mjs';
 import { GRACE_DAYS, monthsAfter } from './subscription.mjs';
 
@@ -92,16 +92,18 @@ export function chargesOf(paid) {
 //
 // Loosely, on the side that cannot stack: a record claiming the reduction counts as a use of it whatever else is wrong with it —
 // refunded, a wrong length, strings, the wrong case — and whenever it was charged; a monthly charge below its list price after the
-// offer was taken counts too, labelled or not, unless it is a proration. One period stored twice is one use.
+// offer was taken counts too, labelled or not, unless it is a proration. One period stored twice is one use. Every record counts,
+// the one for the period being charged included: a charge is worked out before it is recorded, so no `at` — right or wrong — can
+// take a recorded reduction out of the count.
 const claimsRetention = (r) => !!r && typeof r === 'object' && String(r.applied).toLowerCase() === 'retention_monthly';
 // Either offer marks the charges made under it (chargeFor's `offer`): a charge so marked means the offer was taken, record or no record.
 const marksOffer = (r) => claimsRetention(r) || (!!r && typeof r === 'object' && OFFER_KINDS.includes(String(r.offer).toLowerCase()));
 const belowListAfter = (r, acceptedAt) => !!r && typeof r === 'object' && !said(r.proration) && String(r.cycle).toLowerCase() === 'monthly'
   && Number(r.amount) < Number(r.list) && Number(r.periodStart) > acceptedAt;
-function retentionUses(paid, acceptedAt, at) {
+function retentionUses(paid, acceptedAt) {
   const periods = new Set();
   paid.forEach((r, i) => {
-    if (!(claimsRetention(r) || belowListAfter(r, acceptedAt)) || Number(r.periodStart) === at) return; // a charge is not a use of itself
+    if (!(claimsRetention(r) || belowListAfter(r, acceptedAt))) return;
     // one period stored twice is one use; a record with no period to tell it by is a use of its own
     periods.add(Number.isSafeInteger(r.periodStart) && Number.isSafeInteger(r.periodEnd) ? `${r.periodStart}:${r.periodEnd}` : `record:${i}`);
   });
@@ -141,14 +143,14 @@ function retentionReduces(retention, paid, at) {
   // The history must reach back to the month the offer was taken in: there is nothing to walk from without it, and a list cut down
   // to its latest charges would count fewer uses than there were. Refused rather than trusted.
   if (!paid.some((r) => covers(r, retention.acceptedAt))) fail(400, 'PAID_INCOMPLETE');
-  return chargeNumber(paid, retention.acceptedAt, at) <= RETENTION.monthlyCharges && retentionUses(paid, retention.acceptedAt, at) < RETENTION.monthlyCharges;
+  return chargeNumber(paid, retention.acceptedAt, at) <= RETENTION.monthlyCharges && retentionUses(paid, retention.acceptedAt) < RETENTION.monthlyCharges;
 }
 
 /**
- * One charge, for the period starting `at`.
+ * One charge, for the period starting `at`, worked out before it is recorded: what a past charge was is read from its record.
  *   children   how many children the plan covers now
  *   cycle      'monthly' or 'annual'
- *   retention  the family's leaving-offer record ({ kind, acceptedAt }), or null — a required key, as for eligibility
+ *   retention  the family's leaving-offer record ({ kind, acceptedAt }), or null — required, as for eligibility
  *   paid       the family's recorded charges, reduced ones included, from at least the month an offer was taken in — required,
  *              with `at`, when there is an offer record
  * → { amount, list, percentOff, applied, offer }: `applied` names the one reduction in it — 'annual', 'retention_monthly' or null —
@@ -159,16 +161,17 @@ export function chargeFor(args = {}) {
   if (!CYCLES.includes(cycle)) fail(400, 'INVALID_CYCLE');
   const monthly = monthlyPrice(children);
   if (monthly === null) fail(400, 'CHILDREN_NOT_PRICED');
-  // "No offer" is never read from the record's absence: charged without it, a yearly charge taken as the offer would carry no mark
-  // of it, so the offer could be taken again, and a monthly charge would lose the 10%.
-  if (!Object.hasOwn(args, 'retention')) fail(400, 'RETENTION_REQUIRED');
+  // "No offer" is never read from the record's absence — a key left out, or a field read under the wrong name as undefined: charged
+  // without it, a yearly charge taken as the offer would carry no mark of it, so the offer could be taken again, and a monthly charge
+  // would lose the 10%. None is null.
+  if (!Object.hasOwn(args, 'retention') || retention === undefined) fail(400, 'RETENTION_REQUIRED');
   // An annual charge is the annual price whatever else the family holds: the one reduction it carries is the annual 20%. Taken as the
   // leaving offer, it is marked so — the annual offer leaves no other trace — so a lost offer record cannot reopen the offer later.
   if (cycle === 'annual') {
     const offer = !!retention && typeof retention === 'object' && retention.kind === 'retention_annual' ? 'retention_annual' : null;
     return { amount: annualPrice(children), list: annualList(children), percentOff: ANNUAL_PERCENT_OFF, applied: 'annual', offer };
   }
-  if (retention !== null && retention !== undefined) {
+  if (retention !== null) {
     // an offer record is on the family: the charges and the period are how the 10% is counted, and without them this cannot count
     if (!Array.isArray(paid)) fail(400, 'PAID_REQUIRED');
     if (!Number.isSafeInteger(at)) fail(400, 'PERIOD_REQUIRED');
@@ -182,13 +185,13 @@ export function chargeFor(args = {}) {
 /**
  * Whether a family asking to cancel at `now` is offered the leaving discounts, and if not, the first rule that says no.
  *   paid       its recorded charges, any order
- *   retention  its stored leaving-offer record, or null — a required key: "no offer taken" is never assumed from its absence
+ *   retention  its stored leaving-offer record, or null — required: "no offer taken" is never assumed from an absent key or an undefined field
  * → { eligible, reason }
  */
 export function retentionEligibility(args = {}) {
-  if (!args || typeof args !== 'object' || !Object.hasOwn(args, 'retention')) fail(400, 'RETENTION_REQUIRED');
+  if (!args || typeof args !== 'object' || !Object.hasOwn(args, 'retention') || args.retention === undefined) fail(400, 'RETENTION_REQUIRED');
   const { paid = [], retention, now } = args;
-  if (retention !== null && retention !== undefined) return { eligible: false, reason: 'OFFER_ALREADY_USED' }; // any stored record, of any shape
+  if (retention !== null) return { eligible: false, reason: 'OFFER_ALREADY_USED' }; // any stored record, of any shape
   if (Array.isArray(paid) && paid.some(marksOffer)) return { eligible: false, reason: 'OFFER_ALREADY_USED' }; // the charges show it taken, record or no record
   if (!Number.isSafeInteger(now)) return { eligible: false, reason: 'NOT_CURRENT' };
   const charges = chargesOf(paid);
