@@ -10,6 +10,13 @@ set -uo pipefail
 REGION=asia-southeast1 JOB=automathtics-v3-report SERVICE=automathtics-v3
 EMAIL_PROVIDER="${EMAIL_PROVIDER:-fake}"; EMAIL_FROM="${EMAIL_FROM:-AutoMathtics <onboarding@resend.dev>}"
 [[ "$EMAIL_PROVIDER" == fake || "$EMAIL_PROVIDER" == resend ]] || { echo 'BLOCK G FAILED: EMAIL_PROVIDER must be fake or resend'; return 1 2>/dev/null || exit 1; }
+# The job's mode and origin come from the environment, staging's by default. A live project exports APP_MODE=production and
+# APP_ORIGIN=https://automathtics.net, which the buttons in the email open. The reports build no payment service: PAYMENT_PROVIDER rides
+# along only when exported, to say what the project runs, and whatever it is the job needs no price and no provider secret.
+APP_MODE="${APP_MODE:-staging}" APP_ORIGIN="${APP_ORIGIN:-https://$PROJECT_ID.web.app}"
+[[ "$APP_MODE" == staging || "$APP_MODE" == production ]] || { echo 'BLOCK G FAILED: APP_MODE must be staging or production'; return 1 2>/dev/null || exit 1; }
+[[ "$APP_ORIGIN" =~ ^https://[a-z0-9.-]+$ ]] || { echo 'BLOCK G FAILED: APP_ORIGIN must be https://host, with no path or trailing slash'; return 1 2>/dev/null || exit 1; }
+[[ -z "${PAYMENT_PROVIDER:-}" || "$PAYMENT_PROVIDER" =~ ^(stripe|fake|none)$ ]] || { echo 'BLOCK G FAILED: PAYMENT_PROVIDER must be stripe, fake or none'; return 1 2>/dev/null || exit 1; }
 # SESSION_SECRET signs the buttons in the email (the service checks them with the same secret); the key is only for Resend
 SECRETS='SESSION_SECRET=am-v3-session:1'
 if [[ "$EMAIL_PROVIDER" == resend ]]; then
@@ -34,12 +41,13 @@ done
 # the sender's display name has a space and angle brackets, so the variables use | between them (gcloud topic escaping)
 # OWNER_EMAIL is where the monthly leaving report goes (FEEDBACK_TO wins when the service has one): the same Monday run that sends
 # the monthly family reports sends it, for the month just ended, so there is one schedule and not two (DEPLOY_V3.md → 5b).
-ENV_VARS="^|^APP_MODE=staging|FIREBASE_PROJECT_ID=$PROJECT_ID|CONFIRM_PROJECT=$PROJECT_ID|OPERATOR_ID=scheduler@$PROJECT_ID|APP_ORIGIN=https://$PROJECT_ID.web.app|EMAIL_PROVIDER=$EMAIL_PROVIDER|EMAIL_FROM=$EMAIL_FROM"
+ENV_VARS="^|^APP_MODE=$APP_MODE|FIREBASE_PROJECT_ID=$PROJECT_ID|CONFIRM_PROJECT=$PROJECT_ID|OPERATOR_ID=scheduler@$PROJECT_ID|APP_ORIGIN=$APP_ORIGIN|EMAIL_PROVIDER=$EMAIL_PROVIDER|EMAIL_FROM=$EMAIL_FROM"
+if [[ -n "${PAYMENT_PROVIDER:-}" ]]; then ENV_VARS="$ENV_VARS|PAYMENT_PROVIDER=$PAYMENT_PROVIDER"; fi
 if [[ -n "${OWNER_EMAIL:-}" ]]; then ENV_VARS="$ENV_VARS|OWNER_EMAIL=$OWNER_EMAIL"; echo "the monthly leaving report will go to $OWNER_EMAIL"; else echo 'no OWNER_EMAIL: the monthly leaving report is skipped with a log line (rerun this block with OWNER_EMAIL set)'; fi
 VERB=create; gcloud run jobs describe "$JOB" --project "$PROJECT_ID" --region "$REGION" >/dev/null 2>&1 && VERB=update
 gcloud run jobs "$VERB" "$JOB" --project "$PROJECT_ID" --region "$REGION" --image "$IMAGE" --service-account "$RUNTIME_SA" \
   --command node --args scripts/report.mjs,send --max-retries 0 --task-timeout 20m --memory 512Mi \
-  --set-env-vars "$ENV_VARS" --set-secrets "$SECRETS" >/dev/null && echo "job $JOB ${VERB}d from $IMAGE (EMAIL_PROVIDER=$EMAIL_PROVIDER)"
+  --set-env-vars "$ENV_VARS" --set-secrets "$SECRETS" >/dev/null && echo "job $JOB ${VERB}d from $IMAGE ($APP_MODE, EMAIL_PROVIDER=$EMAIL_PROVIDER)"
 gcloud run jobs add-iam-policy-binding "$JOB" --project "$PROJECT_ID" --region "$REGION" --member="serviceAccount:$RUNTIME_SA" --role=roles/run.invoker --quiet >/dev/null && echo 'the runtime account may start the job'
 SCHED=automathtics-v3-report-weekly URI="https://run.googleapis.com/v2/projects/$PROJECT_ID/locations/$REGION/jobs/$JOB:run"
 if gcloud scheduler jobs describe "$SCHED" --project "$PROJECT_ID" --location "$REGION" >/dev/null 2>&1; then

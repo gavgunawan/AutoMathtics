@@ -16,8 +16,12 @@ for ROLE in roles/datastore.user roles/firebaseauth.admin; do
 done
 # the identity that builds the container for `gcloud run deploy --source`
 gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" --role=roles/run.builder --quiet >/dev/null && echo 'granted roles/run.builder to the build account'
+# The two server secrets. Staging made its own. Any other project is given staging's before this block runs (DEPLOY_V3.md → Moving to a live
+# project): the PIN hashes, the phone keys behind one trial per mobile and every signed email link were made with them, so a fresh pair would
+# quietly break all of those. Only a project with nothing moved into it says so, with FRESH_SECRETS=yes.
 for NAME in am-v3-session am-v3-pin-pepper; do
   if gcloud secrets describe "$NAME" --project "$PROJECT_ID" >/dev/null 2>&1; then echo "$NAME exists (kept)"
+  elif [[ "$PROJECT_ID" != automathtics-v3-staging && "${FRESH_SECRETS:-}" != yes ]]; then echo "BLOCK B FAILED: $NAME is missing on $PROJECT_ID. Copy it from staging first (DEPLOY_V3.md → Moving to a live project); only a project with nothing moved into it may set FRESH_SECRETS=yes"; return 1 2>/dev/null || exit 1
   else node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))" | gcloud secrets create "$NAME" --data-file=- --project "$PROJECT_ID" >/dev/null && echo "$NAME created"; fi
   gcloud secrets add-iam-policy-binding "$NAME" --project "$PROJECT_ID" --member="serviceAccount:$RUNTIME_SA" --role=roles/secretmanager.secretAccessor --quiet >/dev/null
 done
@@ -35,5 +39,7 @@ for GROUP in sessions rateLimits pinAttempts operations audit recoveries sweeps 
   fi
   if [[ -n "$STATE" ]]; then echo "TTL $GROUP: $STATE"; else echo "WARNING: no TTL policy on $GROUP (rerun this block, or look under Firestore > Time-to-live)"; TTL_WARNINGS=$((TTL_WARNINGS + 1)); fi
 done
-if (( TTL_WARNINGS > 0 )); then echo "BLOCK B DONE WITH WARNINGS ($TTL_WARNINGS TTL policies missing). Next: the two Stripe secrets, typed by you."
-else echo 'BLOCK B DONE. Next: the two Stripe secrets, typed by you.'; fi
+NEXT='Next: the two Stripe secrets, typed by you.'
+[[ "${PAYMENT_PROVIDER:-stripe}" == none ]] && NEXT='Next: block C. Payments are not open (PAYMENT_PROVIDER=none), so there is no provider secret to create.'
+if (( TTL_WARNINGS > 0 )); then echo "BLOCK B DONE WITH WARNINGS ($TTL_WARNINGS TTL policies missing). $NEXT"
+else echo "BLOCK B DONE. $NEXT"; fi
