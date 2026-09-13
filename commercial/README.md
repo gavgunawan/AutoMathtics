@@ -77,7 +77,7 @@ production deployment controls remain required before any public paid launch.
 
 Email/mobile verification and an adult checkbox are NOT legal proof of adulthood or
 parental responsibility. Since 13 Sep 2026 sign-up agrees to the public Terms of Service and Privacy Policy
-(`terms-2026-09-13.2`, `server/site.mjs`); those words still need the launch-country legal review.
+(`terms-2026-09-13.3`, `server/site.mjs`); those words still need the launch-country legal review.
 Use synthetic child data until the launch-country privacy/consent review is complete.
 
 ## Local checks (no dependencies or cloud access required)

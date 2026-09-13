@@ -59,6 +59,13 @@ test('the terms carry their version and give the Indonesian text precedence; ref
   assert.ok(renderSitePage('/terms').includes('offers cannot be combined with each other or with any other discount, and the yearly price is never reduced further'));
   assert.ok(renderSitePage('/id/terms').includes('penawaran tidak dapat digabungkan satu sama lain maupun dengan potongan lain, dan harga tahunan tidak pernah dipotong lagi'));
   assert.ok(renderSitePage('/refunds').includes('You were charged twice for the same month.'));
+  // no refunds (the owner, 13 Sep 2026): said plainly in both languages, with only the exceptions a wrong charge or an ended service
+  // leaves no choice about — and nothing left that promised more
+  assert.ok(renderSitePage('/refunds').includes('Payments to AutoMathtics are not refunded.'));
+  assert.ok(renderSitePage('/id/refunds').includes('Pembayaran kepada AutoMathtics tidak dikembalikan.'));
+  assert.ok(renderSitePage('/terms').includes('Payments are not refunded, except as the <a href="/refunds">Refund Policy</a> sets out.'));
+  for (const gone of ['72 hours', 'decide it fairly', 'we do not usually refund']) assert.ok(!renderSitePage('/refunds').includes(gone), gone);
+  for (const gone of ['72 jam', 'putuskan secara adil', 'biasanya tidak mengembalikan']) assert.ok(!renderSitePage('/id/refunds').includes(gone), gone);
   assert.ok(renderSitePage('/privacy').includes('<b>__session</b>'), 'the one cookie is named');
   const known = new Set(['/', '/join', '/styles.css', '/icons/icon-180.png', '/fonts/Rajdhani-500.woff2', '/fonts/Orbitron-700.woff2', ...SITE_PAGES.flatMap((p) => LANGS.map((l) => sitePath(p, l)))]);
   for (const page of SITE_PAGES) for (const lang of LANGS) {
