@@ -550,7 +550,8 @@ The site is served at **https://automathtics.net** by Firebase Hosting, and the 
    refuses on the new address with `auth/unauthorized-domain`.
 5. The deploy (`.github/workflows/deploy.yml`) sets `APP_ORIGIN=https://automathtics.net`, which every link, email and checkout
    return carries, and `APP_ALSO_ORIGINS` to the project's own `web.app` and `firebaseapp.com` hosts, which keep taking forms from
-   the devices that opened the app there. The deploy still checks the release on the `web.app` host, which always answers.
+   the devices that opened the app there. The deploy still checks the release on the `web.app` host, which always answers. Since the cutover to
+   automathtics-live (The cutover, below) this is the `deploy-live` job, and the staging job serves its own `web.app` host.
 6. `www.automathtics.net`: add it in Hosting as a redirect to `automathtics.net`, with the records Hosting lists for it.
 
 The public pages — `/pricing`, `/terms`, `/privacy`, `/refunds`, `/contact`, and the same under `/id/` in Bahasa Indonesia — are
@@ -659,10 +660,10 @@ sign-in, its reCAPTCHA and its SMS name the real domain. The domain must be list
 and this project's Firebase Hosting must serve it, which is true only once automathtics.net has moved to the live
 project. Until then leave it unset; then set `FIREBASE_AUTH_DOMAIN=automathtics.net` (for the workflow, the variable `LIVE_AUTH_DOMAIN`) and deploy again.
 
-**From GitHub.** `.github/workflows/deploy.yml` has a second job, `deploy-live`, beside the staging job, which is unchanged. It runs on the
+**From GitHub.** `.github/workflows/deploy.yml` has a second job, `deploy-live`, beside the staging job, which since the cutover serves its own `web.app` host. It runs on the
 same pushes, only when the repository variable `LIVE_PROJECT_ID` is set, and deploys with `APP_MODE=production`, `PAYMENT_PROVIDER=none`,
 `APP_ORIGIN=https://automathtics.net`, `FIREBASE_AUTH_DOMAIN` from the variable `LIVE_AUTH_DOMAIN` (unset until the domain moves), the project's own `web.app` and `firebaseapp.com` hosts as
-`APP_ALSO_ORIGINS` (so it can be tried there before the domain moves), and the staging job's email and waiting-list settings. Then it
+`APP_ALSO_ORIGINS` (so it can be tried there before the domain moves), the staging job's email settings, and the waiting list's sheet, which only this job names since the cutover. Then it
 checks that `https://LIVE_PROJECT_ID.web.app/api/health` reports the commit. Its repository variables (Settings → Secrets and variables
 → Actions → Variables; block H prints them for the live project; none is a secret):
 

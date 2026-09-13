@@ -45,7 +45,8 @@ test('from 14 September the same page starts the trial instead, and names the on
   const h = await uiFixture(t, { signedIn: false, family: false, ...at(WIB_OPEN) });
   assert.ok(text(h).includes('10 October 2026, 23:59 WIB'), 'one date, in the reader\'s own time zone');
   assert.ok(text(h).includes('No card, nothing to cancel.'));
-  assert.ok(text(h).includes('starts charging on 11 October'), 'paying during the trial is possible and costs nothing until then');
+  assert.ok(text(h).includes('No card needed, and you are only ever charged if you choose a plan yourself.'), 'nothing is charged unless the parent chooses a plan');
+  assert.ok(!text(h).includes('set a subscription up'), 'and no promise of a subscription during the trial: payments are not open yet');
   assert.equal(h.nodes('INPUT').length, 0, 'the list is closed: the way in is sign-up');
   await h.click('Start the free trial ▶');
   assert.ok(text(h).includes('A new crew starts here.'), 'which is the ordinary sign-up, where the email check and the mobile code live');
