@@ -17,6 +17,7 @@
 // `source` is the tag on the link a post carried (/join?from=ig), so the owner can see which post brought people in. It is
 // a short slug from a fixed shape, never free text, and it says nothing about the person.
 import { equal, fail, mac, object, sha256 } from './security.mjs';
+import { MONTHLY_PRICES, ANNUAL_PERCENT_OFF } from './pricing.mjs';
 
 const DAY = 86_400_000;
 export const WAITLIST_TTL_MS = 400 * DAY, WAITLIST_MAIL_TIMEOUT_MS = 3000;
@@ -34,6 +35,27 @@ const wib = (ms) => (Number.isFinite(ms) ? new Date(ms + 7 * 3_600_000).toISOStr
 const ADDRESS = /^[^\s@<>"]{1,64}@[^\s@<>"]{1,190}\.[^\s@<>"]{2,}$/;
 const SOURCE = /^[a-z0-9][a-z0-9-]{0,23}$/;
 const esc = (s) => String(s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
+// The opening email (the owner's approval of 13 Sep 2026), sent once to every address on the list when the doors open. The words
+// are the ones the owner approved; the prices come from the price list, so this email cannot quote a price the pages do not.
+export const OPENING_SUBJECT = 'AutoMathtics is open: free until 10 October';
+export const WAITLIST_OPEN_A_RUN = 90; // Resend's free plan sends 100 a day, and a day's new confirmations share them
+export const WAITLIST_OPEN_CLAIM_MS = 10 * 60_000; // a run that stopped mid-send: its claim lapses, and the next run writes
+const grouped = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+function openingEmail(origin, leave) {
+  const site = String(origin).replace(/^https?:\/\//, ''), join = `${origin}/join`;
+  const open = "You asked us to write when AutoMathtics opened. It's open now.";
+  const free = 'Every family can use it free until 10 October 2026, 23:59 WIB. No card needed.';
+  const steps = [`Sign up at ${site}/join with your email and a password.`, 'Confirm your email, then add your mobile number for the sign-in code.', 'Name your crew and add up to four children.'];
+  const what = "Your children practise maths in short papers and earn coins for the shop. You get a weekly email showing what they answer quickly, what's slow, and what keeps going wrong.";
+  const price = `After 10 October it's IDR ${grouped(MONTHLY_PRICES[1])} a month for one child (${grouped(MONTHLY_PRICES[2])} for two, ${grouped(MONTHLY_PRICES[3])} for three, ${grouped(MONTHLY_PRICES[4])} for four), or pay yearly and save ${ANNUAL_PERCENT_OFF}%. You're only ever charged if you choose a plan yourself.`;
+  const text = ['Hi,', '', open, '', free, '', ...steps.map((s, i) => `${i + 1}. ${s}`), '', what, '', price, '', 'See you on the grid,', 'AutoMathtics', '',
+    `If you no longer want to hear from us, take yourself off the list here: ${leave}`].join('\n');
+  const html = ['<p>Hi,</p>', `<p>${esc(open)}</p>`, `<p>${esc(free)}</p>`,
+    `<ol><li>Sign up at <a href="${esc(join)}">${esc(site)}/join</a> with your email and a password.</li><li>${esc(steps[1])}</li><li>${esc(steps[2])}</li></ol>`,
+    `<p>${esc(what)}</p>`, `<p>${esc(price)}</p>`, '<p>See you on the grid,<br>AutoMathtics</p>',
+    `<p><a href="${esc(leave)}">Take yourself off the list</a> if you no longer want to hear from us.</p>`].join('');
+  return { text, html };
+}
 
 export class Waitlist {
   constructor({ store, secret = null, origin = '', mailer = null, replyTo = null, opensOn = '19 September 2026',
@@ -169,6 +191,58 @@ export class Waitlist {
       if (state?.sheetId === this.sheetId && this.now() - state.syncedAt < WAITLIST_SHEET_REFRESH_MS) return { synced: false, reason: 'fresh' };
     } catch { /* the marker cannot be read: write the sheet, which is what the marker exists to save */ }
     return this.syncSheet('startup');
+  }
+  /**
+   * The opening email, once to every address on the list that has not had it: { dryRun, limit } → counts, never an address. A dry
+   * run (the default) only counts. Each address is claimed in a transaction before its send and marked once the provider took it,
+   * so two runs at once, a rerun, or a run after new people joined never write to anyone twice; a send that failed is released for
+   * the next run; an address that left the list or expired is not written to. At most `limit` a run, those who joined first first.
+   * `left` is how many listed addresses are still without the email after the run.
+   */
+  async announceOpening({ dryRun = true, limit = WAITLIST_OPEN_A_RUN } = {}) {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) fail(400, 'INVALID_LIMIT');
+    const now = this.now();
+    const due = (await this.store.list('waitlist')).filter((r) => typeof r?.email === 'string' && !(r.expireAt <= now) && !r.openedMailAt)
+      .sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0));
+    const counts = { due: due.length, sent: 0, failed: 0, skipped: 0 };
+    if (!this.mailer) return { status: 'no_mailer', ...counts, left: due.length };
+    if (!this.secret) return { status: 'unsigned', ...counts, left: due.length }; // no unsubscribe can be made, so nothing is sent
+    if (dryRun) return { status: 'dry_run', ...counts, wouldSend: Math.min(due.length, limit), left: due.length };
+    for (const listed of due.slice(0, limit)) {
+      const id = sha256(listed.email.toLowerCase()), path = `waitlist/${id}`;
+      const row = await this.store.transaction(async (tx) => {
+        const current = await tx.get(path);
+        if (!current || current.openedMailAt || current.expireAt <= now || (current.openingClaimAt && now - current.openingClaimAt < WAITLIST_OPEN_CLAIM_MS)) return null;
+        tx.set(path, { ...current, openingClaimAt: now });
+        return current;
+      });
+      if (!row) { counts.skipped++; continue; }
+      // the claim is let go either way: replaced by the mark when the provider took the email, or left off for the next run
+      const settle = (patch) => this.store.transaction(async (tx) => {
+        const current = await tx.get(path);
+        if (!current) return; // left the list while the email was on its way: nothing to mark
+        const { openingClaimAt, ...rest } = current;
+        tx.set(path, { ...rest, ...patch });
+      });
+      const leave = this.leaveUrl(id), { text, html } = openingEmail(this.origin, leave);
+      try {
+        await this.mailer.send({
+          to: row.email, subject: OPENING_SUBJECT, html, text, tags: [{ name: 'kind', value: 'waitlist_open' }],
+          ...(this.replyTo ? { replyTo: this.replyTo } : {}),
+          headers: { 'List-Unsubscribe': `<${leave}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' },
+          idempotencyKey: `waitlist-open:${id}`,
+        });
+        await settle({ openedMailAt: this.now() });
+        counts.sent++;
+      } catch (error) {
+        await settle({});
+        this.log({ event: 'waitlist_open_failed', reason: String(error?.code || error?.message || error).slice(0, 120) });
+        counts.failed++;
+      }
+    }
+    const left = due.length - counts.sent;
+    this.log({ event: 'waitlist_open_run', ...counts, left });
+    return { status: 'sent', ...counts, left };
   }
   /** How many addresses the list holds, for the operator's dashboard. Counts rows; reads no address. */
   async size() { return (await this.store.list('waitlist')).length; }

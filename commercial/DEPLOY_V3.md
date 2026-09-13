@@ -575,6 +575,25 @@ The service writes as its runtime account with a spreadsheets-only token from th
 fails is logged as `waitlist_sheet_failed` (never with the address), costs nobody their place, and the next join, leave or
 startup writes the sheet again. Do not type into columns A–E or G–H: every rewrite replaces them. Use another tab for notes.
 
+### The opening email (13 Sep 2026)
+
+When the doors open, the email the owner approved goes once to every address on the list (`scripts/waitlist-open.mjs`,
+`Waitlist.announceOpening` in `server/waitlist.mjs`). It runs from the report job's image, which already carries
+`SESSION_SECRET` (it signs each unsubscribe link) and the Resend key. First a dry run, which only counts:
+
+```bash
+gcloud run jobs execute automathtics-v3-report --project "$PROJECT_ID" --region asia-southeast1 --wait \
+  --args scripts/waitlist-open.mjs \
+  --update-env-vars '^|^WAITLIST_FROM=AutoMathtics <no-reply@automathtics.net>|WAITLIST_REPLY_TO=support@automathtics.net'
+```
+
+then the same with `--args scripts/waitlist-open.mjs,--send`. Each address is claimed in a transaction before its send and marked
+once Resend took it, so a rerun, two runs at once, or a run after more people joined never writes to anyone twice; an address that
+left the list or expired gets nothing; a failed send is let go and the next run writes it. At most 90 a run (`--limit N` lowers it),
+under Resend's free 100 a day: a longer list finishes with a rerun the next day. The job's log is one JSON line of counts —
+`due`, `sent`, `failed`, `skipped`, `left` — never an address. Exit 2 means a send failed or nothing could be signed: run it again
+after reading the log.
+
 ## 6. Activate your test family
 
 Sign up with your adult email, verify it, enrol the mobile MFA factor, then sign in
