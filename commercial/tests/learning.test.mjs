@@ -196,3 +196,46 @@ test('Stage 2 hardening: creating more than sixty abandoned learning sessions in
   f.advance(60 * 60_000 + 1);
   assert.equal((await f.learning.start(childCtx, { track: 'engine' })).resumed, false);
 });
+
+// The weekly report's source (the owner's review of 14 Sep 2026): history keeps the newest 60 rows and nothing of a session left
+// early, so every session that ends also leaves one playlog record with all its answers, however it ended.
+const playPath = (k, id) => `families/${k.p.familyId}/learning/${k.child.id}/playlog/${id}`;
+test('every session that ends leaves a playlog record with its answers: finished, quit, restarted, and left open past its two hours', async () => {
+  const f = fixture(); const k = await f.childSession();
+  // finished: every answer, whether it passed, its time, and 400 days before TTL removes it
+  const { started, last } = await play(f, k, 'engine', { wrongAt: 3 });
+  const done = await f.store.get(playPath(k, started.session.id));
+  assert.equal(last.done, true);
+  assert.deepEqual([done.how, done.answered, done.total, done.correct, done.incorrect, done.timeout, done.passed, done.qlog.length, done.lastResult, done.secs],
+    ['finished', 25, 25, 24, 1, 0, false, 25, 'correct', 75]);
+  assert.equal(done.expireAt, done.ts + 400 * 86_400_000); assert.equal(done.date, (await f.learning.state(k.childCtx)).history[0].date);
+
+  // quit after one right answer and one wrong one: the record holds both, and the history row says how and what was answered
+  const a = await f.learning.start(k.childCtx, { track: 'nav' }), stored = await f.store.get(sessPath(k, a.session.id));
+  f.advance(4_000); await f.learning.answer(k.childCtx, { sessionId: a.session.id, index: 0, attemptId: randomUUID(), answer: canonical(stored.questions[0]) });
+  f.advance(9_000); await f.learning.answer(k.childCtx, { sessionId: a.session.id, index: 1, attemptId: randomUUID(), answer: wrong(stored.questions[1]) });
+  f.advance(2_000); assert.deepEqual(await f.learning.quit(k.childCtx, { sessionId: a.session.id, how: 'quit' }), { ok: true, status: 'quit' });
+  const q = await f.store.get(playPath(k, a.session.id));
+  assert.deepEqual([q.how, q.track, q.answered, q.correct, q.incorrect, q.timeout, q.lastResult, q.secs, q.qlog.map((x) => x.ok)], ['quit', 'nav', 2, 1, 1, 0, 'incorrect', 15, [1, 0]]);
+  const row = (await f.learning.state(k.childCtx)).history[0];
+  assert.deepEqual([row.quit, row.how, row.atQ, row.answered, row.correct, row.incorrect, row.timeout, row.lastResult, row.secs], [true, 'quit', 2, 2, 1, 1, 0, 'incorrect', 15]);
+  assert.ok(!('qlog' in row), 'the progress document stays small: the answers live in the record');
+
+  // restart: the same record, told apart; an unknown way of leaving is refused and the session stays open
+  const b = await f.learning.start(k.childCtx, { track: 'engine' });
+  assert.deepEqual(await f.learning.quit(k.childCtx, { sessionId: b.session.id, how: 'restart' }), { ok: true, status: 'quit' });
+  assert.deepEqual((({ how, answered, lastResult }) => [how, answered, lastResult])(await f.store.get(playPath(k, b.session.id))), ['restart', 0, null]);
+  const c = await f.learning.start(k.childCtx, { track: 'engine' });
+  await assert.rejects(f.learning.quit(k.childCtx, { sessionId: c.session.id, how: 'give-up' }), rejected('INVALID_REQUEST'));
+  assert.equal(await f.store.get(playPath(k, c.session.id)), null);
+
+  // left open: one wrong answer, then nothing for two hours; the next start retires it and records it at its last answer
+  const cStored = await f.store.get(sessPath(k, c.session.id));
+  f.advance(5_000); await f.learning.answer(k.childCtx, { sessionId: c.session.id, index: 0, attemptId: randomUUID(), answer: wrong(cStored.questions[0]) });
+  const lastActive = f.now();
+  f.advance(2 * 60 * 60_000 + 1);
+  await grantEntitlement(f.store, { familyId: k.p.familyId, seatLimit: 1, accessUntil: f.now() + 60 * 60_000, reason: 'extend for test', actor: 'test-operator' }, f.now());
+  assert.notEqual((await f.learning.start(k.childCtx, { track: 'engine' })).session.id, c.session.id);
+  const left = await f.store.get(playPath(k, c.session.id));
+  assert.deepEqual([left.how, left.answered, left.incorrect, left.lastResult, left.ts], ['left_open', 1, 1, 'incorrect', lastActive]);
+});

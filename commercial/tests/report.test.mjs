@@ -72,7 +72,7 @@ test('the System Scan\'s weak styles: Engine only, trouble first then slow, at m
 });
 
 test('goldilocks: 8 in 10 right answers inside 80 % of the time; not enough play; the zone; half rounds up; the clamps and the 25-point step', () => {
-  assert.deepEqual(PACE_RULES, { minAnswers: 20, quantile: 0.8, target: 0.8, accuracy: 0.8, timeouts: 0.1, slower: 1.15, round: 5, min: 30, max: 200, step: 25, zone: 10 });
+  assert.deepEqual(PACE_RULES, { minAnswers: 20, quantile: 0.8, target: 0.8, accuracy: 0.8, timeouts: 0.1, slower: 1.15, round: 5, min: 30, max: 200, step: 25, leftEarly: 0.2, leftAfterWrong: 3, zone: 10 });
   const few = goldilocks(right(19, 40), 100); assert.equal(few.enough, false); assert.equal(few.direction, 'keep'); assert.equal(few.suggested, 100); assert.equal(few.evidence.n, 19);
   const fast = goldilocks([...right(16, 45), ...right(4, 90)], 100);
   assert.deepEqual(fast, { current: 100, suggested: 75, direction: 'faster', enough: true, held: false, limit: null, evidence: { q: 0.45, accuracy: 1, timeoutRate: 0, n: 20 } }, '56.25 → 55, then 25 points in one week');
@@ -98,6 +98,23 @@ test('goldilocks guards: never faster under 80 % right or above 10 % timeouts; w
   g = goldilocks([...right(17, 50), ...timeout(3)], 200); assert.deepEqual([g.direction, g.suggested], ['keep', 200], 'the most time there is');
   g = goldilocks(wrongIn(20), 100); assert.deepEqual([g.direction, g.suggested, g.held, g.evidence.q], ['keep', 100, true, null], 'nothing right: nothing to measure speed by');
   assert.deepEqual(pace(timeout(20)), ['slower', 115]);
+});
+
+test('goldilocks never goes faster while sessions end early: more than 1 in 5 left before the end, or 3 left straight after a wrong answer or a time-out; slower still goes slower, and the sentence says why', () => {
+  const fast = [...right(16, 45), ...right(4, 90)]; // 100 % right, 8 in 10 in under half the time: faster on the answers alone
+  assert.deepEqual(pace(fast), ['faster', 75]);
+  const held = (leaving, p = 100) => { const g = goldilocks(fast, p, leaving); return [g.direction, g.suggested, g.held, g.limit]; };
+  assert.deepEqual(held({ started: 60, left: 57, afterWrong: 0 }), ['keep', 100, true, 'leaving'], '57 of 60 left early');
+  assert.deepEqual(held({ started: 10, left: 3, afterWrong: 0 }), ['keep', 100, true, 'leaving'], '3 of 10 is more than 1 in 5');
+  assert.deepEqual(held({ started: 10, left: 2, afterWrong: 0 }), ['faster', 75, false, null], '2 of 10 is exactly 1 in 5: allowed');
+  assert.deepEqual(held({ started: 40, left: 3, afterWrong: 3 }), ['keep', 100, true, 'leaving'], 'few left, but three straight after a wrong answer');
+  assert.deepEqual(held({ started: 40, left: 2, afterWrong: 2 }), ['faster', 75, false, null]);
+  assert.deepEqual(held({ started: 0, left: 0, afterWrong: 0 }), ['faster', 75, false, null], 'no sessions to judge: the answers decide');
+  const slower = goldilocks([...right(17, 50), ...timeout(3)], 100, { started: 60, left: 57, afterWrong: 30 });
+  assert.deepEqual([slower.direction, slower.suggested, slower.limit], ['slower', 115, null], 'leaving never holds back more time');
+  assert.equal(paceSentence('Geralt', goldilocks(fast, 90, { started: 60, left: 57, afterWrong: 41 })), 'Geralt left 57 of 60 sessions before the end (41 straight after a wrong answer or a time-out): the pace stays at 90% until more sessions are finished.');
+  assert.equal(paceSentence('Geralt', goldilocks(fast, 90, { started: 60, left: 57, afterWrong: 0 })), 'Geralt left 57 of 60 sessions before the end: the pace stays at 90% until more sessions are finished.');
+  assert.deepEqual(goldilocks(fast, 100, { started: 60, left: 57, afterWrong: 0 }).evidence.leaving, { started: 60, left: 57, afterWrong: 0 });
 });
 
 test('goldilocks never clamps against the evidence: a pace under 30 with fast right answers stays put, a bound that holds a pace is named, and a pace under 30 still goes slower when the evidence says so', () => {
@@ -140,7 +157,7 @@ test('the week: ISO Mondays across years, weeks that do not exist, the label, an
   assert.equal(lastWeek(Date.parse('2027-01-04T01:00:00Z'), 'Asia/Singapore'), '2026-W53');
 });
 
-test('a child\'s week: rows dated in the week only, quits apart, the totals, papers passed, and the System Scan passed, available or locked', () => {
+test('a child\'s week from history alone: rows dated in the week only, sessions left early among them, the totals, papers passed, and the System Scan passed, available or locked', () => {
   const week = '2026-W36';
   const history = [
     row('2026-09-07', right(25, 40)),                                                          // Monday after: next week
@@ -152,8 +169,9 @@ test('a child\'s week: rows dated in the week only, quits apart, the totals, pap
     row('2026-08-30', wrongIn(25)),                                                            // Sunday before: out
   ];
   const r = buildChildReport({ history, pacePercent: 100, scanFocus: false, lastScanWeek: null, levels: { engine: { level: 3, paper: 41 }, nav: { level: 3, paper: 21 } }, week, nickname: 'Allison' });
-  assert.deepEqual(r.totals, { questions: 75, correct: 70, accuracy: 70 / 75, minutes: Math.round((900 + 720 + 780 + 60) / 60), sessions: 4, left: 1, passes: 2, papersPassed: 5, checkpoints: 1 });
-  assert.equal(r.answered, true); assert.equal(r.scan.status, 'available'); assert.equal(r.scan.focus, false); assert.equal(r.partial, false);
+  assert.deepEqual(r.totals, { started: 5, finished: 4, left: 1, restarted: 0, quit: 0, leftOpen: 0, afterWrong: 0, questions: 79, known: 75, correct: 70, accuracy: 70 / 75,
+    minutes: Math.round((900 + 720 + 780 + 60) / 60), passes: 2, papersPassed: 5, checkpoints: 1, scans: 0 }, 'the quit row counts as a session, with its 4 answers that were never kept');
+  assert.equal(r.played, true); assert.equal(r.unkeptAnswers, true); assert.equal(r.answered, true); assert.equal(r.scan.status, 'available'); assert.equal(r.scan.focus, false); assert.equal(r.partial, false);
   assert.equal(r.trouble.length, 0); assert.ok(r.pace.enough); assert.match(r.pace.sentence, /^Allison /);
   const scanRow = row('2026-09-04', right(25, 40), { mode: 'scan', papers: 'SYSTEM SCAN' });
   assert.equal(buildChildReport({ history: [scanRow], levels: { engine: { level: 3, paper: 41 } }, week }).scan.status, 'passed', 'a passed scan row in the week');
@@ -163,7 +181,7 @@ test('a child\'s week: rows dated in the week only, quits apart, the totals, pap
   assert.equal(buildChildReport({ history: [], levels: { engine: { level: 1, paper: 20 } }, week }).scan.status, 'locked', 'Sector B before paper 21');
   assert.equal(buildChildReport({ history: [], levels: { engine: { level: 0, paper: 90 } }, week }).scan.status, 'locked', 'Sector A');
   const quiet = buildChildReport({ history: [history[2]], levels: { engine: { level: 0, paper: 1 } }, week, nickname: 'Geralt' });
-  assert.equal(quiet.answered, false); assert.equal(quiet.totals.left, 1); assert.equal(quiet.pace.enough, false);
+  assert.equal(quiet.answered, false); assert.equal(quiet.played, true, 'a session left early is a session played'); assert.equal(quiet.totals.left, 1); assert.equal(quiet.totals.questions, 4); assert.equal(quiet.pace.enough, false);
   // sixty rows kept, the oldest inside the week: the counts cover only what the progress document still holds
   const busy = times(HISTORY_KEPT, () => row('2026-09-02', right(5, 40)));
   assert.equal(buildChildReport({ history: busy, levels: { engine: { level: 3, paper: 41 } }, week }).partial, true);
@@ -172,6 +190,38 @@ test('a child\'s week: rows dated in the week only, quits apart, the totals, pap
   const mixed = buildChildReport({ history: [row('2026-09-01', [...right(11, 40, 3, 2), ...wrongIn(3, 3, 2), ...times(5, () => ans('nav', 3, 3, 90, true))])], levels: { engine: { level: 3, paper: 41 } }, week });
   assert.deepEqual(mixed.trouble.map((s) => s.label), ['Division · difficulty 2 of 5']); assert.deepEqual(mixed.slow.map((s) => s.label), ['Word problems · Sector D (percentages, ratio, rate and averages) · difficulty 3 of 5']);
   assert.deepEqual(mixed.focusStyles.map((w) => [w.key, w.cls, w.label]), [['engine:3:2', 'trouble', 'Division · difficulty 2 of 5']], 'the scan focus is Engine only');
+});
+
+test('a child\'s week from its playlog records: every session however it ended, answers from sessions left early too, history only before the first record, the papers left most often, and no faster pace while sessions end early', () => {
+  const week = '2026-W36', levels = { engine: { level: 3, paper: 41 }, nav: { level: 1, paper: 11 } }, T = Date.UTC(2026, 8, 2, 3); // Wednesday 2 Sep, 10:00 in Jakarta
+  const rec = (i, how, qlog, more = {}) => ({ id: `s${i}`, ts: T + i * 60_000, date: '2026-09-02', track: 'nav', mode: 'paper', level: 1, levelId: 'B', papers: '11–15', how, total: 15,
+    answered: qlog.length, correct: qlog.filter((x) => x.ok).length, incorrect: qlog.filter((x) => !x.ok).length, timeout: 0, lastResult: qlog.length ? (qlog.at(-1).ok ? 'correct' : 'incorrect') : null, passed: false, secs: 30 * qlog.length, qlog, ...more });
+  const navRight = (n) => times(n, () => ans('nav', 1, 2, 20, true)), navWrong = (n) => times(n, () => ans('nav', 1, 2, 30, false));
+  const plays = [
+    rec(1, 'finished', navRight(15), { passed: true }),                            // a pass
+    ...times(6, (i) => rec(10 + i, 'restart', [...navRight(1), ...navWrong(1)])),  // six restarts straight after a wrong answer
+    rec(20, 'quit', navRight(2)),                                                  // a quit after two right answers
+    rec(21, 'left_open', [], { papers: '6–10' }),                                  // left open at the first question
+    { ...rec(30, 'finished', navRight(15), { passed: true }), date: '2026-09-07' }, // the Monday after: next week
+  ];
+  const history = [
+    { ...row('2026-09-02', navRight(15), { track: 'nav', level: 1, levelId: 'B', papers: '11–15' }), ts: T + 60_000 },                          // the pass above, in history too: counted once
+    { ts: T - 3_600_000, date: '2026-09-02', track: 'nav', mode: 'paper', level: 1, levelId: 'B', papers: '11–15', quit: true, atQ: 3, total: 15 }, // before the first record: history, no answers
+    { ...row('2026-09-01', right(25, 40)), ts: T - 86_400_000 },                                                                                 // before the first record: a pass from history
+  ];
+  const r = buildChildReport({ history, plays, pacePercent: 90, levels, week, nickname: 'Geralt' });
+  assert.deepEqual(r.totals, { started: 11, finished: 2, left: 9, restarted: 6, quit: 1, leftOpen: 1, afterWrong: 6, questions: 15 + 12 + 2 + 3 + 25, known: 15 + 12 + 2 + 25, correct: 15 + 6 + 2 + 25,
+    accuracy: 48 / 54, minutes: Math.round((450 + 6 * 60 + 60 + 600) / 60), passes: 2, papersPassed: 10, checkpoints: 0, scans: 0 });
+  assert.deepEqual([r.played, r.answered, r.unkeptAnswers, r.partial], [true, true, true, false]);
+  assert.deepEqual(r.mostLeft, { track: 'nav', levelId: 'B', papers: '11–15', n: 8, label: 'Navigator Sector B, papers 11–15' });
+  assert.deepEqual([r.pace.direction, r.pace.limit], ['keep', 'leaving']);
+  assert.match(r.pace.sentence, /^Geralt left 9 of 11 sessions before the end \(6 straight after a wrong answer or a time-out\): the pace stays at 90%/);
+  // recorded from the start: history is not read, and nothing is missing
+  const clean = buildChildReport({ history: [history[0]], plays: plays.slice(0, 1), pacePercent: 100, levels, week });
+  assert.deepEqual([clean.totals.started, clean.totals.finished, clean.totals.left, clean.unkeptAnswers], [1, 1, 0, false]);
+  // a week of nothing but restarts is still a week played
+  const restarts = buildChildReport({ history: [], plays: plays.slice(1, 7), levels, week });
+  assert.deepEqual([restarts.played, restarts.totals.started, restarts.totals.finished, restarts.totals.questions], [true, 6, 0, 12]);
 });
 
 test('the scan focus the report offers is the focused scan\'s own list: all kept history, Engine only, none above the sector now', () => {
@@ -194,13 +244,13 @@ test('style words: the operation (by tier in the fraction sectors) or the word-p
   for (let level = 0; level < LEVELS.length; level++) for (let tier = 1; tier <= 5; tier++) for (const track of ['engine', 'nav']) assert.doesNotMatch(styleLabel({ track, level, tier }), /undefined|null|\?/);
 });
 
-test('the family\'s week: every child given, totals across them, answered only when someone answered; the inputs come from a normalised progress document', () => {
+test('the family\'s week: every child given, totals across them, played only when someone played; the inputs come from a normalised progress document', () => {
   const allison = normalizeProgress({ ...freshProgress(), engine: { level: 3, paper: 41, bossCleared: 2 }, pacePercent: 90, scanFocus: true, history: [row('2026-09-02', [...right(20, 40), ...wrongIn(5)])] });
   const geralt = normalizeProgress(freshProgress());
   assert.deepEqual(inputsOf(allison).levels.engine, { level: 3, paper: 41, bossCleared: 2 }); assert.equal(inputsOf(allison).scanFocus, true); assert.equal(inputsOf(geralt).scanFocus, false);
   const r = buildFamilyReport({ familyLabel: 'Adventurers', week: '2026-W36', children: [{ id: 'c-1', nickname: 'Allison', progress: allison }, { id: 'c-2', nickname: 'Geralt', progress: geralt }] });
-  assert.equal(r.weekLabel, '31 Aug – 6 Sep 2026'); assert.equal(r.answered, true); assert.deepEqual(r.totals, { sessions: 1, questions: 25, correct: 20, accuracy: 0.8 });
+  assert.equal(r.weekLabel, '31 Aug – 6 Sep 2026'); assert.equal(r.played, true); assert.equal(r.answered, true); assert.deepEqual(r.totals, { started: 1, finished: 1, left: 0, questions: 25, known: 25, correct: 20, accuracy: 0.8 });
   assert.deepEqual(r.children.map((c) => [c.childId, c.nickname, c.answered, c.pace.current]), [['c-1', 'Allison', true, 90], ['c-2', 'Geralt', false, 100]]);
   assert.equal(r.children[0].scan.focus, true);
-  assert.equal(buildFamilyReport({ week: '2026-W36', children: [{ id: 'c-2', nickname: 'Geralt', progress: geralt }] }).answered, false, 'nobody answered: no email that week');
+  assert.equal(buildFamilyReport({ week: '2026-W36', children: [{ id: 'c-2', nickname: 'Geralt', progress: geralt }] }).played, false, 'nobody played: no email that week');
 });

@@ -85,6 +85,7 @@ test('a parent can export the family: everything the family is, none of the secr
   assert.equal(x.children.length, 2); const ca = x.children.find((c) => c.id === A);
   assert.equal(ca.nickname, 'A'); assert.ok(ca.progress.nav.paper > 1); assert.ok(ca.ledger.length >= 1); assert.equal(ca.ledger[0].seq, 1); assert.equal(ca.progress.wallet.rp, 100);
   assert.equal(x.children.find((c) => c.id === B).ledger.length, 0);
+  assert.ok(ca.playlog.length >= 1 && ca.playlog.every((r) => r.how && Number.isInteger(r.answered) && Array.isArray(r.qlog)), 'every session that ended, with its answers');
   assert.ok(x.billing.some((e) => e.type === 'payment.succeeded')); assert.ok(x.audit.some((e) => e.action === 'child.created')); assert.equal(x.exportedBy, 'parentA');
   const text = JSON.stringify(x);
   for (const secret of ['scrypt', 'hash', 'csrf', 'phoneKey', 'sessions/', 'fingerprint', 'expireAt', 'reauthAfter', 'pinAttempts']) assert.ok(!text.includes(secret), `export leaks ${secret}`);

@@ -178,7 +178,7 @@ The server stamps short-lived records with an `expireAt` timestamp; Firestore de
 if a TTL policy names that field for the collection group. Run once, after the database exists:
 
 ```bash
-for GROUP in sessions rateLimits pinAttempts operations audit recoveries sweeps reports outbox feedback feedbackDays leaving; do
+for GROUP in sessions rateLimits pinAttempts operations audit recoveries sweeps reports playlog outbox feedback feedbackDays leaving; do
   gcloud firestore fields ttls update expireAt --collection-group="$GROUP" \
     --enable-ttl --project "$PROJECT_ID"
 done
@@ -390,7 +390,11 @@ unadvertised and configure/test that protection before broad registration.
 
 Every Monday at 07:00 Singapore time a Cloud Run job (`node scripts/report.mjs send`, from the service's own image) sends each
 family one email about the last complete ISO week in Singapore, the same week for every family: per child what was right and
-fast, right but slow, and wrong again and again, the totals, a goldilocks pace and a System Scan focus offer. It goes to the
+fast, right but slow, and wrong again and again, the totals, a goldilocks pace and a System Scan focus offer. Since 14 Sep 2026
+the totals come from the playlog records every ended session leaves (learning.mjs): sessions started, finished and left early
+(restarted, quit or left open, how many straight after a wrong answer, the papers left most often), answers and minutes from
+unfinished sessions included, and the pace never goes faster while more than 1 session in 5 ends early or 3 end straight
+after a wrong answer. Weeks before the records read history, and say what it could not keep. It goes to the
 owner's current address at the identity provider, and only if that address is verified and the account not disabled; if the
 identity provider cannot be asked, the family fails and the next run tries again. There is no email for a week without play,
 with the weekly report switched off, or without an active entitlement. `reports/{familyId}:{week}` holds one claim and its

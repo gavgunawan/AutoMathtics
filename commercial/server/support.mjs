@@ -85,7 +85,8 @@ export class Support {
       const c = await tx.get(`families/${f}/children/${id}`); if (!c) continue;
       const prog = await tx.get(`families/${f}/learning/${id}`);
       const ledger = (await tx.list(`families/${f}/learning/${id}/ledger`)).sort((a, b) => a.seq - b.seq);
-      children.push({ id: c.id, nickname: c.nickname, icon: c.icon, status: c.status, createdAt: c.createdAt || null, demographics: c.demographics || null, start: c.start || null, progress: prog ? normalizeProgress(prog) : null, ledger });
+      const playlog = (await tx.list(`families/${f}/learning/${id}/playlog`)).sort((a, b) => a.ts - b.ts).map(({ expireAt, ...row }) => row); // every session that ended, with its answers (not the TTL bookkeeping)
+      children.push({ id: c.id, nickname: c.nickname, icon: c.icon, status: c.status, createdAt: c.createdAt || null, demographics: c.demographics || null, start: c.start || null, progress: prog ? normalizeProgress(prog) : null, ledger, playlog });
     }
     // The v2 rocket import's one-shot marker (server/migrate.mjs) is operator bookkeeping, not the family's
     // data, and this is the one response that carries the game config as stored: it stays out.
@@ -710,7 +711,7 @@ export class Support {
     // phase 2 — each child's learning and game data, bounded batches, then the progress document
     for (const childId of family.childIds || []) {
       const base = `families/${familyId}/learning/${childId}`;
-      await this.sweep(`${base}/sessions`, batch, familyId, 'sessions'); await this.sweep(`${base}/ledger`, batch, familyId, 'ledgerRows'); await this.sweep(`${base}/operations`, batch, familyId, 'operations');
+      await this.sweep(`${base}/sessions`, batch, familyId, 'sessions'); await this.sweep(`${base}/ledger`, batch, familyId, 'ledgerRows'); await this.sweep(`${base}/operations`, batch, familyId, 'operations'); await this.sweep(`${base}/playlog`, batch, familyId, 'playlog');
       await this.store.transaction(async (tx) => { if (await tx.get(base)) tx.delete(base); });
       await this.progress(familyId, `child:${childId}`);
     }
