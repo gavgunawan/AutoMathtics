@@ -28,16 +28,18 @@ function links(d) {
     children: Object.fromEntries(d.children.map((c, i) => { const b = buttonsFor(c); return [c.childId, { ...(b.pace !== null ? { pace: `${ORIGIN}/#email=v1.pace${i}.sig` } : {}), ...(b.focus !== null ? { focus: `${ORIGIN}/#email=v1.focus${i}.sig` } : {}) }]; })) };
 }
 
-test('the subject names who played, the missions and the accuracy; each child\'s section says what went right and fast, right but slow, and wrong again and again', () => {
+test('the subject names who played and how many sessions were started and finished; each child\'s section says what went right and fast, right but slow, and wrong again and again', () => {
   const d = family(), r = renderReport(d, links(d));
-  assert.equal(r.subject, 'Allison and Geralt this week: 5 missions, 90% right'); assert.equal(subjectFor(d), r.subject);
+  assert.equal(r.subject, 'Allison and Geralt this week: 5 sessions started, 5 finished'); assert.equal(subjectFor(d), r.subject);
   for (const s of ['✅ Right and fast', 'Division · difficulty 3 of 5 — 50 of 50 right, using about 30% of the time allowed', 'Word problems · Sector D (percentages, ratio, rate and averages) · difficulty 3 of 5 — 15 of 15 right, using about 40% of the time allowed',
     '⚠️ Wrong again and again', 'Division · difficulty 4 of 5 — wrong 8 times out of 20 (3 ran out of time)',
     '🐢 Right but slow', 'Subtracting fractions · difficulty 3 of 5 — 10 of 12 right, but using about 90% of the time allowed', 'Adding fractions · difficulty 2 of 5 — 8 of 8 right, but using about 85% of the time allowed',
-    '3 missions · 65 questions · 100% right · 36 minutes · 15 papers passed', '2 missions · 40 questions · 75% right · 24 minutes',
+    '3 sessions started · 3 finished · 3 passed (15 papers) · 65 questions answered · 100% right · 36 minutes', '2 sessions started · 2 finished · 40 questions answered · 75% right · 24 minutes',
+    '31 Aug – 6 Sep 2026 · 5 sessions started · 5 finished · 90% right across 105 answers',
+    'A session is one run of papers: 15 word problems on Navigator, or 25 questions on Engine. Left early means quit or restarted before the last question.',
     '⏱ Pace: Allison uses under half the time allowed on 8 in 10 correct answers, at 100% accuracy: the goldilocks pace is 75% (now 100%) — more push, still room to think.',
     '⏱ Pace: Geralt ran out of time on 13% of questions, at 75% accuracy: the goldilocks pace is 115% (now 100%) — more time to think it through.',
-    '🧠 System Scan: passed this week.', '🧠 System Scan: not done this week. It resets every Monday.', 'Mia didn’t answer any questions this week.']) assert.ok(r.text.includes(s), s);
+    '🧠 System Scan: passed this week.', '🧠 System Scan: not done this week. It resets every Monday.', 'Mia didn’t play this week.']) assert.ok(r.text.includes(s), s);
   assert.ok(r.text.indexOf('Subtracting fractions') < r.text.indexOf('Adding fractions'), 'the slowest first');
 });
 
@@ -62,7 +64,7 @@ test('buttons only when due: the pace when a change is suggested, the scan focus
   const tried = one({ engine: { level: 3, paper: 41, bossCleared: 2 }, history: [row('2026-09-04', [...times(24, () => ans('engine', 3, 3, 40, true)), ans('engine', 3, 3, 50, false)], { mode: 'scan', papers: 'SYSTEM SCAN' })] });
   assert.ok(renderReport(tried, links(tried)).text.includes('🧠 System Scan: tried this week, not passed yet (a pass needs all 25 right). It resets every Monday.'));
   const zone = one({ engine: { level: 3, paper: 41, bossCleared: 2 }, history: [row('2026-09-01', times(20, () => ans('engine', 3, 3, 76, true)))] }), z = renderReport(zone, links(zone));
-  assert.ok(z.text.includes('already in the goldilocks zone')); assert.ok(!z.html.includes('pace to')); assert.equal(z.subject, 'Allison this week: 1 mission, 100% right');
+  assert.ok(z.text.includes('already in the goldilocks zone')); assert.ok(!z.html.includes('pace to')); assert.equal(z.subject, 'Allison this week: 1 session started, 1 finished');
 });
 
 test('the scan focus is offered on the focused scan\'s own list, and only when it has one: all recent play, Engine only, none above the sector now', () => {
@@ -98,19 +100,36 @@ test('the footer says why, how to stop, where the settings are and who sent it; 
   assert.ok(r.text.includes(`Stop weekly reports: ${ORIGIN}/#email=v1.unsub.sig`) && r.text.includes(`Email settings: ${ORIGIN}/`)); assert.ok(r.html.includes('>Stop weekly reports</a>') && r.html.includes('>Email settings</a>'));
   assert.ok(r.text.includes('AutoMathtics · Mission Control for parents · pilot.example.test'));
   const busy = one({ engine: { level: 3, paper: 41, bossCleared: 2 }, history: times(60, () => row('2026-09-02', times(5, () => ans('engine', 3, 3, 40, true)))) });
-  assert.ok(renderReport(busy, links(busy)).text.includes('A busy week: these counts cover the newest 60 sessions the game keeps.'));
+  assert.ok(renderReport(busy, links(busy)).text.includes('Some sessions from before the game kept every answer are missing: it kept only the newest 60 then.'));
   const quit = buildFamilyReport({ week: WEEK, children: [{ id: ID.allison, nickname: 'Allison', progress: normalizeProgress({ ...freshProgress(), history: [row('2026-09-02', times(25, () => ans('engine', 3, 3, 40, true)))] }) },
     { id: ID.geralt, nickname: 'Geralt', progress: normalizeProgress({ ...freshProgress(), history: [{ ts: 0, date: '2026-09-02', track: 'engine', mode: 'paper', level: 0, levelId: 'A', papers: '1–5', quit: true, atQ: 3, total: 25 }] }) }] });
-  assert.ok(renderReport(quit, links(quit)).text.includes('Geralt started 1 session this week but left before the end.'));
+  const q = renderReport(quit, links(quit));
+  for (const words of ['1 session started · 0 finished · 1 left early · 3 questions answered · 0 minutes', '↩ Left early: 1 of 1 session.',
+    'Sessions left early before the game kept every answer have no answers or time, so accuracy and minutes cover the rest.']) assert.ok(q.text.includes(words), words);
+  assert.equal(q.subject, 'Allison and Geralt this week: 2 sessions started, 1 finished', 'a child who only left early has played, and is named');
   const many = buildFamilyReport({ week: WEEK, children: ['Ana', 'Ben', 'Cy', 'Di'].map((n, i) => ({ id: `id-${i}`, nickname: n, progress: normalizeProgress({ ...freshProgress(), history: [row('2026-09-02', times(5, () => ans('engine', 0, 1, 40, true)))] }) })) });
-  assert.equal(subjectFor(many), 'Ana, Ben and 2 more this week: 4 missions, 100% right');
+  assert.equal(subjectFor(many), 'Ana, Ben and 2 more this week: 4 sessions started, 4 finished');
+});
+
+test('a child who leaves sessions early: how many of how many, how they ended, straight after a wrong answer, the papers left most often, and no faster pace', () => {
+  const T = Date.UTC(2026, 8, 2, 3), q = (n, ok) => times(n, () => ans('nav', 1, 2, 20, ok));
+  const rec = (i, how, qlog, more = {}) => ({ id: `s${i}`, ts: T + i * 60_000, date: '2026-09-02', track: 'nav', mode: 'paper', level: 1, levelId: 'B', papers: '11–15', how, total: 15,
+    answered: qlog.length, correct: qlog.filter((x) => x.ok).length, incorrect: qlog.filter((x) => !x.ok).length, timeout: 0, lastResult: qlog.length ? (qlog.at(-1).ok ? 'correct' : 'incorrect') : null, passed: false, secs: 20 * qlog.length, qlog, ...more });
+  const plays = [rec(1, 'finished', q(15, true), { passed: true }), rec(2, 'finished', q(15, true), { passed: true }), ...times(5, (_, i) => rec(10 + i, 'restart', [...q(3, true), ...q(1, false)])), rec(20, 'quit', q(2, true)), rec(21, 'left_open', [])];
+  const d = buildFamilyReport({ week: WEEK, children: [{ id: ID.geralt, nickname: 'Geralt', progress: normalizeProgress({ ...freshProgress(), pacePercent: 90 }), plays }] }), r = renderReport(d, links(d));
+  for (const words of ['9 sessions started · 2 finished · 2 passed (10 papers) · 7 left early · 52 questions answered · 90% right · 17 minutes',
+    '↩ Left early: 7 of 9 sessions (5 restarted, 1 quit, 1 left open); 5 of them straight after a wrong answer or a time-out. Left most often: Navigator Sector B, papers 11–15 (7 times).',
+    '⏱ Pace: Geralt left 7 of 9 sessions before the end (5 straight after a wrong answer or a time-out): the pace stays at 90% until more sessions are finished.']) assert.ok(r.text.includes(words), `${words}\n---\n${r.text}`);
+  assert.equal(buttonsFor(d.children[0]).pace, null); assert.ok(!r.html.includes('pace to'), 'no faster button while sessions end early');
+  assert.equal(r.subject, 'Geralt this week: 9 sessions started, 2 finished');
+  assert.ok(!r.text.includes('before the game kept every answer'), 'all recorded: no note about missing answers');
 });
 
 test('no id in sight, every typed name escaped, the game\'s colours, one column for a phone, and nothing fetched from anywhere', () => {
   const d = family({ allisonName: 'Ana-Maria O\'Neil' }), r = renderReport(d, links(d));
   for (const id of Object.values(ID)) { assert.ok(!r.html.includes(id), id); assert.ok(!r.text.includes(id), id); }
   assert.ok(r.html.includes('Ana-Maria O&#39;Neil')); assert.ok(!r.html.includes('O\'Neil'), 'never raw in the HTML'); assert.ok(r.text.includes('Ana-Maria O\'Neil'));
-  assert.equal(r.subject, 'Ana-Maria O\'Neil and Geralt this week: 5 missions, 90% right');
+  assert.equal(r.subject, 'Ana-Maria O\'Neil and Geralt this week: 5 sessions started, 5 finished');
   for (const colour of ['#35E0FF', '#FF2DA8', '#07091A']) assert.ok(r.html.includes(colour), colour);
   assert.doesNotMatch(r.html, /<img|<link|<script|@import|url\(/i, 'no image, stylesheet, script or font from anywhere');
   const urls = [...r.html.matchAll(/https?:\/\/[^"'\s<)]+/g)].map((m) => m[0]); assert.ok(urls.length >= 5 && urls.every((u) => u.startsWith(`${ORIGIN}/`)), urls.join(' '));

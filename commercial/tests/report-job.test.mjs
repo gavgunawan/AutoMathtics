@@ -64,7 +64,7 @@ test('one email for the week, to the owner\'s verified address: buttons that exp
   assert.equal(r.week, WEEK); assert.equal(REPORT_TIME_ZONE, 'Asia/Singapore');
   assert.deepEqual(r.results.map((x) => [x.familyId, x.week, x.status]), [[a.familyId, WEEK, 'sent']]); assert.equal(r.sent, 1); assert.equal(r.failed, 0);
   assert.equal(mailer.sent.length, 1); const m = mailer.sent[0];
-  assert.equal(m.to, 'parentA@example.test'); assert.equal(m.subject, 'Allison this week: 1 mission, 100% right'); assert.equal(m.idempotencyKey, `report:${a.familyId}:${WEEK}`);
+  assert.equal(m.to, 'parentA@example.test'); assert.equal(m.subject, 'Allison this week: 1 session started, 1 finished'); assert.equal(m.idempotencyKey, `report:${a.familyId}:${WEEK}`);
   assert.deepEqual(m.tags, [{ name: 'kind', value: 'weekly_report' }, { name: 'week', value: WEEK }]); assert.equal(m.headers['List-Unsubscribe-Post'], 'List-Unsubscribe=One-Click');
   const unsub = m.headers['List-Unsubscribe'].match(/^<https:\/\/pilot\.example\.test\/api\/email\/unsubscribe\?t=(v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)>$/)[1];
   assert.deepEqual(decode(unsub), { a: 'unsub', v: 'progress', u: 'parentA', f: a.familyId, w: WEEK, e: linkExpiry('unsub', WEEK) });

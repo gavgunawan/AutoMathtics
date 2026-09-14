@@ -105,14 +105,14 @@ test('a monthly family\'s report covers its four weeks, says so, and adds them u
   const kids = [{ id: 'c-1', nickname: 'Allison', progress }];
   const week = buildFamilyReport({ children: kids, week: '2026-W36' });
   assert.deepEqual([week.cadence, week.period, week.weeks, week.weekLabel], ['weekly', 'week', ['2026-W36'], '31 Aug – 6 Sep 2026']);
-  assert.deepEqual(week.totals, { sessions: 1, questions: 25, correct: 25, accuracy: 1 });
+  assert.deepEqual(week.totals, { started: 1, finished: 1, left: 0, questions: 25, known: 25, correct: 25, accuracy: 1 });
   const month = buildFamilyReport({ children: kids, week: '2026-W36', cadence: 'monthly' });
   assert.deepEqual([month.cadence, month.period, month.weeks], ['monthly', 'month', ['2026-W33', '2026-W34', '2026-W35', '2026-W36']]);
   assert.equal(month.weekLabel, '10 Aug – 6 Sep 2026');
-  assert.deepEqual(month.totals, { sessions: 3, questions: 75, correct: 75, accuracy: 1 }, 'all three weeks of play');
+  assert.deepEqual(month.totals, { started: 3, finished: 3, left: 0, questions: 75, known: 75, correct: 75, accuracy: 1 }, 'all three weeks of play');
   assert.equal(month.week, '2026-W36', 'the report\'s own week is still the one it was made for: the buttons expire from it');
-  assert.equal(subjectFor(month), 'Allison this month: 3 missions, 100% right');
-  assert.equal(subjectFor(week), 'Allison this week: 1 mission, 100% right');
+  assert.equal(subjectFor(month), 'Allison this month: 3 sessions started, 3 finished');
+  assert.equal(subjectFor(week), 'Allison this week: 1 session started, 1 finished');
   // a month in which nothing was answered is no email either
   assert.equal(buildFamilyReport({ children: [{ id: 'c-2', nickname: 'Mia', progress: freshProgress() }], week: '2026-W36', cadence: 'monthly' }).answered, false);
 });
@@ -137,7 +137,7 @@ test('the job: a monthly family waits for the first Monday of the month, then ge
   assert.equal(r.week, '2026-W36');
   assert.deepEqual(by[monthly.familyId], ['sent', null]);
   const m = mailer.sent.find((x) => x.to === 'parentMonthly@example.test');
-  assert.equal(m.subject, 'Allison this month: 2 missions, 100% right');
+  assert.equal(m.subject, 'Allison this month: 2 sessions started, 2 finished');
   assert.deepEqual(m.tags, [{ name: 'kind', value: 'monthly_report' }, { name: 'week', value: '2026-W36' }]);
   assert.equal(m.idempotencyKey, `report:${monthly.familyId}:2026-W36`);
   assert.ok(m.text.startsWith('AUTOMATHTICS · MONTHLY REPORT'), m.text.slice(0, 40));
