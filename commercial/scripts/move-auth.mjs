@@ -73,7 +73,8 @@ export async function move({ token, write = false, log = (line) => console.log(J
     } while (page);
     return users;
   };
-  const { hashConfig: hash } = await call('GET', `/admin/v2/projects/${FROM}/config`, FROM);
+  // Identity Platform's settings keep the password hash parameters under signIn (v2 Config.signIn.hashConfig), never at the top.
+  const hash = (await call('GET', `/admin/v2/projects/${FROM}/config`, FROM)).signIn?.hashConfig;
   if (hash?.algorithm !== 'SCRYPT' || !hash.signerKey || !hash.saltSeparator || !hash.rounds || !hash.memoryCost) throw Error('Staging\'s password hash parameters could not be read: stopping before anything is written.');
   const staging = await download(FROM), records = importRecords(staging), before = await download(TO);
   log({ step: 'staging', ...summary(staging) });
