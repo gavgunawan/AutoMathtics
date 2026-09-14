@@ -7,6 +7,8 @@ cd "$(dirname "$0")/.."
 : "${PROJECT_ID:?Set the NEW Firebase project ID}"
 : "${CONFIRM_PROJECT:?Set CONFIRM_PROJECT to the same project ID}"
 : "${FIREBASE_WEB_API_KEY:?Copy the new project web apiKey}"
+# The web apiKey itself: a key copied out of a chat or a masked console field can arrive as dots, and would deploy a page nobody can sign in on.
+[[ "$FIREBASE_WEB_API_KEY" =~ ^[A-Za-z0-9_-]{30,64}$ ]] || { echo 'FIREBASE_WEB_API_KEY must be the web app apiKey itself: letters, digits, - and _ only (a copied key can arrive masked with dots).' >&2; exit 1; }
 : "${FIREBASE_WEB_APP_ID:?Copy the new project web appId}"
 : "${TRUSTED_PROXY_HOPS:?Set TRUSTED_PROXY_HOPS (0-5) after measuring X-Forwarded-For on the real origin; see DEPLOY_V3.md}"
 [[ "$TRUSTED_PROXY_HOPS" =~ ^[0-5]$ ]] || { echo 'TRUSTED_PROXY_HOPS must be 0-5.' >&2; exit 1; }
