@@ -259,3 +259,17 @@ export function scanState(prog, now, timeZone) {
   const e = trk(prog, 'engine'); const unlocked = scanUnlocked(e); const week = weekISO(now, timeZone);
   return { unlocked, available: unlocked && prog.wallet.lastScanWeek !== week, week, doneThisWeek: prog.wallet.lastScanWeek === week };
 }
+// The family's calendar (the owner's decision of 14 Sep 2026): the zones AutoMathtics serves, as a parent picks one in Game & progress,
+// and the first one a new family gets, from the calling code of the mobile verified at sign-up: Indonesia on WIB (a family in WITA or
+// WIT picks its own), Singapore and Malaysia on theirs, any other number on the default. Only the zone's name is kept, never the number.
+export const TIME_ZONE_CHOICES = Object.freeze([
+  Object.freeze({ zone: 'Asia/Jakarta', label: 'WIB (UTC+7) · Java, Sumatra, West and Central Kalimantan' }),
+  Object.freeze({ zone: 'Asia/Makassar', label: 'WITA (UTC+8) · Bali, Nusa Tenggara, Sulawesi, South, East and North Kalimantan' }),
+  Object.freeze({ zone: 'Asia/Jayapura', label: 'WIT (UTC+9) · Maluku and Papua' }),
+  Object.freeze({ zone: 'Asia/Singapore', label: 'Singapore (UTC+8)' }),
+  Object.freeze({ zone: 'Asia/Kuala_Lumpur', label: 'Malaysia (UTC+8)' }),
+]);
+export function timeZoneForPhone(phone) {
+  const p = typeof phone === 'string' ? phone : '';
+  return p.startsWith('+62') ? 'Asia/Jakarta' : p.startsWith('+65') ? 'Asia/Singapore' : p.startsWith('+60') ? 'Asia/Kuala_Lumpur' : null;
+}

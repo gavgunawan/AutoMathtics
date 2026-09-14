@@ -2053,11 +2053,15 @@ async function parentGameScreen() {
   // each child with the colour and ring /me gives it (S1): the game state names children, it does not dress them
   const meta = (id) => model?.family?.children?.find((c) => c.id === id) || null;
   const kids = g.children.map((row, i) => ({ ...row, kid: { ...row.child, accent: meta(row.child.id)?.accent ?? i }, look: { ring: meta(row.child.id)?.appearance?.ring || null } }));
-  // 🌐 the family's time zone (v3's own; v2 had none)
+  // 🌐 the family's time zone: when a child's day ends (streaks, the weekly report's days), picked from the zones AutoMathtics serves
+  // (game.mjs parentState timeZones). A zone stored before the list existed stays listed, first, so opening the screen changes nothing.
   const zone = adminSection('🌐 Family time zone', 'c-cyan'), zoneRow = el('div', null, 'row');
-  const tz = adminInput('text', 'Family time zone', { value: g.timeZone, maxLength: 64 }, 'grow');
+  const tz = el('select', null, 'admin-inp grow'), choices = Array.isArray(g.timeZones) ? g.timeZones : [];
+  tz.setAttribute('aria-label', 'Family time zone');
+  for (const c of [...(g.timeZone && !choices.some((x) => x.zone === g.timeZone) ? [{ zone: g.timeZone, label: g.timeZone }] : []), ...choices]) { const o = el('option', c.label); o.value = c.zone; tz.append(o); }
+  tz.value = g.timeZone;
   zoneRow.append(tz, button('Save time zone', async () => { await parentGameMutation('/game/parent/settings', { timeZone: tz.value }); }, 'tiny'));
-  zone.append(zoneRow, el('p', 'A time zone name, for example Asia/Jakarta or Asia/Singapore.', 'subtle')); box.append(zone);
+  zone.append(zoneRow, el('p', 'When a child’s day ends: streaks and the weekly report count days in this time zone.', 'subtle')); box.append(zone);
   // ⏱ Time control (2628-2655): a card per child in the child's colour
   const time = adminSection('⏱ Time control', 'c-magenta');
   time.append(el('p', '100% is the built-in time per question: at 70% a 50-second question gets 35 seconds, at 150% it gets 75. No question gets under 5 seconds.', 'admin-intro'), ...kids.map(paceCard));
