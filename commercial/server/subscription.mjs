@@ -28,10 +28,10 @@ export const PLANS = Object.freeze({
   big: { id: 'big', name: 'Big family', seats: 6, priceCents: 1400, purchasable: true },
 });
 // The opening trial (the owner's launch plan, 13 Sep 2026; the same moments /join and the public pages state): a trial started from
-// 19 Sep 2026 00:00 WIB until 10 Oct 2026 23:59 WIB runs to that one moment however late it began, with a slot for each child the
+// 14 Sep 2026 00:00 WIB until 10 Oct 2026 23:59 WIB runs to that one moment however late it began, with a slot for each child the
 // price list covers. A trial started in the days before and still running when the doors open joins it (withOpening). Any other
 // trial is the ordinary one: TRIAL_DAYS, and the trial plan's seats.
-export const OPENING = Object.freeze({ opensAt: Date.UTC(2026, 8, 18, 17), endsAt: Date.UTC(2026, 9, 10, 17), seats: 4, name: 'Opening free trial' });
+export const OPENING = Object.freeze({ opensAt: Date.UTC(2026, 8, 13, 17), endsAt: Date.UTC(2026, 9, 10, 17), seats: 4, name: 'Opening free trial' });
 export const inOpening = (now) => Number.isSafeInteger(now) && now >= OPENING.opensAt && now < OPENING.endsAt;
 /** A trial as it stands with the opening applied: one started before the doors opened and still running when they do runs to the opening's end, with its seats. The stored facts are never rewritten. */
 export function withOpening(sub) {

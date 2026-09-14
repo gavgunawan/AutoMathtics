@@ -58,7 +58,7 @@ pilot uses **synthetic child data** (`README.md`, `DEPLOY_V3.md`).
 written onto every deletion record.
 
 **The waiting list** (`waitlist`, `server/waitlist.mjs`) is separate from every family record and holds one row per
-address: the address itself, because writing to it on 19 September is the whole point of the list; the moment the
+address: the address itself, because writing to it on 14 September is the whole point of the list; the moment the
 permission to write was given; and the short tag the link in a post carried (`/join?from=ig`), which describes the
 post and not the person. No name, no child, no account — an address on this list belongs to nobody who has signed
 up for anything. Rows are keyed by a SHA-256 of the address, so the same address left twice is one row and a row
@@ -99,7 +99,7 @@ for aggregate analysis of the learning path; they are never shown to other famil
 - ~~The parent-facing disclosure and consent version (`consentVersion`) updated from `pilot-v1`.~~ Done 13 Sep 2026: the Terms of
   Service, Privacy Policy and Refund Policy are public at `/terms`, `/privacy` and `/refunds`, in English and under `/id/` in Bahasa
   Indonesia (`server/site-pages.mjs`, the parent-facing form of this inventory: a change to one is a change to the other). Sign-up
-  cannot be sent without the terms box, and creating a family requires and records `consentVersion: terms-2026-09-13.3`. The words
+  cannot be sent without the terms box, and creating a family requires and records `consentVersion: terms-2026-09-13.4`. The words
   still need the launch-country legal review below before real money is taken.
 - Logging retention set and verified on the staging project (`DEPLOY_V3.md`).
 - The email wording (`email-v1`: the two sign-up boxes and the report's footer) in the same legal review; a verified sending domain at the email provider, and its data-processing terms, before any family but the owner's gets an email.

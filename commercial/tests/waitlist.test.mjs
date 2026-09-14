@@ -67,7 +67,7 @@ test('a new address gets one email back, with an unsubscribe that works, and a r
   assert.equal(sent.to, 'parent@example.test');
   assert.equal(sent.replyTo, 'support@example.test', 'no-reply writes it, but a person answers it');
   assert.match(sent.subject, /on the AutoMathtics list/);
-  assert.match(sent.text, /19 September 2026/);
+  assert.match(sent.text, /14 September 2026/);
   assert.equal(sent.headers['List-Unsubscribe-Post'], 'List-Unsubscribe=One-Click');
   const url = sent.headers['List-Unsubscribe'].replace(/^<|>$/g, '');
   assert.ok(sent.text.includes(url) && sent.html.includes(url), 'the same link a reader can click is the one the provider posts to');

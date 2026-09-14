@@ -1,4 +1,4 @@
-// The waiting list (the owner's request of 12 Sep 2026): the doors open on 19 September, the posts go up before then, so the
+// The waiting list (the owner's request of 12 Sep 2026): the doors open on 14 September, the posts go up before then, so the
 // /join page takes an address and nothing else until they do. No account, no password, no mobile, no child — a parent who
 // leaves an address here has not signed up for anything and has nothing to sign out of.
 //
@@ -58,7 +58,7 @@ function openingEmail(origin, leave) {
 }
 
 export class Waitlist {
-  constructor({ store, secret = null, origin = '', mailer = null, replyTo = null, opensOn = '19 September 2026',
+  constructor({ store, secret = null, origin = '', mailer = null, replyTo = null, opensOn = '14 September 2026',
     release = null, now = Date.now, log = () => {}, mailTimeoutMs = WAITLIST_MAIL_TIMEOUT_MS,
     sheets = null, sheetId = null, sheetDeadlineMs = WAITLIST_SHEET_DEADLINE_MS } = {}) {
     this.store = store; this.secret = secret; this.origin = origin; this.mailer = mailer; this.replyTo = replyTo;

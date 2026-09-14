@@ -92,20 +92,21 @@ test('the environment the helper writes for a live project is one the service st
   }
 });
 
-test('the workflow: the staging job as it was; deploy-live only once LIVE_PROJECT_ID is set, every project value from LIVE_* variables, production, payments not open, the domain, staging\'s email and waiting-list settings, the same pinned actions, and the commit checked on the live host', async () => {
+test('the workflow: the staging job on its own host and without the sheet; deploy-live only once LIVE_PROJECT_ID is set, every project value from LIVE_* variables, production, payments not open, the domain, staging\'s email settings and the waiting-list sheet, the same pinned actions, and the commit checked on the live host', async () => {
   const workflow = await read('../../.github/workflows/deploy.yml'), lines = workflow.split('\n');
   const job = (name) => { const i = lines.indexOf(`  ${name}:`); assert.ok(i > 0, name); let j = i + 1; while (j < lines.length && !/^  [a-z][a-z0-9-]*:\s*$/.test(lines[j])) j++; return lines.slice(i, j); };
   const envOf = (block) => { const out = {}, i = block.indexOf('    env:'); for (let k = i + 1; k < block.length && /^      /.test(block[k]); k++) { const m = /^      ([A-Z0-9_]+): (.*)$/.exec(block[k]); if (m) out[m[1]] = m[2].replace(/^'(.*)'$/, '$1'); } return out; };
   const usesOf = (block) => block.map((l) => /uses: (\S+)/.exec(l)?.[1]).filter(Boolean);
   const staging = job('deploy'), live = job('deploy-live'), se = envOf(staging), le = envOf(live), text = live.join('\n');
-  assert.deepEqual([se.PROJECT_ID, se.PAYMENT_PROVIDER, se.STRIPE_PRICE_BIG, 'APP_MODE' in se, 'FIREBASE_AUTH_DOMAIN' in se, se.APP_ORIGIN], ['automathtics-v3-staging', 'stripe', PRICES.STRIPE_PRICE_BIG, false, false, 'https://automathtics.net']);
+  assert.deepEqual([se.PROJECT_ID, se.PAYMENT_PROVIDER, se.STRIPE_PRICE_BIG, 'APP_MODE' in se, 'FIREBASE_AUTH_DOMAIN' in se, se.APP_ORIGIN, se.APP_ALSO_ORIGINS, 'WAITLIST_SHEET_ID' in se], ['automathtics-v3-staging', 'stripe', PRICES.STRIPE_PRICE_BIG, false, false, 'https://automathtics-v3-staging.web.app', 'https://automathtics-v3-staging.firebaseapp.com', false], 'since the cutover staging serves its own host and writes no sheet');
   assert.ok(!staging.some((l) => /^\s+(if|needs):/.test(l)), 'staging runs on every push, as before');
   assert.ok(staging.join('\n').includes('workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}') && staging.join('\n').includes('- run: npm run deploy:staging'));
   assert.ok(live.includes("    if: ${{ vars.LIVE_PROJECT_ID != '' }}"), 'only once the variable names a project');
   assert.deepEqual([le.PROJECT_ID, le.CONFIRM_PROJECT, le.RUNTIME_SA, le.FIREBASE_WEB_API_KEY, le.FIREBASE_WEB_APP_ID], ['${{ vars.LIVE_PROJECT_ID }}', '${{ vars.LIVE_PROJECT_ID }}', '${{ vars.LIVE_RUNTIME_SA }}', '${{ vars.LIVE_FIREBASE_WEB_API_KEY }}', '${{ vars.LIVE_FIREBASE_WEB_APP_ID }}']);
   assert.ok(text.includes('workload_identity_provider: ${{ vars.LIVE_WORKLOAD_IDENTITY_PROVIDER }}') && text.includes('service_account: ${{ vars.LIVE_DEPLOY_SERVICE_ACCOUNT }}'), 'its own identity, from its own variables');
   assert.deepEqual([le.APP_MODE, le.PAYMENT_PROVIDER, le.APP_ORIGIN, le.FIREBASE_AUTH_DOMAIN, le.TRUSTED_PROXY_HOPS], ['production', 'none', 'https://automathtics.net', '${{ vars.LIVE_AUTH_DOMAIN }}', '2'], 'the sign-in domain is a variable, unset until automathtics.net is served by the live project');
-  for (const key of ['EMAIL_PROVIDER', 'FEEDBACK_TO', 'OWNER_EMAIL', 'EMAIL_FROM', 'WAITLIST_FROM', 'WAITLIST_REPLY_TO', 'WAITLIST_SHEET_ID']) assert.equal(le[key], se[key], `${key} is staging's`);
+  for (const key of ['EMAIL_PROVIDER', 'FEEDBACK_TO', 'OWNER_EMAIL', 'EMAIL_FROM', 'WAITLIST_FROM', 'WAITLIST_REPLY_TO']) assert.equal(le[key], se[key], `${key} is staging's`);
+  assert.equal(le.WAITLIST_SHEET_ID, '1vceAjJRQQYa1u3Z0okf7Tt3AOsZVBWui5Xvav985dNQ', 'the owner\'s sheet, written by the live service alone since the cutover');
   assert.equal(le.APP_ALSO_ORIGINS, 'https://${{ vars.LIVE_PROJECT_ID }}.web.app,https://${{ vars.LIVE_PROJECT_ID }}.firebaseapp.com', 'the project\'s own hosts, so it can be tried before the domain moves');
   assert.ok(!Object.keys(le).some((k) => /^STRIPE_|^FAKE_|WEBHOOK/.test(k)), 'no provider setting of any kind'); assert.ok(!text.includes('automathtics-v3-staging'), 'nothing of staging\'s project');
   for (const s of ['- run: npm run deploy:live', 'curl -fsS "https://${PROJECT_ID}.web.app/api/health"', 'grep -q "$GITHUB_SHA"', 'The live service is not running this commit.']) assert.ok(text.includes(s), s);

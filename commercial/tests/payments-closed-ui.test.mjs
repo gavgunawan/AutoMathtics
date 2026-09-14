@@ -63,15 +63,29 @@ test('UI, payments open: the same family sees the plans, the subscribe line and 
   await h.click('Cancel or pause'); assert.ok(h.root.textContent.includes('CANCEL OR PAUSE'));
 });
 
-test('UI, payments not open: before any trial the free trial is offered beside the short sentence; on the trial the full one; once it is over the short one again, and never a plan', async (t) => {
+test('UI, payments not open, during the opening: the free trial starts with the family and the full sentence shows beside it; once the opening is over the short one, and never a plan', async (t) => {
   let now = WIB('2026-09-15T10:00:00');
+  const h = await signUpAt(t, () => now);
+  assert.equal(h.requests.filter((r) => r.path === '/api/billing/trial').length, 1, 'started once, by the family\'s step, as with payments open');
+  assert.ok(h.root.textContent.includes('Opening free trial, ends 10 October 2026, 23:59 WIB.'), h.root.textContent.slice(0, 400));
+  assert.ok(h.root.textContent.includes(WITH_ACCESS), 'on the trial: the free access continues'); noProviderControls(h, 'the opening trial');
+  now = WIB('2026-10-12T10:00:00'); h.f.advance(now - h.f.now()); // the opening has ended
+  await h.api.refresh(); h.setAuth('newParent'); h.api.signInScreen(); await h.submitLogin();
+  assert.ok(h.root.textContent.includes('The subscription expired.'), h.root.textContent.slice(0, 400));
+  assert.ok(h.root.textContent.includes(WITHOUT_ACCESS) && !h.root.textContent.includes(WITH_ACCESS), 'no access: nothing is said to continue');
+  noProviderControls(h, 'expired');
+  assert.deepEqual(providerRoutes(h), []);
+});
+
+test('UI, payments not open, after the opening: the 7-day free trial is offered beside the short sentence; on the trial the full one; once it is over the short one again, and never a plan', async (t) => {
+  let now = WIB('2026-10-12T10:00:00');
   const h = await signUpAt(t, () => now);
   assert.ok(h.root.textContent.includes('Start the 7-day free trial'));
   assert.ok(h.root.textContent.includes(WITHOUT_ACCESS) && !h.root.textContent.includes(WITH_ACCESS), 'no access yet: nothing is said to continue');
   noProviderControls(h, 'no subscription');
   await h.click('Start the 7-day free trial');
   assert.ok(h.root.textContent.includes(WITH_ACCESS), h.root.textContent.slice(0, 400)); noProviderControls(h, 'the ordinary trial');
-  now = WIB('2026-10-12T10:00:00'); h.f.advance(now - h.f.now()); // past the opening, which the trial had joined: it is over
+  now = WIB('2026-10-20T10:00:00'); h.f.advance(now - h.f.now()); // past its seven days
   await h.api.refresh(); h.setAuth('newParent'); h.api.signInScreen(); await h.submitLogin();
   assert.ok(h.root.textContent.includes('The subscription expired.'), h.root.textContent.slice(0, 400));
   assert.ok(h.root.textContent.includes(WITHOUT_ACCESS) && !h.root.textContent.includes(WITH_ACCESS), 'no access: nothing is said to continue');

@@ -106,7 +106,7 @@ export function fixture({ provider = 'fake' } = {}) {
   async function login(uid, patch) { const idToken = token(uid, patch); const cookie = await service.login(idToken); return { cookie, idToken, ctx: await service.authenticate(cookie) }; }
   async function family(uid = 'parentA', seats = 1) {
     const session = await login(uid);
-    const created = await service.createFamily(session.ctx, { label: 'Test family', adultAttestation: true, consentVersion: 'terms-2026-09-13.3' });
+    const created = await service.createFamily(session.ctx, { label: 'Test family', adultAttestation: true, consentVersion: 'terms-2026-09-13.4' });
     if (created.token) {
       session.cookie = created.token;
       session.ctx = await service.authenticate(created.token);
