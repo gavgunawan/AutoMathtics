@@ -49,7 +49,9 @@ from the old project directly. The commercial server explicitly refuses the lega
   optional unticked one for news and offers — recorded by the server, and Mission Control's *Email updates* switches.
   Every Monday at 07:00 Singapore a Cloud Run job (`scripts/report.mjs`, block G) sends one email per family for its last
   complete week: per child what was right and fast, right but slow, and wrong again and again by question style, the
-  totals, a goldilocks pace and a System Scan focus offer (about 75 % weak styles, 25 % recap). Its buttons open the app,
+  totals, a goldilocks pace and a System Scan focus offer (about 75 % weak styles, 25 % recap). The totals count every
+  session that ended (playlog records, 14 Sep 2026): started, finished and left early, with answers from unfinished ones,
+  and the pace is never made faster while sessions keep ending early. Its buttons open the app,
   which confirms before anything changes, and mail apps get RFC 8058 one-click unsubscribe. Until the owner opens a Resend
   account the `fake` provider keeps each email in Firestore's outbox for 14 days (`DEPLOY_V3.md` → Email).
 - Cancel or pause (12 Sep 2026): one page, reached from Mission Control and from an email's unsubscribe link. It names

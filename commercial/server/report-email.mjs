@@ -14,12 +14,12 @@ const names = (list) => (list.length <= 1 ? list.join('') : list.length <= 3 ? `
  * to switch off, or to offer only when the focused scan would have styles to use (report.mjs focusStyles); none while it is locked.
  */
 export function buttonsFor(c) {
-  if (!c.answered) return { pace: null, focus: null };
+  if (!c.played) return { pace: null, focus: null };
   return { pace: c.pace.enough && c.pace.direction !== 'keep' ? c.pace.suggested : null, focus: c.scan.status === 'locked' ? null : c.scan.focus ? false : c.focusStyles?.length ? true : null };
 }
-/** "Allison and Geralt this week: 4 missions, 92% right" — the children who answered, the family's missions and accuracy. */
+/** "Allison and Geralt this week: 120 sessions started, 24 finished" — the children who played, and how the family's sessions went. */
 export function subjectFor(data) {
-  return `${names(data.children.filter((c) => c.answered).map((c) => c.nickname)) || 'Your family'} this ${data.period || 'week'}: ${count(data.totals.sessions, 'mission')}, ${pct(data.totals.accuracy)} right`;
+  return `${names(data.children.filter((c) => c.played).map((c) => c.nickname)) || 'Your family'} this ${data.period || 'week'}: ${count(data.totals.started, 'session')} started, ${data.totals.finished} finished`;
 }
 
 // ---- one child's section, as blocks both renderings share
@@ -29,9 +29,15 @@ const LISTS = [['strong', '✅ Right and fast', (s) => `${s.correct} of ${s.n} r
 function childBlocks(c, links, period = 'week') {
   const t = c.totals, name = c.nickname, b = buttonsFor(c), url = links.children?.[c.childId] || {}, blocks = [];
   blocks.push({ kind: 'name', text: name });
-  blocks.push({ kind: 'line', text: [count(t.sessions, 'mission'), count(t.questions, 'question'), `${pct(t.accuracy)} right`, count(t.minutes, 'minute'),
-    ...(t.papersPassed ? [`${count(t.papersPassed, 'paper')} passed`] : []), ...(t.checkpoints ? [`${count(t.checkpoints, 'check point')} cleared`] : []), ...(t.left ? [`${t.left} left early`] : [])].join(' · ') });
-  if (c.partial) blocks.push({ kind: 'note', text: `A busy ${period}: these counts cover the newest 60 sessions the game keeps.` });
+  const passedParts = [...(t.papersPassed ? [count(t.papersPassed, 'paper')] : []), ...(t.checkpoints ? [count(t.checkpoints, 'check point')] : []), ...(t.scans ? [count(t.scans, 'System Scan')] : [])];
+  blocks.push({ kind: 'line', text: [`${count(t.started, 'session')} started`, `${t.finished} finished`, ...(t.passes ? [`${t.passes} passed${passedParts.length ? ` (${passedParts.join(', ')})` : ''}`] : []),
+    ...(t.left ? [`${t.left} left early`] : []), `${count(t.questions, 'question')} answered`, ...(t.known ? [`${pct(t.accuracy)} right`] : []), count(t.minutes, 'minute')].join(' · ') });
+  if (t.left) {
+    const how = [...(t.restarted ? [`${t.restarted} restarted`] : []), ...(t.quit ? [`${t.quit} quit`] : []), ...(t.leftOpen ? [`${t.leftOpen} left open`] : [])];
+    blocks.push({ kind: 'line', text: `↩ Left early: ${t.left} of ${count(t.started, 'session')}${how.length ? ` (${how.join(', ')})` : ''}${t.afterWrong ? `; ${t.afterWrong} of them straight after a wrong answer or a time-out` : ''}.${c.mostLeft ? ` Left most often: ${c.mostLeft.label} (${count(c.mostLeft.n, 'time')}).` : ''}` });
+  }
+  if (c.unkeptAnswers) blocks.push({ kind: 'note', text: 'Sessions left early before the game kept every answer have no answers or time, so accuracy and minutes cover the rest.' });
+  if (c.partial) blocks.push({ kind: 'note', text: 'Some sessions from before the game kept every answer are missing: it kept only the newest 60 then.' });
   const lists = LISTS.filter(([k]) => c[k].length);
   if (!lists.length) blocks.push({ kind: 'note', text: `No style had five or more answers this ${period}, so there is nothing to sort yet.` });
   for (const [k, title, detail] of lists) blocks.push({ kind: 'list', title, items: c[k].map((s) => ({ label: s.label, detail: detail(s) })) });
@@ -48,7 +54,7 @@ function childBlocks(c, links, period = 'week') {
   }
   return blocks;
 }
-const quietLine = (c, period = 'week') => (c.totals.left ? `${c.nickname} started ${count(c.totals.left, 'session')} this ${period} but left before the end.` : `${c.nickname} didn’t answer any questions this ${period}.`);
+const quietLine = (c, period = 'week') => `${c.nickname} didn’t play this ${period}.`;
 
 // ---- HTML
 const p = (text, style = '') => `<p style="margin:0 0 10px;font:16px/1.5 ${FONT};color:${C.muted};${style}">${esc(text)}</p>`;
@@ -68,9 +74,10 @@ const row = (inner, pad = '20px 24px') => `<tr><td style="padding:${pad};border-
  */
 export function renderReport(data, links) {
   const subject = subjectFor(data), host = (() => { try { return new URL(links.app).host; } catch { return 'AutoMathtics'; } })();
-  const played = data.children.filter((c) => c.answered), quiet = data.children.filter((c) => !c.answered), t = data.totals;
+  const played = data.children.filter((c) => c.played), quiet = data.children.filter((c) => !c.played), t = data.totals;
   const monthly = data.cadence === 'monthly', period = data.period || 'week';
-  const summary = `${data.weekLabel} · ${count(t.sessions, 'mission')} · ${pct(t.accuracy)} right across ${count(t.questions, 'question')}`;
+  const summary = `${data.weekLabel} · ${count(t.started, 'session')} started · ${t.finished} finished${t.known ? ` · ${pct(t.accuracy)} right across ${count(t.known, 'answer')}` : ''}`;
+  const unit = 'A session is one run of papers: 15 word problems on Navigator, or 25 questions on Engine. Left early means quit or restarted before the last question.';
   // true of every account, the owner's included, which predates the sign-up boxes: the switch is what sends it
   const why = monthly ? 'You get this email because the progress report is set to monthly for your AutoMathtics parent account. It comes on the first Monday of each month until you change it.'
     : 'You get this email because weekly reports are switched on for your AutoMathtics parent account. They come every Monday until you switch them off.';
@@ -85,14 +92,14 @@ export function renderReport(data, links) {
     + `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${C.navy};"><tr><td align="center" style="padding:24px 12px;">`
     + `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;background:${C.panel};border:1px solid ${C.line};border-radius:16px;">`
     + `<tr><td style="padding:28px 24px 18px;"><p style="margin:0 0 12px;font:700 12px/1 ${FONT};letter-spacing:2px;color:${C.cyan};">${esc(kicker)}</p>`
-    + `<h1 style="margin:0 0 8px;font:700 26px/1.25 ${FONT};color:${C.ink};">${esc(heading)}</h1>${p(summary, 'margin:0;')}</td></tr>`
+    + `<h1 style="margin:0 0 8px;font:700 26px/1.25 ${FONT};color:${C.ink};">${esc(heading)}</h1>${p(summary, 'margin:0;')}${p(unit, `margin:8px 0 0;font-size:13px;color:${C.dim};`)}</td></tr>`
     + played.map((c) => row(childBlocks(c, links, period).map(htmlBlock).join(''))).join('')
     + (quiet.length ? row(quiet.map((c) => p(quietLine(c, period))).join('')) : '')
     + (late ? row(`${p(late)}<p style="margin:0;font:600 15px/1.5 ${FONT};"><a href="${esc(links.app)}" style="color:${C.cyan};">Open AutoMathtics</a></p>`) : '')
     + row(`${p(why, `font-size:13px;color:${C.dim};`)}<p style="margin:0 0 10px;font:14px/1.5 ${FONT};"><a href="${esc(links.unsubscribe)}" style="color:${C.cyan};">${esc(stop)}</a> <span style="color:${C.dim};">·</span> <a href="${esc(links.settings)}" style="color:${C.cyan};">Email settings</a></p>${p(sender, `margin:0;font-size:12px;color:${C.dim};`)}`, '18px 24px 24px')
     + '</table></td></tr></table></body></html>';
   const textBlock = (x) => (x.kind === 'name' ? `\n${x.text.toUpperCase()}` : x.kind === 'button' ? `  ${x.label}: ${x.href}` : x.kind === 'list' ? [x.title, ...x.items.map((i) => `  - ${i.label} — ${i.detail}`)].join('\n') : x.text);
-  const text = [kicker, heading, summary, ...played.flatMap((c) => childBlocks(c, links, period).map(textBlock)), ...(quiet.length ? ['', ...quiet.map((c) => quietLine(c, period))] : []), ...(late ? ['', late, `Open AutoMathtics: ${links.app}`] : []),
+  const text = [kicker, heading, summary, unit, ...played.flatMap((c) => childBlocks(c, links, period).map(textBlock)), ...(quiet.length ? ['', ...quiet.map((c) => quietLine(c, period))] : []), ...(late ? ['', late, `Open AutoMathtics: ${links.app}`] : []),
     '', '—', why, `${stop}: ${links.unsubscribe}`, `Email settings: ${links.settings}`, sender, ''].join('\n');
   return { subject, html, text };
 }

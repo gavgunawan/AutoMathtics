@@ -13,15 +13,18 @@ import { effectiveEntitlement } from './subscription.mjs';
 import { AUDIT_RETENTION_MS } from './service.mjs';
 import { prefsOf, prefsPath, signEmailToken, linkExpiry } from './email.mjs';
 import { renderReport, buttonsFor } from './report-email.mjs';
+import { playlogPath } from './learning.mjs';
 
 const DAY = 86_400_000;
 export const HISTORY_KEPT = 60; // learning.mjs HISTORY_MAX: a busier week is reported from the rows still kept, and says so
+export const PLAYS_MAX = 5000; // a child's playlog records read for one report: far past a month of the busiest child
 export const PACE_RULES = Object.freeze({
   minAnswers: 20,              // fewer answers in the week: no suggestion
   quantile: 0.8, target: 0.8,  // 8 in 10 right answers should fit in 80 % of the allowance: the pace that does it is p × q / 0.8
   accuracy: 0.8, timeouts: 0.1, // never faster under 80 % right, or with more than one answer in ten timed out…
   slower: 1.15,                // …and with that many timeouts, at least 15 % slower
   round: 5, min: 30, max: 200, step: 25, // rounded to 5, between 30 and 200, at most 25 points from the pace now in one week
+  leftEarly: 0.2, leftAfterWrong: 3, // never faster while more than 1 session in 5 ends early, or 3 end straight after a wrong answer or a time-out
   zone: 10,                    // within 10 points of the pace now: in the zone, no change
 });
 
@@ -83,10 +86,13 @@ const snap = (x) => Math.round(x * 1e6) / 1e6, round5 = (x) => Math.round(snap(x
  * points of p and within 30–200, but a bound never pushes against the evidence: a pace under 30 with fast right answers stays
  * where it is rather than being raised to 30. `limit` names the bound that held the pace, for the sentence. Within 10 points of p
  * it is in the zone, unless the child is timing out, which is never the zone.
+ * `leaving` ({ started, left, afterWrong }) is how the sessions ended (the owner's review of 14 Sep 2026): a child who leaves more
+ * than 1 session in 5 before the end, or 3 straight after a wrong answer or a time-out, is never given a faster pace, because the
+ * answers that remain are the ones the child chose to finish and they flatter.
  */
-export function goldilocks(items, pacePercent) {
-  const R = PACE_RULES, p = Number.isInteger(pacePercent) ? pacePercent : 100, n = items.length;
-  if (n < R.minAnswers) return { current: p, suggested: p, direction: 'keep', enough: false, held: false, limit: null, evidence: { q: null, accuracy: null, timeoutRate: null, n } };
+export function goldilocks(items, pacePercent, leaving = null) {
+  const R = PACE_RULES, p = Number.isInteger(pacePercent) ? pacePercent : 100, n = items.length, withLeaving = leaving ? { leaving } : {};
+  if (n < R.minAnswers) return { current: p, suggested: p, direction: 'keep', enough: false, held: false, limit: null, evidence: { q: null, accuracy: null, timeoutRate: null, n, ...withLeaving } };
   const right = items.filter((x) => x.ok), q = quantile(right.map((x) => x.s / x.a), R.quantile), accuracy = right.length / n, timeoutRate = items.filter(timedOut).length / n;
   const timingOut = timeoutRate > R.timeouts, guarded = accuracy < R.accuracy || timingOut;
   let s = round5(Math.max(q === null ? p : (p * q) / R.target, guarded ? p : 0));
@@ -94,7 +100,10 @@ export function goldilocks(items, pacePercent) {
   const lo = Math.min(R.min, p), hi = Math.max(R.max, p), beyond = s < lo ? 'floor' : s > hi ? 'ceiling' : null; // the bounds, widened to take in p
   s = Math.min(p + R.step, Math.max(p - R.step, Math.min(hi, Math.max(lo, s))));
   if (Math.abs(s - p) < R.zone && !timingOut) s = p;
-  return { current: p, suggested: s, direction: s < p ? 'faster' : s > p ? 'slower' : 'keep', enough: true, held: guarded && s === p, limit: s === p ? beyond : null, evidence: { q, accuracy, timeoutRate, n } };
+  const leavingNow = !!leaving && leaving.started > 0 && (leaving.left / leaving.started > R.leftEarly || leaving.afterWrong >= R.leftAfterWrong);
+  const heldByLeaving = leavingNow && s < p; if (heldByLeaving) s = p; // never faster while sessions end early
+  return { current: p, suggested: s, direction: s < p ? 'faster' : s > p ? 'slower' : 'keep', enough: true, held: (guarded || heldByLeaving) && s === p,
+    limit: heldByLeaving ? 'leaving' : s === p ? beyond : null, evidence: { q, accuracy, timeoutRate, n, ...withLeaving } };
 }
 const pct = (x) => `${Math.round(x * 100)}%`;
 /** The pace in one plain sentence, the child named, no pronoun guessed. `period` is the word for what it covers: a week, or a month. */
@@ -105,6 +114,7 @@ export function paceSentence(name, g, period = 'week') {
   if (g.direction === 'faster') return `${name} uses ${within} on 8 in 10 correct answers, at ${pct(acc)} accuracy: the goldilocks pace is ${s}% (now ${p}%) — more push, still room to think.`;
   if (g.direction === 'slower') return timingOut ? `${name} ran out of time on ${pct(tr)} of questions, at ${pct(acc)} accuracy: the goldilocks pace is ${s}% (now ${p}%) — more time to think it through.`
     : `${name} needs ${within} on 8 in 10 correct answers, at ${pct(acc)} accuracy: the goldilocks pace is ${s}% (now ${p}%) — more room to think.`;
+  if (g.limit === 'leaving') { const l = g.evidence.leaving; return `${name} left ${l.left} of ${l.started} sessions before the end${l.afterWrong ? ` (${l.afterWrong} straight after a wrong answer or a time-out)` : ''}: the pace stays at ${p}% until more sessions are finished.`; }
   if (timingOut) return `${name} ran out of time on ${pct(tr)} of questions; the pace is already ${p}%, at the most time a question can have.`;
   if (acc < PACE_RULES.accuracy) return `${name} got ${pct(acc)} right this ${period}: the pace stays at ${p}%, and gets faster only once accuracy is back to 80%.`;
   if (g.limit === 'floor') return `${name} uses ${within} on 8 in 10 correct answers, at ${pct(acc)} accuracy: the pace stays at ${p}%, as the goldilocks pace never goes under ${PACE_RULES.min}%.`;
@@ -113,41 +123,67 @@ export function paceSentence(name, g, period = 'week') {
 }
 
 // ---- a child's week, a family's week
-/** What the report reads from a (normalised) progress document. */
+/** What the report reads from a (normalised) progress document; a child's playlog records (learning.mjs) are read separately. */
 export const inputsOf = (prog) => ({ history: prog.history, pacePercent: prog.pacePercent, scanFocus: prog.scanFocus === true, lastScanWeek: prog.wallet?.lastScanWeek ?? null,
   levels: { engine: trk(prog, 'engine'), nav: trk(prog, 'nav') } });
+export const MOST_LEFT_MIN = 3; // a set of papers left early this many times is named
+/** "Navigator Sector B, papers 11–15", "Engine Sector A, check point T1": a set of papers as a parent reads it. */
+export function papersLabel({ track, levelId, papers }) {
+  const p = String(papers || ''), what = /^CP T/.test(p) ? `check point ${p.slice(3)}` : /^[0-9]/.test(p) ? `papers ${p}` : p.toLowerCase();
+  return `${track === 'nav' ? 'Navigator' : 'Engine'} Sector ${levelId || '?'}, ${what}`;
+}
 /**
  * One child's week — or, for a family on the monthly cadence, the four complete weeks `weeks` names, which are contiguous and
- * end with `week`. `history` is the progress document's, newest first; `levels` are the tracks as they stand now, which is
- * what the System Scan's unlock rule reads. A quit row has no answers and counts apart.
+ * end with `week`. Every session that ends leaves a playlog record with all its answers (`plays`, any order; learning.mjs); for
+ * the time before the game kept those, the progress document's history is all there is: newest first, 60 rows at most, and a
+ * session left early kept no answers and no time there. A history row counts only when it is older than the child's first
+ * record, so no session counts twice. `levels` are the tracks as they stand now, which the System Scan's unlock rule reads.
  */
-export function buildChildReport({ history, pacePercent, scanFocus, lastScanWeek, levels, week, weeks = null, period = 'week', nickname = 'Your child' }) {
+export function buildChildReport({ history, plays = [], pacePercent, scanFocus, lastScanWeek, levels, week, weeks = null, period = 'week', nickname = 'Your child' }) {
   const span = weeks && weeks.length ? weeks : [week], from = weekDays(span[0])[0], to = weekDays(span[span.length - 1])[6];
-  const inWeek = (r) => typeof r?.date === 'string' && r.date >= from && r.date <= to, kept = Array.isArray(history) ? history : [];
-  const rows = kept.filter(inWeek), played = rows.filter((r) => !r.quit), items = answersOf(played), lists = classes(styleStats(items)), correct = items.filter((x) => x.ok).length;
-  const passed = (mode) => played.filter((r) => r.passed === true && (!mode || r.mode === mode)).length;
-  const totals = { questions: items.length, correct, accuracy: items.length ? correct / items.length : null, minutes: Math.round(played.reduce((a, r) => a + (Number.isFinite(r.secs) ? r.secs : 0), 0) / 60),
-    sessions: played.length, left: rows.length - played.length, passes: passed(), papersPassed: PAPERS_PER_SESSION * passed('paper'), checkpoints: passed('boss') };
-  const scan = { status: span.includes(lastScanWeek) || passed('scan') ? 'passed' : scanUnlocked(levels?.engine || { level: 0, paper: 1 }) ? 'available' : 'locked', focus: scanFocus === true, tried: played.some((r) => r.mode === 'scan') };
-  const pace = goldilocks(items, pacePercent), named = (st) => ({ ...st, label: styleLabel(st) });
+  const inSpan = (r) => typeof r?.date === 'string' && r.date >= from && r.date <= to, kept = Array.isArray(history) ? history : [], all = Array.isArray(plays) ? plays : [];
+  const recordedSince = all.reduce((m, r) => (Number.isFinite(r?.ts) && r.ts < m ? r.ts : m), Infinity);
+  const records = all.filter(inSpan), legacy = kept.filter((r) => inSpan(r) && !(r.ts >= recordedSince));
+  const legacyFinished = legacy.filter((r) => !r.quit), leftLegacy = legacy.filter((r) => r.quit), leftRecords = records.filter((r) => r.how !== 'finished');
+  const finished = [...records.filter((r) => r.how === 'finished'), ...legacyFinished];
+  const items = answersOf([...records, ...legacyFinished]), lists = classes(styleStats(items)), correct = items.filter((x) => x.ok).length;
+  const passed = (mode) => finished.filter((r) => r.passed === true && (!mode || r.mode === mode)).length, ended = (how) => leftRecords.filter((r) => r.how === how).length;
+  const afterWrong = leftRecords.filter((r) => r.lastResult === 'incorrect' || r.lastResult === 'timeout').length;
+  const unkept = leftLegacy.reduce((a, r) => a + (Number.isInteger(r.atQ) ? r.atQ : 0), 0); // answered in a session left early before records: never kept
+  const secs = [...records, ...legacyFinished].reduce((a, r) => a + (Number.isFinite(r.secs) ? r.secs : 0), 0);
+  const totals = { started: records.length + legacy.length, finished: finished.length, left: leftRecords.length + leftLegacy.length,
+    restarted: ended('restart'), quit: ended('quit'), leftOpen: ended('left_open'), afterWrong,
+    questions: items.length + unkept, known: items.length, correct, accuracy: items.length ? correct / items.length : null, minutes: Math.round(secs / 60),
+    passes: passed(), papersPassed: PAPERS_PER_SESSION * passed('paper'), checkpoints: passed('boss'), scans: passed('scan') };
+  // the set of papers left early most often, once it was left at least MOST_LEFT_MIN times (a record and a history row spell it alike)
+  const byPapers = new Map();
+  for (const r of [...leftRecords, ...leftLegacy]) { const k = `${r.track}|${r.levelId}|${r.papers}`, e = byPapers.get(k) || { track: r.track, levelId: r.levelId, papers: r.papers, n: 0 }; e.n++; byPapers.set(k, e); }
+  const top = [...byPapers.values()].sort((a, b) => b.n - a.n)[0], mostLeft = top && top.n >= MOST_LEFT_MIN ? { ...top, label: papersLabel(top) } : null;
+  const scan = { status: span.includes(lastScanWeek) || passed('scan') ? 'passed' : scanUnlocked(levels?.engine || { level: 0, paper: 1 }) ? 'available' : 'locked', focus: scanFocus === true,
+    tried: [...records, ...legacy].some((r) => r.mode === 'scan') };
+  const pace = goldilocks(items, pacePercent, { started: totals.started, left: totals.left, afterWrong }), named = (st) => ({ ...st, label: styleLabel(st) });
   // The scan focus is offered on the very list a focused scan would use (learning.mjs → styles.mjs weakStyles): all kept history,
   // Engine only, none above the sector now, as it stands when the report is made. The week's three lists are another cut.
   const focusStyles = weakStyles(kept, levels?.engine?.level ?? 0).map((w) => named({ ...w, track: 'engine' }));
-  return { nickname, week, answered: items.length > 0, totals, trouble: lists.trouble.map(named), slow: lists.slow.map(named), strong: lists.strong.map(named),
+  return { nickname, week, played: totals.started > 0, answered: items.length > 0, totals, mostLeft, trouble: lists.trouble.map(named), slow: lists.slow.map(named), strong: lists.strong.map(named),
     focusStyles, scan, pace: { ...pace, sentence: paceSentence(nickname, pace, period) },
-    partial: kept.length >= HISTORY_KEPT && inWeek(kept[kept.length - 1]) };
+    // history's limits, where history is read: rows may have dropped out of the newest 60, and a session left early kept no answers
+    partial: legacy.length > 0 && kept.length >= HISTORY_KEPT && inSpan(kept[kept.length - 1]), unkeptAnswers: leftLegacy.length > 0 };
 }
 /**
- * The family's week: every child given (the seated ones), in order; a child without an answer that week gets one line. With
+ * The family's week: every child given (the seated ones), in order; a child who played no session that week gets one line. With
  * `cadence: 'monthly'` it is the family's four weeks instead, ending with `week` — the same report over a longer span, so the
  * email, the buttons and the claim are unchanged (the buttons' expiry follows from `week`, which is still the report's own).
+ * Each child may carry `plays`, its playlog records for the span.
  */
 export function buildFamilyReport({ familyLabel = null, children, week, weeks = null, cadence = 'weekly' }) {
   const span = cadence === 'monthly' ? weeks || monthlyWeeks(week) : [week], period = cadence === 'monthly' ? 'month' : 'week';
-  const kids = children.map((c) => ({ childId: c.id, ...buildChildReport({ ...inputsOf(c.progress), week, weeks: span, period, nickname: c.nickname }) }));
-  const sum = (k) => kids.reduce((a, c) => a + c.totals[k], 0), questions = sum('questions'), correct = sum('correct');
+  const kids = children.map((c) => ({ childId: c.id, ...buildChildReport({ ...inputsOf(c.progress), plays: c.plays || [], week, weeks: span, period, nickname: c.nickname }) }));
+  const sum = (k) => kids.reduce((a, c) => a + c.totals[k], 0), known = sum('known'), correct = sum('correct');
   const days = [weekDays(span[0])[0], weekDays(span[span.length - 1])[6]];
-  return { week, weeks: span, cadence, period, weekLabel: rangeLabel(days[0], days[1]), familyLabel, children: kids, totals: { sessions: sum('sessions'), questions, correct, accuracy: questions ? correct / questions : null }, answered: questions > 0 };
+  return { week, weeks: span, cadence, period, weekLabel: rangeLabel(days[0], days[1]), familyLabel, children: kids,
+    totals: { started: sum('started'), finished: sum('finished'), left: sum('left'), questions: sum('questions'), known, correct, accuracy: known ? correct / known : null },
+    played: kids.some((c) => c.played), answered: known > 0 };
 }
 
 // ---- the job: one email per family per week (scripts/report.mjs; Cloud Shell block G runs it every Monday at 07:00 Singapore)
@@ -239,9 +275,13 @@ export class Reports {
     const { cadence } = prefsOf(await this.store.get(prefsPath(uid)));
     if (cadence === 'off') return { skip: 'progress_off' };
     if (cadence === 'monthly' && !isMonthlySendWeek(week)) return { skip: 'monthly_not_due' };
+    const span = cadence === 'monthly' ? monthlyWeeks(week) : [week];
+    for (const child of children) child.plays = await this.plays(familyId, child.id, span); // after the checks above, so their order of reasons stands
     const report = buildFamilyReport({ familyLabel: family.label || null, children, week, cadence });
-    return report.answered ? { uid, report } : { skip: 'no_play' };
+    return report.played ? { uid, report } : { skip: 'no_play' };
   }
+  /** A child's playlog records for a span, from two days before its first Monday (a family's own dates can fall either side of UTC's). */
+  async plays(familyId, childId, span) { return (await this.store.since(playlogPath(familyId, childId), 'ts', weekStart(span[0]) - 2 * DAY, PLAYS_MAX)).map(([, r]) => r); }
   /** The family's owner, as the membership and the parent record both say (one owner per family in this release). */
   async owner(familyId) {
     for (const [uid, m] of await this.store.entries(`families/${familyId}/members`)) {
@@ -293,8 +333,10 @@ export class Reports {
   async preview(familyId, week = null) {
     uuid(familyId); if (week !== null && weekStart(week) === null) fail(400, 'WEEK_INVALID');
     const family = await this.store.get(`families/${familyId}`); if (!family || family.deleted === true) fail(404, 'FAMILY_NOT_FOUND');
-    const report = buildFamilyReport({ familyLabel: family.label || null, children: await this.children(familyId, family), week: week || lastWeek(this.now(), REPORT_TIME_ZONE) });
+    const w = week || lastWeek(this.now(), REPORT_TIME_ZONE), kids = await this.children(familyId, family);
+    for (const child of kids) child.plays = await this.plays(familyId, child.id, [w]);
+    const report = buildFamilyReport({ familyLabel: family.label || null, children: kids, week: w });
     const inert = `${this.origin}/#email=preview`, children = Object.fromEntries(report.children.map((c) => [c.childId, { pace: inert, focus: inert }]));
-    return { week: report.week, answered: report.answered, ...renderReport(report, { app: `${this.origin}/`, settings: `${this.origin}/`, unsubscribe: inert, children }) };
+    return { week: report.week, played: report.played, answered: report.answered, ...renderReport(report, { app: `${this.origin}/`, settings: `${this.origin}/`, unsubscribe: inert, children }) };
   }
 }
