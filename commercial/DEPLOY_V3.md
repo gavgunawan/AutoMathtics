@@ -178,7 +178,7 @@ The server stamps short-lived records with an `expireAt` timestamp; Firestore de
 if a TTL policy names that field for the collection group. Run once, after the database exists:
 
 ```bash
-for GROUP in sessions rateLimits pinAttempts operations audit recoveries sweeps reports outbox feedback feedbackDays leaving; do
+for GROUP in sessions rateLimits pinAttempts operations audit recoveries sweeps reports playlog outbox feedback feedbackDays leaving; do
   gcloud firestore fields ttls update expireAt --collection-group="$GROUP" \
     --enable-ttl --project "$PROJECT_ID"
 done

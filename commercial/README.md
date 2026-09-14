@@ -147,6 +147,7 @@ loopback emulator ports. It tests a real emulator-issued SMS MFA token, Firestor
 - `families/{uuid}/learning/{childId}`: authoritative Engine/Navigator progress, wallet, history, pace and active session reference.
 - `families/{uuid}/learning/{childId}/sessions/{uuid}`: server questions/answers, ordered results, clocks and session state.
 - `families/{uuid}/learning/{childId}/ledger/{uuid}`: retained game/economy audit rows.
+- `families/{uuid}/learning/{childId}/playlog/{sessionId}`: one record per session that ended (finished, quit, restarted, or left open), with its answers; what the weekly report reads. Expires by TTL 400 days.
 - `families/{uuid}/game/config`: parent-configured Reward Store and Family Rocket state.
 - `emailPrefs/{uid}`: the parent account's email choices and their history, the consent record (no address).
 - `reports/{familyId}:{week}`: whether a week's report was sent or skipped, and why; no content; TTL 400 days.

@@ -1415,6 +1415,12 @@ function rocketPanel(g) {
 // the log below the card (3034-3071): one row per session, newest first; a quit row says where it stopped
 const mmss = (secs) => (Number.isFinite(secs) ? `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}` : '—');
 const whenOf = (h) => (Number.isFinite(h.ts) ? `${new Date(h.ts).toLocaleDateString()} ${new Date(h.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : h.date || '—');
+// a row left early: restarted or quit, at which question, and (rows recorded since 14 Sep 2026) the answers given before leaving and the time
+const leftText = (h) => {
+  const at = `${h.how === 'restart' ? '↺ restarted' : '✕ quit'} at Q${(Number(h.atQ) || 0) + 1}`;
+  if (!Number.isInteger(h.answered) || !h.answered) return at;
+  return `${at} · ${h.correct} right, ${h.incorrect} wrong${h.timeout ? `, ${h.timeout} late` : ''}${Number.isFinite(h.secs) ? ` · ${mmss(h.secs)}` : ''}`;
+};
 function homeLog(child, history) {
   if (!history?.length) return null;
   const box = el('div', null, 'logbox'), table = el('table', null, 'logtable'), thead = el('thead'), head = el('tr'), body = el('tbody');
@@ -1423,7 +1429,7 @@ function homeLog(child, history) {
   for (const h of history) {
     const row = el('tr'), td = (text, className) => { const c = el('td', text, className); row.append(c); return c; };
     td(whenOf(h)); td(`${h.levelId} · ${h.track === 'nav' ? '🧭 ' : ''}${h.papers}`);
-    if (h.quit) td(`✕ quit at Q${(Number(h.atQ) || 0) + 1}`, 'log-quit').setAttribute('colspan', '6');
+    if (h.quit) td(leftText(h), 'log-quit').setAttribute('colspan', '6');
     else {
       const [word, tone] = h.mode === 'placement' ? ['🎯 PLACED', 'placed'] : !h.passed ? ['retry', 'retry'] : h.mode === 'boss' ? ['👑 CP', 'cp'] : h.mode === 'scan' ? ['🧠 SCAN', 'scan'] : ['PASS', 'pass'];
       td(`${h.correct}/${h.total}`, 'log-score'); td(String(h.correct), 'log-ok'); td(String(h.incorrect), 'log-bad'); td(String(h.timeout), 'log-late'); td(mmss(h.secs)); td(word, `log-result ${tone}`);
@@ -1886,7 +1892,7 @@ function playView(session, q, after = {}) {
     playView({ ...session, index: r.question.index }, r.question, { flash, burst: paperDone });
   };
   // ↺ Restart: this run is quit and the same one started again (no restart route: the log keeps the quit, port plan section 7)
-  const restart = async () => { stopTimer(); await api('/learn/quit', { sessionId: session.id }); await startRun(session.mode === 'scan' ? { track: 'engine', mode: 'scan' } : { track: session.track }); };
+  const restart = async () => { stopTimer(); await api('/learn/quit', { sessionId: session.id, how: 'restart' }); await startRun(session.mode === 'scan' ? { track: 'engine', mode: 'scan' } : { track: session.track }); };
   // the status row (3112-3125): the avatar in its ring, the track, where the run is, read-aloud, the pet charging, the clock
   const row = el('div', null, 'status-row'), where = el('span', null, 'q-count'), clock = el('span', null, 'clock');
   const place = session.mode === 'boss' ? `👑 CHECK POINT T${session.tierEnd / 20}` : session.mode === 'scan' ? '🧠 SCAN' : session.mode === 'placement' ? '🎯 PLACEMENT'
@@ -1926,7 +1932,7 @@ function playView(session, q, after = {}) {
   // the action column (3200-3204): Go! is the form's submit; a placement test has no Restart (leaving it counts as a quit)
   const go = el('button', 'Go!', 'go-btn'); go.type = 'submit'; go.disabled = choice; actions.append(go);
   if (session.mode !== 'placement') actions.append(button('↺ Restart', restart, 'restart-btn'));
-  actions.append(button('✕ Quit', async () => { stopTimer(); await api('/learn/quit', { sessionId: session.id }); await refresh(); }, 'quit-btn'));
+  actions.append(button('✕ Quit', async () => { stopTimer(); await api('/learn/quit', { sessionId: session.id, how: 'quit' }); await refresh(); }, 'quit-btn'));
   padRow.append(pad, actions); form.append(sheet, padRow);
   let left = q.seconds;
   form.onsubmit = (event) => {
