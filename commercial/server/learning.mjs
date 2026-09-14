@@ -9,6 +9,11 @@ const MINUTE = 60_000, HOUR = 60 * MINUTE;
 const SESSION_LIFE = 2 * HOUR;
 const GRACE_MS = 5_000;
 const HISTORY_MAX = 60, PASS_DAYS_MAX = 400;
+// Every session that ends (finished, quit, restarted, or left open and retired) leaves one playlog record holding all its answers.
+// History keeps only the newest 60 rows and no answers for a session left early, so the weekly report reads these instead (the
+// owner's review of 14 Sep 2026). Kept 400 days by TTL.
+const PLAYLOG_DAYS = 400, DAY = 24 * HOUR;
+export const playlogPath = (familyId, childId) => `families/${familyId}/learning/${childId}/playlog`;
 // What one child may start in an hour. It guards against a script asking for papers in a loop, not against a keen child:
 // a start a minute is far past any real session and far under a hammering one. It was twenty, which both children reached
 // in one afternoon of ordinary use, and the refusal read as a dead button (the owner's report of 12 Sep 2026).
@@ -19,7 +24,7 @@ export const DEFAULT_TIME_ZONE = 'Asia/Singapore';
  * identity, track state, questions, expected answers, clocks, marks, progress and rewards. */
 export class Learning {
   constructor({ foundation, store, now = Date.now }) { this.foundation = foundation; this.store = store; this.now = now; }
-  paths(s) { const base = `families/${s.familyId}/learning/${s.childId}`; return { doc: base, session: (id) => `${base}/sessions/${id}` }; }
+  paths(s) { const base = `families/${s.familyId}/learning/${s.childId}`; return { doc: base, session: (id) => `${base}/sessions/${id}`, play: (id) => `${base}/playlog/${id}` }; }
   async child(tx, ctx) {
     const a = await this.foundation.authorize(tx, ctx, ['child']); const p = this.paths(a.s);
     const prog = normalizeProgress(await tx.get(p.doc)); return { ...a, p, prog };
@@ -59,7 +64,7 @@ export class Learning {
         .catch((e) => { if (e instanceof Fault && e.code === 'TOO_MANY_ATTEMPTS') fail(429, 'TOO_MANY_PAPERS'); throw e; });
       if (active && active.status === 'active' && active.mode === 'placement') { // a placement test abandoned past its two hours settles like a quit
         const now = this.now(), settled = this.settlePlacement(original, active, now, family.timeZone || DEFAULT_TIME_ZONE);
-        tx.set(p.session(active.id), { ...active, status: 'expired', finishedAt: now });
+        tx.set(p.session(active.id), { ...active, status: 'expired', finishedAt: now }); tx.set(p.play(active.id), this.playRecord(active, 'left_open', active.askedAt, family.timeZone || DEFAULT_TIME_ZONE));
         if (settled.summary) { commitRate(); tx.set(p.doc, settled.progress); return { settled: true, summary: settled.summary }; }
         original = settled.progress;
       }
@@ -81,7 +86,7 @@ export class Learning {
       } else { run = nextRun(prog, track); questions = buildQuestions(track, run, prog.pacePercent / 100); }
       const now = this.now(), sess = { id, childId: s.childId, track, mode: run.mode, level: run.level, startPaper: run.startPaper, tierEnd: run.tierEnd,
         questions, results: [], index: 0, askedAt: now, status: 'active', createdAt: now, expireAt: now + 24 * HOUR, lastAttempt: null };
-      if (active && active.status === 'active') tx.set(p.session(active.id), { ...active, status: 'expired' }); commitRate(); tx.set(p.session(id), sess); tx.set(p.doc, { ...prog, activeSession: id });
+      if (active && active.status === 'active') { tx.set(p.session(active.id), { ...active, status: 'expired' }); tx.set(p.play(active.id), this.playRecord(active, 'left_open', active.askedAt, tz)); } commitRate(); tx.set(p.session(id), sess); tx.set(p.doc, { ...prog, activeSession: id });
       return { session: this.publicSession(sess), question: this.publicQuestion(sess, 0), resumed: false, gameEvents: derived.events };
     });
   }
@@ -104,20 +109,21 @@ export class Learning {
           final = await post(tx, p.doc, final, entry({ id: sess.id, type: sess.mode === 'scan' ? 'learn.scan' : sess.mode === 'boss' ? 'learn.checkpoint' : 'learn.session', gc: summary.gcEarned, rp: summary.rpEarned, ref: sess.id, note: summary.papers, at: now }));
         }
         summary.wallet = final.wallet;
-        next.status = 'done'; next.finishedAt = now; tx.set(p.doc, final); response.done = true; response.summary = summary;
+        next.status = 'done'; next.finishedAt = now; tx.set(p.doc, final); tx.set(p.play(sess.id), this.playRecord(next, 'finished', now, family.timeZone || DEFAULT_TIME_ZONE, { passed: summary.passed })); response.done = true; response.summary = summary;
       }
       else response.question = this.publicQuestion(next, next.index);
       next.lastAttempt = { id: body.attemptId, response }; tx.set(p.session(sess.id), next); return response;
     });
   }
   async quit(ctx, body) {
-    object(body, ['sessionId']); uuid(body.sessionId);
+    object(body, ['sessionId', 'how']); uuid(body.sessionId); const how = body.how === undefined ? 'quit' : body.how; if (how !== 'quit' && how !== 'restart') fail(400, 'INVALID_REQUEST');
     return this.store.transaction(async (tx) => {
       const { p, prog, family } = await this.child(tx, ctx); const sess = await tx.get(p.session(body.sessionId)); if (!sess) fail(404, 'SESSION_NOT_FOUND');
       if (sess.status !== 'active') return { ok: true, status: sess.status }; const now = this.now(); tx.set(p.session(sess.id), { ...sess, status: 'quit', finishedAt: now });
-      if (sess.mode === 'placement') { const settled = this.settlePlacement(prog, sess, now, family.timeZone || DEFAULT_TIME_ZONE); tx.set(p.doc, settled.progress); return { ok: true, status: 'quit', attempts: settled.progress.placement?.attempts ?? null, placement: settled.summary?.placement || null }; }
-      const row = { ts: now, date: dayISO(now, family.timeZone || DEFAULT_TIME_ZONE), track: sess.track, mode: sess.mode, level: sess.level, levelId: LEVELS[sess.level].id,
-        papers: this.label(sess), quit: true, atQ: sess.index, total: sess.questions.length };
+      if (sess.mode === 'placement') { tx.set(p.play(sess.id), this.playRecord(sess, 'quit', now, family.timeZone || DEFAULT_TIME_ZONE)); const settled = this.settlePlacement(prog, sess, now, family.timeZone || DEFAULT_TIME_ZONE); tx.set(p.doc, settled.progress); return { ok: true, status: 'quit', attempts: settled.progress.placement?.attempts ?? null, placement: settled.summary?.placement || null }; }
+      const record = this.playRecord(sess, how, now, family.timeZone || DEFAULT_TIME_ZONE); tx.set(p.play(sess.id), record);
+      const row = { ts: now, date: record.date, track: sess.track, mode: sess.mode, level: sess.level, levelId: LEVELS[sess.level].id,
+        papers: this.label(sess), quit: true, atQ: sess.index, total: sess.questions.length, how, answered: record.answered, correct: record.correct, incorrect: record.incorrect, timeout: record.timeout, lastResult: record.lastResult, secs: record.secs };
       tx.set(p.doc, { ...prog, activeSession: prog.activeSession === sess.id ? null : prog.activeSession, history: [row, ...prog.history].slice(0, HISTORY_MAX) }); return { ok: true, status: 'quit' };
     });
   }
@@ -131,6 +137,15 @@ export class Learning {
     const unanswered = sess.questions.slice(sess.index).map((q) => ({ r: 'unanswered', secs: q.seconds, tier: q.tier, level: q.level, track: q.track || sess.track, allowed: q.seconds }));
     const { progress, summary } = this.finish({ ...prog, placement: { ...prog.placement, attempts } }, { ...sess, results: [...sess.results, ...unanswered] }, now, tz);
     return { progress: { ...progress, history: [{ ...progress.history[0], quit: true, atQ: sess.index }, ...progress.history.slice(1)] }, summary };
+  }
+  // One playlog record for a session that ended: every answer it holds, how it ended, and when. `at` is the end, or for a session left
+  // open its last activity, so it counts in the week it was played.
+  playRecord(sess, how, at, tz, extra = {}) {
+    const results = sess.results || [], correct = results.filter((r) => r.r === 'correct').length, timeout = results.filter((r) => r.r === 'timeout').length, last = results.at(-1)?.r || null;
+    return { id: sess.id, ts: at, date: dayISO(at, tz), track: sess.track, mode: sess.mode, level: sess.level, levelId: LEVELS[sess.level].id, papers: this.label(sess), how,
+      total: sess.questions.length, answered: results.length, correct, incorrect: results.length - correct - timeout, timeout,
+      lastResult: last === null || last === 'correct' || last === 'timeout' ? last : 'incorrect', passed: false, secs: Math.max(0, Math.round((at - sess.createdAt) / 1000)), startedAt: sess.createdAt,
+      qlog: results.map((r) => ({ t: r.tier, l: r.level, track: r.track, s: r.secs, a: r.allowed, ok: r.r === 'correct' ? 1 : 0 })), expireAt: at + PLAYLOG_DAYS * DAY, ...extra };
   }
   label(sess) {
     if (sess.mode === 'boss') return `CP T${sess.tierEnd / 20}`; if (sess.mode === 'scan') return 'SYSTEM SCAN'; if (sess.mode === 'placement') return 'PLACEMENT TEST';
