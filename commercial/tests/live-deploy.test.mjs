@@ -82,6 +82,9 @@ test('the environment the helper writes for a live project is one the service st
     const domain = line(helper, '[[ -z "${FIREBASE_AUTH_DOMAIN:-}"'), check = (value) => bash(`set -euo pipefail\n${domain}\necho ok`, { FIREBASE_AUTH_DOMAIN: value }).code;
     for (const good of ['', 'automathtics.net', 'automathtics-live.firebaseapp.com']) assert.equal(check(good), 0, good);
     for (const bad of ['https://automathtics.net', 'automathtics.net/', 'automathtics.net:443', 'Automathtics.net', 'automathtics.net.', '-automathtics.net']) assert.equal(check(bad), 1, bad);
+    const keyLine = line(helper, '[[ "$FIREBASE_WEB_API_KEY" =~'), key = (value) => bash(`set -euo pipefail\n${keyLine}\necho ok`, { FIREBASE_WEB_API_KEY: value }).code;
+    assert.equal(key('AIzaSyCoVfsQwXV3AFoK789V99ncDJknMoPmWUI'), 0, 'a web apiKey (staging\'s, public in 01-prepare.sh)');
+    for (const bad of ['AIzaSyAn' + String.fromCharCode(0x2022).repeat(31), 'AIzaSy CoVfsQwXV3AFoK789V99ncDJknMoPmWU', 'AIza', '"AIzaSyCoVfsQwXV3AFoK789V99ncDJknMoPmWUI"']) assert.equal(key(bad), 1, bad);
     const account = between(helper, 'RUNTIME_SA="${RUNTIME_SA:-', '[[ "$RUNTIME_SA" =~'), sa = (env) => bash(`set -euo pipefail\n${account}\necho "$RUNTIME_SA"`, { PROJECT_ID: 'automathtics-live', ...env });
     assert.equal(sa({}).out.trim(), 'automathtics-v3-runtime@automathtics-live.iam.gserviceaccount.com', 'unsaid: the project\'s runtime account, as before');
     assert.equal(sa({ RUNTIME_SA: 'live-runtime@automathtics-live.iam.gserviceaccount.com' }).out.trim(), 'live-runtime@automathtics-live.iam.gserviceaccount.com', 'a named account of the project');

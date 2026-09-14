@@ -63,7 +63,7 @@ globalThis.fetch = async (url, init = {}) => {
   const u = new URL(url), method = init.method || 'GET', body = init.body ? JSON.parse(init.body) : null, state = load();
   appendFileSync(process.env.FAKE_IDT_LOG, JSON.stringify({ origin: u.origin, method, path: u.pathname, max: u.searchParams.get('maxResults'), project: init.headers['x-goog-user-project'], auth: init.headers.Authorization, body }) + '\\n');
   let m;
-  if (method === 'GET' && (m = /^\\/admin\\/v2\\/projects\\/([^/]+)\\/config$/.exec(u.pathname))) return state.hash[m[1]] ? answer(200, { hashConfig: state.hash[m[1]] }) : answer(403, { error: { message: 'PERMISSION_DENIED' } });
+  if (method === 'GET' && (m = /^\\/admin\\/v2\\/projects\\/([^/]+)\\/config$/.exec(u.pathname))) return state.hash[m[1]] ? answer(200, state.hashAtTop ? { hashConfig: state.hash[m[1]] } : { signIn: { hashConfig: state.hash[m[1]] } }) : answer(403, { error: { message: 'PERMISSION_DENIED' } }); // as the v2 API answers: under signIn
   if (method === 'GET' && (m = /^\\/v1\\/projects\\/([^/]+)\\/accounts:batchGet$/.exec(u.pathname))) {
     const all = state.users[m[1]] || [], from = Number(u.searchParams.get('nextPageToken') || 0); // pages of two, so the paging is walked
     return answer(200, { ...(all.length ? { users: all.slice(from, from + 2) } : {}), ...(from + 2 < all.length ? { nextPageToken: String(from + 2) } : {}) });
@@ -134,6 +134,9 @@ test('the account copy stops before writing when live holds an account staging d
   r = await run(['--write']);
   assert.equal(r.code, 1); assert.match(r.err, /without a whole mobile number/);
   await setState({ hash: { [FROM]: { algorithm: 'HMAC_SHA256', signerKey: 'x' } }, users: { [FROM]: staging, [TO]: [] } });
+  r = await run(['--write']);
+  assert.equal(r.code, 1); assert.match(r.err, /hash parameters could not be read/);
+  await setState({ hash: { [FROM]: HASH }, hashAtTop: true, users: { [FROM]: staging, [TO]: [] } }); // the parameters where the API does not put them: refused, never guessed
   r = await run(['--write']);
   assert.equal(r.code, 1); assert.match(r.err, /hash parameters could not be read/);
   await setState({ hash: {}, users: { [FROM]: staging, [TO]: [] } });
