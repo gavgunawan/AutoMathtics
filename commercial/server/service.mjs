@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { TERMS_VERSION } from './site.mjs';
 import { Fault, fail, sha256, mac, randomToken, object, text, uuid, pin, childInput, startInput, publicChild } from './security.mjs';
-import { initialProgress, normalizeProgress } from './progress.mjs';
+import { initialProgress, normalizeProgress, timeZoneForPhone } from './progress.mjs';
 import { effectiveEntitlement } from './subscription.mjs';
 import { recoveryView } from './recovery.mjs';
 import { appearanceOf } from './game.mjs';
@@ -13,7 +13,7 @@ export const REMEMBER_MS = 30 * DAY;
 const FAMILY_LIMIT = 20; // Pilot safety cap, independent of paid seat count.
 export const AUDIT_RETENTION_MS = 400 * DAY; // the weekly report job writes its run's row with the same expiry (report.mjs)
 const OPERATION_RETENTION_MS = DAY;
-export const DEFAULT_TIME_ZONE = 'Asia/Singapore'; // the family's calendar day for streaks; parent-editable later
+export const DEFAULT_TIME_ZONE = 'Asia/Singapore'; // the family's calendar day for streaks when its parent's mobile names no zone (progress.mjs timeZoneForPhone); a parent changes it in Game & progress
 const sessionKey = (token) => /^[A-Za-z0-9_-]{43}$/.test(token || '') ? sha256(token) : null;
 
 /**
@@ -110,6 +110,7 @@ export class Foundation {
     // The parent's verified phone, keyed and never stored raw. A parent who signs up again with a
     // new email keeps the same phoneKey, which is how a free trial can be granted once per phone.
     const phoneKey = phone ? mac(this.secret, `phone:${phone}`) : null;
+    const zone = timeZoneForPhone(phone); // the calendar a family made in this session starts on (progress.mjs); the number itself goes no further
     const token = randomToken(), key = sha256(token), oldKey = sessionKey(previousToken);
     await this.store.transaction(async (tx) => {
       const path = `parents/${who.uid}`;
@@ -130,7 +131,7 @@ export class Foundation {
       // every use, and sensitive actions still need a sign-in within five minutes (requireRecent).
       const keep = typeof remember === 'boolean' ? remember : Boolean(old && old.uid === who.uid && old.remember === true && old.expiresAt > this.now());
       const expiresAt = this.now() + (keep ? REMEMBER_MS : 30 * MINUTE);
-      const s = { ...who, familyId: parent?.familyId || null, role: 'parent', childId: null,
+      const s = { ...who, ...(zone ? { zone } : {}), familyId: parent?.familyId || null, role: 'parent', childId: null,
         csrf: randomToken(), createdAt: this.now(), expiresAt, expireAt: expiresAt, ...(keep ? { remember: true } : {}) };
       if (!parent) tx.set(path, { familyId: null, reauthAfter: 0, createdAt: this.now(), phoneKey });
       else if (parent.phoneKey !== phoneKey) tx.set(path, { ...parent, phoneKey });
@@ -178,7 +179,7 @@ export class Foundation {
       const ledgerPath = parent.phoneKey ? `phones/${parent.phoneKey}` : null;
       const ledger = ledgerPath ? await tx.get(ledgerPath) : null;
       if (parent.familyId) return { id: parent.familyId, token: null }; // Existing family; no boundary change.
-      tx.set(`families/${familyId}`, { id: familyId, label, childIds: [], activeChildIds: [], createdAt: this.now(), timeZone: DEFAULT_TIME_ZONE, phoneKey: parent.phoneKey || null,
+      tx.set(`families/${familyId}`, { id: familyId, label, childIds: [], activeChildIds: [], createdAt: this.now(), timeZone: s.zone || DEFAULT_TIME_ZONE, phoneKey: parent.phoneKey || null,
         entitlement: { status: 'inactive', seatLimit: 0, accessUntil: 0, version: 0, source: 'manual' } });
       // Merge, never replace: the ledger also carries trialFamilyId/trialAt, and a second family must not reset them.
       if (ledgerPath) tx.set(ledgerPath, { ...(ledger || {}), families: [...(ledger?.families || []), familyId], count: (ledger?.count || 0) + 1, firstAt: ledger?.firstAt || this.now(), lastAt: this.now() });

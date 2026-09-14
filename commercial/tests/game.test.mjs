@@ -85,7 +85,7 @@ test('parent credits are idempotent and cannot drive a wallet below zero', async
 test('parent workspace exposes learning progress and can set family timezone and per-child pace', async () => {
   const f = fixture(), k = await f.childSession(); const parent = await parentAgain(f);
   await f.game.settings(parent.ctx, { timeZone: 'Asia/Jakarta' }); await f.game.settings(parent.ctx, { childId: k.child.id, pacePercent: 130 });
-  const p = await f.game.parentState(parent.ctx); assert.equal(p.timeZone, 'Asia/Jakarta'); assert.equal(p.children[0].pacePercent, 130); assert.equal(p.children[0].engine.levelId, 'A');
+  const p = await f.game.parentState(parent.ctx); assert.equal(p.timeZone, 'Asia/Jakarta'); assert.deepEqual(p.timeZones.map((z) => z.zone), ['Asia/Jakarta', 'Asia/Makassar', 'Asia/Jayapura', 'Asia/Singapore', 'Asia/Kuala_Lumpur'], 'the zones a parent picks from'); assert.equal(p.children[0].pacePercent, 130); assert.equal(p.children[0].engine.levelId, 'A');
   await assert.rejects(f.game.settings(parent.ctx, { childId: k.child.id, pacePercent: 201 }), rejected('INVALID_PACE'));
 });
 

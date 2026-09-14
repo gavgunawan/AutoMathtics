@@ -1,6 +1,6 @@
 import { randomInt, randomUUID } from 'node:crypto';
 import { fail, object, text, uuid } from './security.mjs';
-import { GC_PASS, RP_PASS, EQUIP_SLOTS, LEVELS, bonusesFor, dayISO, normalizeProgress, normalizeWallet, liveDayRun, scanState, trk, trackDone, bossDue } from './progress.mjs';
+import { GC_PASS, RP_PASS, EQUIP_SLOTS, LEVELS, bonusesFor, dayISO, normalizeProgress, normalizeWallet, liveDayRun, scanState, trk, trackDone, bossDue, TIME_ZONE_CHOICES } from './progress.mjs';
 import { entry, post } from './ledger.mjs';
 
 const MINUTE = 60_000, DAY = 24 * 60 * MINUTE;
@@ -340,7 +340,7 @@ export class Game {
         if (child) children.push({ child: { id, nickname: child.nickname, icon: child.icon, status: child.status }, pacePercent: prog.pacePercent, scanFocus: prog.scanFocus === true,
           engine: { ...trk(prog, 'engine'), levelId: LEVELS[trk(prog, 'engine').level].id, done: trackDone(prog, 'engine'), bossDue: bossDue(prog, 'engine') },
           nav: { ...trk(prog, 'nav'), levelId: LEVELS[trk(prog, 'nav').level].id, done: trackDone(prog, 'nav'), bossDue: bossDue(prog, 'nav') }, wallet: this.publicWallet(prog.wallet), stats: prog.stats, history: prog.history.slice(0, 12), heatmap: heatmap(prog) }); }
-      return { timeZone: family.timeZone || 'Asia/Singapore', rewards: cfg.rewards.map(rewardPublic), rocket: publicRocket(cfg.rocket), rocketHistory: cfg.rocketHistory, children };
+      return { timeZone: family.timeZone || 'Asia/Singapore', timeZones: TIME_ZONE_CHOICES, rewards: cfg.rewards.map(rewardPublic), rocket: publicRocket(cfg.rocket), rocketHistory: cfg.rocketHistory, children };
     }, { readOnly: true });
   }
   async setRewards(ctx, body) {
