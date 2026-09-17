@@ -13,27 +13,27 @@ import * as browser from '../public/sms-schedule.js';
 const SEC = 1000, MIN = 60 * SEC, HOUR = 60 * MIN, DAY = 24 * HOUR, T0 = 1_700_000_000_000, PEPPER = 'p'.repeat(32);
 const read = (p) => readFile(new URL(p, import.meta.url), 'utf8');
 
-test('the rungs are the owner\'s: three codes 5 seconds apart, then 2 min, 15 min, 1 h, 6 h, 12 h, and a day before the ninth — and that day of quiet starts the ladder over', () => {
-  assert.deepEqual([...SMS_LADDER_MS], [5 * SEC, 5 * SEC, 2 * MIN, 15 * MIN, HOUR, 6 * HOUR, 12 * HOUR, DAY]); assert.equal(SMS_QUIET_MS, DAY); assert.equal(SMS_RECORD_TTL_MS, 2 * DAY);
+test('the rungs are the owner\'s: half a minute, then 45 s, 5 min, 15 min, 1 h, 6 h, 12 h, and a day before the ninth — and that day of quiet starts the ladder over', () => {
+  assert.deepEqual([...SMS_LADDER_MS], [30 * SEC, 45 * SEC, 5 * MIN, 15 * MIN, HOUR, 6 * HOUR, 12 * HOUR, DAY]); assert.equal(SMS_QUIET_MS, DAY); assert.equal(SMS_RECORD_TTL_MS, 2 * DAY);
   let now = T0, rec = null;
   const at = () => `+${(now - T0) / SEC} s`;
   const send = (n) => { const v = decide(rec, now); assert.equal(v.allowed, true, `send ${n} at ${at()}`); assert.equal(v.rung, n - 1); rec = recordSend(rec, now); };
   const refused = (wait) => { const v = decide(rec, now); assert.equal(v.allowed, false, `refused at ${at()}`); assert.equal(v.waitMs, wait); assert.equal(v.retryAt, now + wait); };
   send(1);                                                  // at once
-  refused(5 * SEC); now += 2 * SEC; refused(3 * SEC);       // two seconds later: three more to wait
-  now += 3 * SEC; send(2);                                  // +5 s
-  now += 4 * SEC; refused(SEC); now += SEC; send(3);        // +10 s: a burst of three inside a quarter of a minute
-  refused(2 * MIN); now += MIN; refused(MIN);               // the fourth waits its two minutes
-  now += MIN; send(4);                                      // +2 min 10 s
-  now += 14 * MIN; refused(MIN); now += MIN; send(5);       // +17 min 10 s
-  now += 59 * MIN; refused(MIN); now += MIN; send(6);       // +1 h 17
-  now += 5 * HOUR; refused(HOUR); now += HOUR; send(7);     // +7 h 17
-  now += 11 * HOUR; refused(HOUR); now += HOUR; send(8);    // +19 h 17
+  refused(30 * SEC); now += 20 * SEC; refused(10 * SEC);    // twenty seconds later, while the first SMS is still on its way
+  now += 10 * SEC; send(2);                                 // +30 s
+  now += 35 * SEC; refused(10 * SEC); now += 10 * SEC; send(3); // +75 s: three codes take more than a minute to spend now
+  refused(5 * MIN); now += MIN; refused(4 * MIN);           // the fourth waits its five minutes
+  now += 4 * MIN; send(4);                                  // +5 min 75 s
+  now += 14 * MIN; refused(MIN); now += MIN; send(5);       // +20 min 75 s
+  now += 59 * MIN; refused(MIN); now += MIN; send(6);       // +1 h 20
+  now += 5 * HOUR; refused(HOUR); now += HOUR; send(7);     // +7 h 20
+  now += 11 * HOUR; refused(HOUR); now += HOUR; send(8);    // +19 h 20
   const ninth = decide(rec, now); assert.equal(ninth.allowed, false); assert.equal(ninth.waitMs, DAY); assert.equal(ninth.rung, 8);
   now += 23 * HOUR; refused(HOUR);                          // the run is alive: the ninth waits the whole day after the eighth, whatever aged
   now += HOUR; const again = decide(rec, now); assert.equal(again.allowed, true); assert.equal(again.rung, 0, 'a day of quiet ended the run: the first rung again');
   rec = recordSend(rec, now); assert.deepEqual(rec, { sends: [now], count: 1, lastAt: now, expireAt: now + 2 * DAY });
-  now += 5 * SEC; send(2); now += 5 * SEC; send(3);        // and the fresh run opens with the same burst of three
+  now += 30 * SEC; send(2); now += 45 * SEC; send(3);      // and the fresh run opens on the same first rungs
 });
 test('the record outlives every run it can hold: each send renews a two-day expiry, longer than the day of quiet that ends a run and than any rung', () => {
   assert.ok(SMS_RECORD_TTL_MS > SMS_QUIET_MS); assert.ok(SMS_RECORD_TTL_MS > Math.max(...SMS_LADDER_MS));
@@ -65,10 +65,10 @@ test('the browser counts down from the same ladder: its table and quiet day are 
     assert.equal(browser.nextSendAt(sends, now), v.retryAt, `sends ${sends.map((s) => s - T0)} at ${now - T0}`);
     assert.deepEqual(browser.currentRun(sends, now), currentRun({ sends }, now)); assert.deepEqual(browser.withSend(sends, now), recordSend({ sends }, now).sends);
   }
-  // a burst of three within 5 s each is allowed, the fourth waits two minutes: as the device counts it
-  const burst = [T0, T0 + 5 * SEC, T0 + 10 * SEC];
-  assert.equal(browser.nextSendAt(burst.slice(0, 1), T0 + 2 * SEC), T0 + 5 * SEC); assert.equal(browser.nextSendAt(burst.slice(0, 2), T0 + 5 * SEC), T0 + 10 * SEC);
-  assert.equal(browser.nextSendAt(burst, T0 + 10 * SEC), T0 + 10 * SEC + 2 * MIN); assert.equal(browser.nextSendAt([], T0), T0, 'nothing sent: now');
+  // three codes take at least 75 seconds to spend, and the fourth waits five minutes: as the device counts it
+  const burst = [T0, T0 + 30 * SEC, T0 + 75 * SEC];
+  assert.equal(browser.nextSendAt(burst.slice(0, 1), T0 + 2 * SEC), T0 + 30 * SEC); assert.equal(browser.nextSendAt(burst.slice(0, 2), T0 + 30 * SEC), T0 + 75 * SEC);
+  assert.equal(browser.nextSendAt(burst, T0 + 75 * SEC), T0 + 75 * SEC + 5 * MIN); assert.equal(browser.nextSendAt([], T0), T0, 'nothing sent: now');
 });
 test('a refusal\'s seconds are read from the provider\'s code or message in either spelling, and nothing else passes for them', () => {
   assert.equal(browser.refusalSeconds({ code: 'auth/internal-error', message: 'Firebase: HTTP Cloud Function returned an error. Code: 429, Message: SMS_WAIT:768 (auth/internal-error).' }), 768);

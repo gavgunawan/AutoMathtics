@@ -5,8 +5,10 @@
 // alone; tests/sms-ladder.test.mjs fails the moment the two tables or their rules differ.
 // Pure: no storage and no clock of its own, so the unit tests run it as it ships.
 const SECOND = 1000, MINUTE = 60 * SECOND, HOUR = 60 * MINUTE, DAY = 24 * HOUR;
-/** The wait after the n-th send of a run (index n − 1) before the next may go; the last entry repeats. */
-export const SMS_LADDER_MS = Object.freeze([5 * SECOND, 5 * SECOND, 2 * MINUTE, 15 * MINUTE, HOUR, 6 * HOUR, 12 * HOUR, DAY]);
+/** The wait after the n-th send of a run (index n − 1) before the next may go; the last entry repeats.
+ * Half a minute at the start since 17 Sep 2026: five seconds let a parent spend a whole run before the first SMS
+ * had landed, and the one who did never came back (functions/ladder.mjs tells the story). */
+export const SMS_LADDER_MS = Object.freeze([30 * SECOND, 45 * SECOND, 5 * MINUTE, 15 * MINUTE, HOUR, 6 * HOUR, 12 * HOUR, DAY]);
 export const SMS_QUIET_MS = DAY; // this long without a code ends the run
 
 /** The current run at `now`, oldest first: the same rule as functions/ladder.mjs currentRun(), over a bare list of send times. */

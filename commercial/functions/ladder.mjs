@@ -31,8 +31,18 @@
 import { createHmac } from 'node:crypto';
 
 const SECOND = 1000, MINUTE = 60 * SECOND, HOUR = 60 * MINUTE, DAY = 24 * HOUR;
-/** The wait after the n-th send of a run (index n − 1) before the next may go; the last entry repeats. */
-export const SMS_LADDER_MS = Object.freeze([5 * SECOND, 5 * SECOND, 2 * MINUTE, 15 * MINUTE, HOUR, 6 * HOUR, 12 * HOUR, DAY]);
+/**
+ * The wait after the n-th send of a run (index n − 1) before the next may go; the last entry repeats.
+ * The first two rungs were five seconds each until 17 Sep 2026, when the logs showed what that costs: someone
+ * signing up at 22:14 asked for a code, then asked again 16 and 37 seconds later — the first SMS had not landed
+ * yet — which spent the whole run in under a minute, met the two-minute wall, and that family never came back.
+ * A code takes tens of seconds to reach a phone, so the first rung is now half a minute: long enough for the SMS
+ * to arrive, short enough that a parent who really received nothing is not left staring at a wall. The second is
+ * short as well, because enrolling a mobile is followed at once by signing in with it, and that second code is the
+ * last thing standing between a parent and their family: the two who finished on 15 Sep asked for their two codes
+ * 53 and 37 seconds apart. Three codes now take at least 75 seconds to spend, which is the burst that did the harm.
+ */
+export const SMS_LADDER_MS = Object.freeze([30 * SECOND, 45 * SECOND, 5 * MINUTE, 15 * MINUTE, HOUR, 6 * HOUR, 12 * HOUR, DAY]);
 export const SMS_QUIET_MS = DAY;           // this long without a code ends the run
 // The record expires by TTL a day after its run could last have counted. Every send rewrites expireAt from its own
 // time, and a record matters only until a day of quiet after its latest send, so two days covers a run however many

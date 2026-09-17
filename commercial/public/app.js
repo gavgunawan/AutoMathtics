@@ -261,7 +261,9 @@ function stopSendClock() { if (sendClock) { clearInterval(sendClock); sendClock 
 // seconds when a refusal carries them, otherwise from this device's mirror of the ladder (auth.js nextSendAt);
 // with neither there is no clock and the parent reads the plain sentence. One clock ticks at a time and panel()
 // stops it with its screen, so no interval outlives the button it drives.
-function sendControl(label, destination, send) {
+// look: the screen that asks for a code first wants Send pressed, so it passes 'primary' and dims it to a ghost once
+// a code is on its way — a parent should never be looking at a bright button they cannot use yet (17 Sep 2026)
+function sendControl(label, destination, send, look = 'ghost') {
   const mine = screenId; let b = null;
   const hold = (until) => {
     if (mine !== screenId) return; // the screen has gone; its button with it
@@ -287,7 +289,7 @@ function sendControl(label, destination, send) {
       throw error; // the plain sentence (providerMessage) with no clock: nothing to count from
     }
     await check(); // the rung this send has just climbed
-  }, 'ghost');
+  }, look);
   check(); // a screen opened inside a wait starts counting at once
   return { button: b, check };
 }
@@ -346,7 +348,7 @@ async function authStep(result, afterReady = null) {
     if (afterReady) await afterReady();
     return;
   }
-  if (result.stage === 'signin') { signInScreen(false, afterReady, Boolean(afterReady)); note(result.notice); return; }
+  if (result.stage === 'signin') { signInScreen(false, afterReady, Boolean(afterReady), result.email || ''); note(result.notice); return; }
   if (result.stage === 'verify') {
     const box = panel('STEP 1 OF 3 · EMAIL', 'Check your inbox.', 'Open the verification email, then come back here. Nothing about your family exists until this is done.', 'w460');
     if (afterReady) onBack = cancelVerification;
@@ -368,8 +370,10 @@ async function authStep(result, afterReady = null) {
   // the destination is the typed number when enrolling; on the challenge it is the enrolled factor, which auth.js knows
   const send = sendControl('Send verification code', () => tidy(phone.input.value), async () => {
     if (enrolling && !e164(phone.input.value)) { note('Enter the number in international form, for example +62 812 3456 7890.'); return; }
-    note('Tick \u201cI\u2019m not a robot\u201d just below, then the code is sent.'); await (await auth()).sendCode(tidy(phone.input.value), consent.checked); note('Code sent. Enter it below.');
-  });
+    note('Tick \u201cI\u2019m not a robot\u201d just below, then the code is sent.'); await (await auth()).sendCode(tidy(phone.input.value), consent.checked);
+    send.button.className = 'ghost'; // a code is on its way: the bright button is now the one that finishes the step
+    note('Code sent. It can take up to a minute to arrive — enter it below.');
+  }, 'primary');
   if (enrolling) phone.input.addEventListener('input', () => send.check(true));
   // Remember this device (owner's request, 11 Sep 2026): asked on a sign-in's own SMS step only. Enrolment ends in a fresh
   // sign-in anyway, and the check of a parent action keeps what the device already had (the server decides that).
@@ -383,7 +387,10 @@ async function authStep(result, afterReady = null) {
     words.append(el('small', 'Opening the app again from a bookmark or home-screen shortcut skips signing in. Tick it only on a device you trust. \u201cHand over to kids\u201d still locks parent access, and changing your password signs every remembered device out.'));
     rememberLabel.append(remember, words);
   }
-  box.append(actionRow(send.button), captchaBox(), otp.wrap, ...(rememberLabel ? [rememberLabel] : []),
+  // What a parent needs to know before pressing Send twice (the sign-ups lost on 14 Sep 2026): the SMS is not instant,
+  // and asking again does not make it come faster — it spends a place in the run and brings the next wait forward.
+  box.append(actionRow(send.button), captchaBox(),
+    el('p', 'A code can take up to a minute to arrive. Ask for another one only if nothing comes.', 'small muted'), otp.wrap, ...(rememberLabel ? [rememberLabel] : []),
     actionRow(button('Verify code', async () => {
       if (remember) { rememberChoice = remember.checked; const tag = await accountTag(result.email); try { if (remember.checked && tag) localStorage.setItem(REMEMBER_PREF, tag); else localStorage.removeItem(REMEMBER_PREF); } catch { /* no storage */ } }
       return authStep(await (await auth()).confirmCode(otp.input.value), afterReady);
@@ -414,7 +421,9 @@ function rail(current) {
   ['01  PARENT SIGN-IN', '02  YOUR CREW', '03  KIDS\u2019 MODE'].forEach((t, i) => steps.append(el('span', t, i + 1 < current ? 'done' : i + 1 === current ? 'lit' : '')));
   return steps;
 }
-function signInScreen(signup = false, afterReady = null, reauth = false) {
+// known: the address the parent typed minutes ago, carried back from the provider (auth.js) so that the sign-in which
+// finishes a sign-up asks for a password and nothing they have already given. It is still theirs to change.
+function signInScreen(signup = false, afterReady = null, reauth = false, known = '') {
   if (!reauth) { reauthEpoch++; parentLive = false; } // a re-verification keeps the parent's session open; any other sign-in screen has none
   model = null;
   const box = panel(reauth ? 'PARENT VERIFICATION' : 'MISSION CONTROL',
@@ -428,6 +437,7 @@ function signInScreen(signup = false, afterReady = null, reauth = false) {
   const form = el('form', null, 'auth-form');
   const email = field('Parent email', 'email', { autocomplete: 'email', maxLength: 254 });
   const password = field('Password', 'password', { autocomplete: signup ? 'new-password' : 'current-password', minLength: signup ? 12 : 1, maxLength: 128 });
+  if (known && !signup) { email.input.value = known; password.input.focus?.(); }
   // A new password is typed twice: one slip in a masked box would lock the parent out of the account made a minute before.
   const again = signup ? field('Type the password again', 'password', { autocomplete: 'new-password', minLength: 12, maxLength: 128 }) : null;
   const submit = el('button', signup ? 'Create parent account' : 'Sign in as parent', 'primary'); submit.type = 'submit';
