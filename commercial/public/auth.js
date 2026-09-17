@@ -27,7 +27,9 @@ async function stage(user) {
   if (!sdk.multiFactor(user).enrolledFactors.length) return { stage: 'enroll' };
   const token = await user.getIdTokenResult(true);
   if (token.claims.firebase?.sign_in_second_factor !== 'phone') {
-    await clear(); return { stage: 'signin', notice: 'Mobile verified. Sign in again to complete the two-step check.' };
+    // the address this same person typed a minute ago, so the sign-in that follows is a password and nothing else
+    const email = user.email || null;
+    await clear(); return { stage: 'signin', notice: 'Mobile verified. Sign in again to complete the two-step check.', email };
   }
   return { stage: 'ready', idToken: token.token };
 }
@@ -93,10 +95,21 @@ async function hmacKey() {
   deviceKey = await crypto.subtle.importKey('raw', new Uint8Array(hex.match(/../g).map((h) => parseInt(h, 16))), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   return deviceKey;
 }
+// A browser that blocks site data — a private window, Safari with storage off — has no localStorage to keep these
+// records in, and until 17 Sep 2026 that meant no countdown at all: the Send button came straight back after every
+// press, and a parent who pressed it three times in half a minute spent a whole run before the first SMS landed (the
+// sign-up that stopped at 22:15 on 14 Sep). The records then live in this page's own memory instead. They die with
+// the tab, which is all a page without storage can promise, and the function remains the authority either way.
+const memory = new Map();
+function readLocal(key) {
+  try { const v = localStorage.getItem(key); return v === null && memory.has(key) ? memory.get(key) : v; } catch { return memory.has(key) ? memory.get(key) : null; }
+}
+function writeLocal(key, value) { try { localStorage.setItem(key, value); } catch { memory.set(key, value); } }
+function dropLocal(key) { memory.delete(key); try { localStorage.removeItem(key); } catch { /* nothing stored to remove */ } }
 // A wait the provider named (its SMS_WAIT seconds) is kept per destination too, so retyping the same number, leaving
 // the screen or coming back later keeps counting from it instead of re-enabling Send while the server still refuses.
-function readHold(key) { try { const v = Number(localStorage.getItem(key + HOLD)), now = Date.now(); return Number.isSafeInteger(v) && v > now && v <= now + MAX_WAIT ? v : 0; } catch { return 0; } }
-function writeHold(key, until) { try { localStorage.setItem(key + HOLD, String(Math.floor(until))); } catch { /* no storage */ } }
+function readHold(key) { const v = Number(readLocal(key + HOLD)), now = Date.now(); return Number.isSafeInteger(v) && v > now && v <= now + MAX_WAIT ? v : 0; }
+function writeHold(key, until) { writeLocal(key + HOLD, String(Math.floor(until))); }
 // Records expire: on every load, any record whose run is over and any hold that has passed is removed, so nothing
 // here lasts more than a day after the last code to that destination.
 function sweep() {
@@ -124,15 +137,13 @@ async function recordKey(dest) {
   return STORE + [...mac].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 function readSends(key) {
-  let sends = []; try { sends = JSON.parse(localStorage.getItem(key) || '[]'); } catch { return []; }
+  let sends = []; try { sends = JSON.parse(readLocal(key) || '[]'); } catch { return []; }
   if (!Array.isArray(sends)) return [];
   // a record that can no longer hold anything back goes the next time it is read: the device keeps a run, never a history
-  if (sends.length && !ladder.currentRun(sends, Date.now()).length) { try { localStorage.removeItem(key); } catch { /* read-only storage */ } return []; }
+  if (sends.length && !ladder.currentRun(sends, Date.now()).length) { dropLocal(key); return []; }
   return sends;
 }
-function writeSends(key, sends) {
-  try { localStorage.setItem(key, JSON.stringify(sends)); } catch { /* no storage: the function still counts */ }
-}
+function writeSends(key, sends) { writeLocal(key, JSON.stringify(sends)); }
 /** When the next code to this destination may go by this device's count (a timestamp; 0 when it has nothing). Display only. */
 export async function nextSendAt(phoneNumber) {
   try {
@@ -206,12 +217,12 @@ export async function changeMobileSend(phoneNumber, consent) {
 }
 export async function changeMobileConfirm(code) {
   if (!verificationId || !auth.currentUser) throw Error('Request a verification code first.');
-  const user = auth.currentUser, before = sdk.multiFactor(user).enrolledFactors.map((f) => f.uid);
+  const user = auth.currentUser, before = sdk.multiFactor(user).enrolledFactors.map((f) => f.uid), email = user.email || null;
   await sdk.multiFactor(user).enroll(sdk.PhoneMultiFactorGenerator.assertion(sdk.PhoneAuthProvider.credential(verificationId, code)), 'Parent mobile');
   await carryToFactor(before); // the sign-in straight after counts the codes the new number has just had
   for (const f of sdk.multiFactor(user).enrolledFactors) if (before.includes(f.uid)) await sdk.multiFactor(user).unenroll(f); // the old number goes only once the new one is in
   await clear();
-  return { stage: 'signin', notice: 'Mobile number changed. Sign in with your password and a code to your new number.' };
+  return { stage: 'signin', notice: 'Mobile number changed. Sign in with your password and a code to your new number.', email };
 }
 export async function confirmCode(code) {
   if (!verificationId) throw Error('Request a verification code first.');
@@ -221,11 +232,11 @@ export async function confirmCode(code) {
     resolver = null; resetCaptcha();
     return stage(user);
   }
-  const before = sdk.multiFactor(auth.currentUser).enrolledFactors.map((f) => f.uid);
+  const before = sdk.multiFactor(auth.currentUser).enrolledFactors.map((f) => f.uid), email = auth.currentUser.email || null;
   await sdk.multiFactor(auth.currentUser).enroll(assertion, 'Parent mobile');
   await carryToFactor(before);
   await clear();
-  return { stage: 'signin', notice: 'Mobile verified. Sign in with your password and SMS code to open the family workspace.' };
+  return { stage: 'signin', notice: 'Mobile verified. Sign in with your password and SMS code to open the family workspace.', email };
 }
 export async function resetPassword(email) {
   // Uniform UI response avoids disclosing whether an account exists.
