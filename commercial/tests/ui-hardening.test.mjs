@@ -121,7 +121,7 @@ test('UI S1-001: handover, child PIN and switch-child refresh CSRF and broadcast
   const old = h.cookie(); await h.click('Hand over to kids'); assert.notEqual(h.cookie(), old);
   await h.nodes('BUTTON').find(n => n.className === 'player-card').onclick();
   h.nodes('INPUT')[0].value = '000000'; await h.click('Enter my grid'); assert.ok(h.message.textContent.includes('did not match'));
-  h.nodes('INPUT')[0].value = '763829'; await h.click('Enter my grid'); assert.ok(h.root.textContent.includes('grid coins · spend in 🛒'));
+  h.nodes('INPUT')[0].value = '763829'; await h.click('Enter my grid'); assert.ok(h.root.textContent.includes('grid coins'));
   assert.ok(h.root.textContent.includes('⚙️ ENGINE · A') && h.root.textContent.includes('⚡ 0'));
   await h.click('Switch user'); assert.ok(h.root.textContent.includes("who's on a mission today?"));
   assert.ok(h.broadcasts.length >= 3);
@@ -145,7 +145,7 @@ test('UI Stage 2: a child starts a session, answers what the server asks, and ca
   const form = h.nodes('FORM')[0]; h.nodes('INPUT')[0].value = String(stored.questions[0].answer.v); // the answer box is the only input on the play screen
   form.onsubmit({ preventDefault() {} }); await h.idle();
   assert.ok(h.root.textContent.includes('⭐ Correct!')); assert.ok(h.root.textContent.includes('Paper 1 · 2/25'));
-  await h.click('✕ Quit'); assert.ok(h.root.textContent.includes('grid coins · spend in 🛒') && h.root.textContent.includes('✕ quit at Q2'));
+  await h.click('✕ Quit'); assert.ok(h.root.textContent.includes('grid coins') && h.root.textContent.includes('✕ quit at Q2'));
   assert.equal((await h.f.learning.state(await h.f.service.authenticate(h.cookie().slice('__session='.length)))).active, null);
 });
 

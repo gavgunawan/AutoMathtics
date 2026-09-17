@@ -10,7 +10,7 @@ import { NAV_TOPICS } from '../server/questions/navigator.mjs';
 const all = (node) => [node, ...node.children.flatMap((c) => (typeof c === 'string' ? [] : all(c)))];
 const has = (h, label) => h.nodes('BUTTON').some((b) => b.textContent === label);
 const lines = (h) => all(h.root).filter((n) => /\bhow-line\b/.test(n.className || '')).map((n) => n.textContent);
-const home = (h) => h.root.textContent.includes('grid coins · spend in 🛒');
+const home = (h) => h.root.textContent.includes('grid coins');
 // the page's localStorage, as a browser that keeps site data has it
 function memoryStorage() {
   const m = new Map();

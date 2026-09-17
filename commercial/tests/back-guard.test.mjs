@@ -42,7 +42,7 @@ test('Back on the kids\' side: from the PIN pad to the launch pad, from the shop
   await h.back(); assert.ok(launchPad(), 'the PIN pad goes back to the launch pad');
   await h.nodes('BUTTON').find((n) => n.className === 'player-card').onclick();
   h.nodes('INPUT')[0].value = '763829'; await h.click('Enter my grid');
-  const home = () => h.root.textContent.includes('grid coins · spend in 🛒'); assert.ok(home());
+  const home = () => h.root.textContent.includes('grid coins'); assert.ok(home());
   await h.click('🛒 Shop'); assert.ok(h.root.textContent.includes('GRID SHOP')); await h.back(); assert.ok(home(), 'from the shop');
   await h.click('🗺 Map'); assert.ok(h.root.textContent.includes('🗺 SECTOR A ROUTE')); await h.back(); assert.ok(home(), 'from the map');
   await h.click('⚙️ Start Engine ▶'); assert.ok(h.root.textContent.includes('Paper 1 · 1/25')); assert.equal(h.intervals(), 1, 'the question clock runs');

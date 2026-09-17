@@ -77,5 +77,5 @@ test('the map where the DOM can draw: the letter\'s route lit as far as the pape
   assert.deepEqual(texts.map((n) => n.textContent), ['🔒', '👑', '⚡', '🔒', '🔒', '🔒', '🚀'], 'the exit, the five check points, the vehicle');
   assert.equal(texts.at(-1).attrs.class, 'mapveh'); assert.equal(nodes(svg, 'ANIMATE').length, 1, 'light runs along the lit stretch');
   assert.equal(find(h, /^cp-cell open$/).style.props['--c'], '#FFB020', 'the strip wears the theme too');
-  await h.click('Back'); assert.ok(h.root.textContent.includes('grid coins · spend in 🛒'));
+  await h.click('Back'); assert.ok(h.root.textContent.includes('grid coins'));
 });

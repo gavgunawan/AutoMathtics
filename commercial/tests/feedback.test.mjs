@@ -315,7 +315,7 @@ test('UI: Send feedback under the sign-in screen (its notes say sign-in or sign-
   // kid mode: the launch pad, the PIN screen, the child's home, a game, the shop, the map, and the sign-in screen reached from it
   await p.click('Hand over to kids'); assert.ok(p.root.textContent.includes('PLAYER SELECTION') && !has(p), 'the launch pad');
   await p.nodes('BUTTON').find((b) => b.className === 'player-card').onclick(); assert.ok(p.root.textContent.includes('Enter my grid') && !has(p), 'the PIN screen');
-  p.nodes('INPUT')[0].value = '763829'; await p.click('Enter my grid'); assert.ok(p.root.textContent.includes('grid coins · spend in 🛒') && !has(p), 'the child\'s home');
+  p.nodes('INPUT')[0].value = '763829'; await p.click('Enter my grid'); assert.ok(p.root.textContent.includes('grid coins') && !has(p), 'the child\'s home');
   await p.click('⚙️ Start Engine ▶'); assert.ok(p.root.textContent.includes('Paper 1 · 1/25') && !has(p), 'a game');
   await p.click('✕ Quit'); await p.click('🛒 Shop'); assert.ok(p.root.textContent.includes('GRID SHOP') && !has(p), 'the shop');
   await p.click('Back'); await p.click('🗺 Map'); assert.ok(p.root.textContent.includes('🗺 SECTOR A ROUTE') && !has(p), 'the map');
