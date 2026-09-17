@@ -51,7 +51,7 @@ test('UI: in kid mode the bar waits for the end of a question session: never dur
   h.setRelease(NEXT); await h.tick(); assert.ok(!h.root.textContent.includes(BAR), 'not during play');
   assert.equal(h.intervals(), 1, 'the question clock is the one clock counted');
   await h.visibility(); assert.ok(h.root.textContent.includes('Paper 1 · 1/25') && !h.root.textContent.includes(BAR), 'back in view mid-game: still the question, still no bar');
-  await h.click('✕ Quit'); assert.ok(h.root.textContent.includes('grid coins · spend in 🛒') && h.root.textContent.includes(BAR), 'once play ends');
+  await h.click('✕ Quit'); assert.ok(h.root.textContent.includes('grid coins') && h.root.textContent.includes(BAR), 'once play ends');
   await h.click('🛒 Shop'); assert.ok(h.root.textContent.includes('GRID SHOP') && h.root.textContent.includes(BAR), 'and on the screens after it');
 });
 

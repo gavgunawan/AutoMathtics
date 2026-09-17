@@ -32,8 +32,8 @@ test('the home is v2\'s: the header with the name, sector and level, the wallet 
   const [header, card, log] = h.root.children;
   assert.ok(header.className.startsWith('home-header') && card.className === 'panel home' && log.className === 'logbox', 'the header above the card, the log below it');
   for (const words of ['Allison · SECTOR A', 'Addition (hundreds)']) assert.ok(header.textContent.includes(words), words);
-  for (const words of ['⚡ 890', 'grid coins · spend in 🛒', '🏆 120', 'reward points', '🔗 Day 2 of 3 — 1 more day in a row for +⚡50 🏆100! · 🛡️×1',
-    '⚙️ ENGINE · A', '25 q', '🧭 NAVIGATOR · A', '15 q', 'Next: papers 1–5 · 100% to unlock',
+  for (const words of ['⚡ 890', 'grid coins', '🏆 120', 'reward points', '2-day streak!', 'Day 2 of 3 — 1 more day in a row for +⚡50 🏆100!', '🛡️×1', 'Day 1', 'Day 3', 'Bonus',
+    '⚙️ ENGINE · A', 'drills the numbers', '25 q', '🧭 NAVIGATOR · A', 'reads and reasons', '15 q', 'Next: papers 1–5 · 100% to unlock',
     '⬆ Jump to Sector B needs ⚙️ Engine to 100 + 5 crowns and 🧭 Navigator to 100 + 5 crowns']) assert.ok(card.textContent.includes(words), words);
   for (const words of ['Allison\'s log', 'Date & time', 'A · 1–5', '25/25', '12:34', 'PASS', 'A · 🧭 1–5', '✕ quit at Q4']) assert.ok(log.textContent.includes(words), words);
   for (const label of ['Switch user', '⚙️ Start Engine ▶', '🧭 Start Navigator ▶', '🛒 Shop', '🗺 Map', '📖 How to', '🎓 Guide', 'Parent sign-in']) assert.ok(h.nodes('BUTTON').some((b) => b.textContent === label), label);

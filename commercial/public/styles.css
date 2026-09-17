@@ -368,27 +368,55 @@ html[data-mode=kid][data-bg] body:after,html[data-mode=kid][data-bg=bg_space] bo
 .box.scan-card{margin:16px 0 0}
 .scan-text{margin:4px 0 8px;font-size:13.5px;color:var(--txt)}
 .scan-state{margin:0;font-size:12.5px;font-weight:700;color:var(--dim)}
-/* ---- the child's home (v2 2859-3073): the header above the card, the card, the log below ---- */
-.home-header{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;width:100%;max-width:640px;margin:0 auto 12px;animation:screenIn .36s cubic-bezier(.16,1,.3,1) both}
+/* ---- the child's home (v2 2859-3073), redrawn to the owner's mockup of 17 Sep 2026: the name bar above the card, and on the
+   card a stack of cards — the two balances, the streak with its three days, the rocket in its sky, a tile per track, four tiles
+   out — each one thing a child can see at arm's length on a tablet, in the v2 palette this app has always worn ---- */
+.home-header{display:flex;justify-content:space-between;align-items:center;gap:10px;width:100%;max-width:640px;margin:0 auto 12px;padding:8px 10px;border-radius:18px;background:linear-gradient(135deg,var(--accent-faint),transparent 62%),rgba(11,14,35,.72);border:1px solid var(--accent-soft);animation:screenIn .36s cubic-bezier(.16,1,.3,1) both}
 .home-who{display:flex;align-items:center;gap:10px;min-width:0}
 /* the outfit rides out past the pet's top right corner, and a legend's glow further: room before the name (QA, 12 Sep 2026) */
 .home-who>.petwrap{margin-right:8px}.home-who>.eggwrap{margin-right:4px}
-.home-words{flex:1;min-width:0}
+.home-words{flex:1;min-width:0;text-align:left}
+.home-words .kicker{margin:0}
+.home-words h1{margin:1px 0 0;font-size:19px;line-height:1.15}
 .home-tools{display:inline-flex;gap:6px;align-items:center;flex:0 0 auto}
 .tiny.fs{font-size:15px;line-height:1;color:var(--cyan);border-color:var(--v2line)}
 .panel>.kicker:empty{display:none}
-.wallet-row{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin:12px 0 4px}
-.wallet-tile{display:inline-flex;flex-direction:column;gap:2px;min-width:130px;padding:10px 16px;border:2px solid var(--c);border-radius:14px;background:var(--void)}
-.wallet-tile.c-cyan{box-shadow:0 0 14px rgba(53,224,255,.15)}.wallet-tile.c-gold{box-shadow:0 0 18px rgba(255,176,32,.15)}
-.yen{font:600 26px/1.1 var(--mono);color:var(--c)}
-.wallet-sub{font-size:12px;font-weight:700;color:var(--dim)}
-.streak-note{margin:2px 0 0;font:600 13px/1.5 var(--mono);color:var(--magenta)}
-.track-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;margin:14px 0 0}
-.track-card{padding:10px 10px 12px;border:1.5px solid var(--c);border-radius:12px;background:var(--void);text-align:left}
-.track-card.c-cyan{box-shadow:0 0 14px #35E0FF22}.track-card.c-gold{box-shadow:0 0 14px #FFB02022}.track-card.c-mint{box-shadow:0 0 14px #2DFFB322}.track-card.c-violet{box-shadow:0 0 14px #8A5CFF22}
-.track-head{display:flex;align-items:center;gap:6px}
-.track-q{margin-left:auto;font:600 10.5px var(--mono);color:var(--dim)}
-.track-status{min-height:18px;margin:6px 0 0;font-size:12.5px;line-height:1.45;color:var(--txt)}
+/* the two balances: side by side, equal, whatever the numbers grow to */
+.wallet-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:0 0 12px}
+.wallet-tile{display:flex;flex-direction:column;align-items:flex-start;gap:1px;padding:10px 14px;border:1.5px solid var(--c);border-radius:16px;background:linear-gradient(150deg,rgba(255,255,255,.045),transparent 58%),var(--void)}
+.wallet-tile.c-cyan{box-shadow:0 0 16px rgba(53,224,255,.16)}.wallet-tile.c-gold{box-shadow:0 0 18px rgba(255,176,32,.16)}
+.yen{font:600 23px/1.15 var(--mono);white-space:nowrap;color:var(--c)}
+.wallet-sub{font:700 10px/1.2 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+/* the streak: the flame, what the run is worth, and its three days with the bonus at the end */
+.streak-card{margin:0 0 12px;padding:12px 14px;border-radius:18px;text-align:left;background:linear-gradient(140deg,rgba(255,176,32,.13),rgba(255,45,168,.06) 58%,transparent),var(--void);border:1.5px solid rgba(255,176,32,.45);box-shadow:0 0 18px rgba(255,176,32,.12)}
+.streak-card.banked{border-color:var(--mint);box-shadow:0 0 20px rgba(45,255,179,.18);background:linear-gradient(140deg,rgba(45,255,179,.15),transparent 60%),var(--void)}
+.streak-head{display:flex;align-items:flex-start;gap:12px}
+.streak-flame{font-size:32px;line-height:1.1;filter:drop-shadow(0 0 10px rgba(255,176,32,.55))}
+.streak-words{flex:1;min-width:0}
+.streak-title{margin:0;font:700 18px/1.15 var(--display);color:var(--gold)}
+.streak-card.banked .streak-title{color:var(--mint)}
+.streak-sub{margin:4px 0 0;font-size:12.5px;line-height:1.4;color:var(--dim)}
+.streak-shield{flex:0 0 auto;padding:5px 9px;border:1px solid #35e0ff45;border-radius:999px;font:600 11px/1 var(--mono);color:var(--cyan);white-space:nowrap}
+.streak-days{display:flex;align-items:center;margin-top:12px}
+.streak-stop{flex:0 0 auto;display:inline-flex;flex-direction:column;align-items:center;gap:5px}
+.streak-node{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:50%;font:700 14px/1 var(--display);color:var(--dim);background:var(--void);border:2px dashed var(--v2line)}
+.streak-stop.done .streak-node{color:var(--on-bright);background:linear-gradient(140deg,#2DFFB3,#35E0FF);border:2px solid transparent;box-shadow:0 0 14px rgba(45,255,179,.45)}
+.streak-stop.next .streak-node{color:var(--gold);border-color:var(--gold);border-style:solid}
+.streak-stop.gift .streak-node{font-size:16px;border-color:#FF2DA855}
+.streak-stop.gift.done .streak-node{background:linear-gradient(140deg,#FFB020,#FF2DA8);border-color:transparent;box-shadow:0 0 16px rgba(255,45,168,.5)}
+.streak-day{font:600 9.5px/1 var(--mono);letter-spacing:.06em;color:var(--dim);white-space:nowrap}
+.streak-stop.done .streak-day{color:var(--mint)}
+.streak-link{flex:1;min-width:8px;height:0;margin-bottom:15px;border-top:2px dashed var(--v2line)}
+.streak-link.done{border-top-color:var(--mint)}
+.track-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px;margin:14px 0 0}
+.track-card{padding:14px 14px 16px;border:1.5px solid var(--c);border-radius:18px;background:linear-gradient(150deg,rgba(255,255,255,.035),transparent 55%),var(--void);text-align:left}
+.track-card.c-cyan{box-shadow:0 0 16px #35E0FF22}.track-card.c-gold{box-shadow:0 0 16px #FFB02022}.track-card.c-mint{box-shadow:0 0 16px #2DFFB322}.track-card.c-violet{box-shadow:0 0 16px #8A5CFF22}
+.track-head{display:flex;align-items:center;gap:10px}
+.track-icon{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;width:42px;height:42px;border-radius:13px;font-size:21px;line-height:1;background:var(--void);box-shadow:inset 0 0 0 1.5px var(--c),0 0 16px -6px var(--c)}
+.track-words{flex:1;min-width:0}
+.track-blurb{display:block;margin-top:2px;font-size:11.5px;color:var(--dim)}
+.track-q{flex:0 0 auto;align-self:flex-start;font:600 10.5px var(--mono);color:var(--dim)}
+.track-status{min-height:18px;margin:10px 0 0;font-size:13px;line-height:1.45;color:var(--txt)}
 .track-status .due{color:var(--gold)}
 .tier-map{display:flex;align-items:flex-start;gap:3px;margin:10px 0 2px}
 .tier-bar{flex:1;min-width:6px;height:4px;margin-top:10px;border-radius:99px;background:var(--v2line)}
@@ -398,30 +426,47 @@ html[data-mode=kid][data-bg] body:after,html[data-mode=kid][data-bg=bg_space] bo
 .tier-node.lit{border-color:var(--c)}.tier-node.boss{border-color:var(--magenta)}.tier-node.beat{background:var(--mint);border-color:var(--mint)}
 .tier-label{font:600 9.5px/1 var(--mono);white-space:nowrap;color:var(--dim)}
 .tier-label.lit{font-size:10.5px;color:var(--c)}.tier-label.passed{color:var(--mint)}
-.track-go{width:100%;margin-top:8px;padding:10px 12px;font-size:15px}
+.track-go{width:100%;margin-top:10px;padding:13px 12px;font-size:16px;border-radius:14px}
 .primary.gold,.primary.violet{color:var(--on-bright)}
 .jump-banner{margin:10px 0 0;padding:8px 12px;border-radius:10px;border:1px dashed var(--v2line);background:var(--void);font-size:12px;font-weight:700;line-height:1.45;color:var(--dim);text-align:center}
 .jump-banner.ready{background:var(--jump-fill);border-color:var(--mint);color:var(--mint)}
-/* the Family Rocket (2977-3015) */
-.rocket-panel{position:relative;margin:14px 0 0;padding:10px 12px 12px;border-radius:12px;background:var(--void);border:1.5px solid var(--violet);box-shadow:0 0 14px rgba(138,92,255,.25);text-align:left;--c:var(--violet)}
+/* the Family Rocket (2977-3015), now flying in a sky of its own (the mockup, 17 Sep 2026) */
+.rocket-panel{position:relative;margin:0;padding:12px 14px 14px;border-radius:18px;background:var(--void);border:1.5px solid var(--violet);box-shadow:0 0 16px rgba(138,92,255,.25);text-align:left;--c:var(--violet)}
 .rocket-panel.launched{border-color:var(--gold);box-shadow:0 0 22px rgba(255,176,32,.35);--c:var(--gold)}
 .rocket-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .rocket-prize{margin-left:auto;font-size:12.5px;font-weight:700;color:var(--txt)}
+/* the sky: two planets and a field of stars, all painted by this file — no image is fetched and nothing moves but the rocket */
+.rocket-sky{position:relative;height:104px;margin:10px 0 0;border-radius:14px;overflow:hidden;background:radial-gradient(circle at 18% 26%,rgba(138,92,255,.34),transparent 46%),radial-gradient(circle at 78% 64%,rgba(53,224,255,.2),transparent 44%),linear-gradient(160deg,#0A0F33,#05071C);box-shadow:inset 0 0 0 1px rgba(138,92,255,.28)}
+.rocket-sky:before{content:"";position:absolute;inset:0;background-image:radial-gradient(1.5px 1.5px at 12% 32%,#ffffffaa,transparent),radial-gradient(1.5px 1.5px at 31% 72%,#ffffff88,transparent),radial-gradient(2px 2px at 53% 20%,#ffffff99,transparent),radial-gradient(1.5px 1.5px at 66% 48%,#ffffff77,transparent),radial-gradient(1.5px 1.5px at 85% 30%,#ffffff99,transparent),radial-gradient(1.5px 1.5px at 44% 88%,#ffffff66,transparent),radial-gradient(1.5px 1.5px at 93% 78%,#ffffff88,transparent),radial-gradient(1.5px 1.5px at 24% 54%,#ffffff55,transparent)}
+.sky-planet{position:absolute;border-radius:50%}
+.sky-planet.far{width:26px;height:26px;left:13%;top:20%;background:radial-gradient(circle at 32% 30%,#7EA6FF,#2A3AA0 70%);box-shadow:0 0 14px rgba(90,130,255,.45)}
+.sky-planet.near{width:46px;height:46px;right:8%;bottom:12%;background:radial-gradient(circle at 34% 28%,#FFB9E6,#8A2F8F 72%);box-shadow:0 0 18px rgba(255,45,168,.35)}
+.sky-planet.near:after{content:"";position:absolute;left:-24%;top:44%;width:148%;height:7px;border-radius:50%;background:linear-gradient(90deg,transparent,rgba(255,217,244,.8),transparent);transform:rotate(-16deg)}
+.rocket-sky .rocket-rider{top:auto;bottom:10px;left:calc(5% + var(--w)*.84);font-size:27px}
 .rocket-track{position:relative;height:14px;margin:10px 0 4px;border-radius:99px;background:var(--panel);border:1px solid var(--v2line)}
 .rocket-fill{display:block;width:var(--w);height:100%;border-radius:99px;background:linear-gradient(90deg,#35E0FF,#8A5CFF);box-shadow:0 0 10px rgba(138,92,255,.6);transition:width .6s cubic-bezier(.2,.8,.2,1)}
 .launched .rocket-fill{background:linear-gradient(90deg,#FFB020,#FF2DA8)}
 .rocket-rider{position:absolute;top:-9px;left:calc(var(--w) - 12px);font-size:20px;line-height:1;transition:left .6s cubic-bezier(.2,.8,.2,1)}
 .rocket-ride{animation:petSway 2.2s ease-in-out infinite;filter:drop-shadow(0 0 6px #8A5CFF)}
 .rocket-fly{animation:launchUp 1.8s cubic-bezier(.5,0,.3,1) forwards;filter:drop-shadow(0 0 8px #FFB020)}
-.rocket-crew{display:flex;flex-wrap:wrap;gap:4px 12px;margin:0;font:600 11.5px/1.5 var(--mono);color:var(--dim)}
-.rocket-total{color:var(--txt)}.rocket-crew .met{color:var(--mint)}
-.rocket-fuel{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px}
+/* the tank's total, then a chip for each of the crew: who has poured what, and a mint chip once their minimum is in */
+.rocket-crew{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:8px 0 0;font:600 11.5px/1.4 var(--mono);color:var(--dim)}
+.rocket-crew span{padding:4px 9px;border-radius:999px;background:rgba(138,92,255,.12);border:1px solid rgba(138,92,255,.3)}
+.rocket-total{margin-right:2px;padding:0;border:0;background:none;font-size:13.5px;color:var(--txt)}
+.rocket-crew .met{color:var(--mint);background:rgba(45,255,179,.1);border-color:rgba(45,255,179,.4)}
+.rocket-fuel{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px}
+.rocket-fuel button{flex:1}
 .rocket-note{margin:8px 0 0;font-size:11.5px;color:var(--dim)}
-.rocket-fuel .rocket-note{margin:0}
+.rocket-fuel .rocket-note{flex:1 0 100%;margin:0}
 .rocket-note.due{font-size:11px;color:var(--gold)}
 .rocket-note.lift{font-size:13.5px;font-weight:700;color:var(--gold)}
-.home-nav{margin-top:14px}
-.scan-row{margin-top:8px}
+/* the four ways out of the home, as tiles: the name is the button's own words and what it is for is drawn from data-sub, so
+   nothing a test or a screen reader reads depends on this file */
+.hub-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0 0}
+.hub-tile{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:4px;min-height:66px;padding:12px 14px;border-radius:16px;font-size:14.5px;text-align:left;color:var(--txt);background:linear-gradient(150deg,rgba(255,255,255,.04),transparent 58%),var(--void);border:1.5px solid var(--v2line)}
+.hub-tile:after{content:attr(data-sub);font:700 9.5px/1.2 var(--mono);letter-spacing:.09em;text-transform:uppercase;color:var(--dim)}
+@media(hover:hover) and (pointer:fine){.hub-tile:hover{border-color:var(--cyan)}}
+.scan-row{margin-top:10px}
 /* the log below the card (st.logBox 3803, st.table 3829-3831) */
 .logbox{width:100%;max-width:640px;margin:20px auto 0;padding:16px 14px;overflow-x:auto;background:var(--panel);border:1px solid var(--v2line);border-radius:14px;text-align:left}
 .logtable{width:100%;border-collapse:collapse;font-size:12px}
@@ -431,6 +476,11 @@ html[data-mode=kid][data-bg] body:after,html[data-mode=kid][data-bg=bg_space] bo
 .logtable .log-quit{font-weight:700;color:var(--dim)}
 .logtable .log-result{font-weight:700}.log-result.pass{color:var(--mint)}.log-result.cp{color:var(--gold)}.log-result.scan,.log-result.placed{color:var(--violet)}.log-result.retry{color:var(--red)}
 @media(max-width:760px){.home-header{flex-wrap:wrap;align-items:center}.home-tools{margin-left:auto}}
+/* a phone: the card gives its gutters to the cards inside it, and a track tile takes the full width */
+/* a phone: the card gives its gutters to the cards inside it, a track tile takes the full width, and the name bar stays one
+   row — the sector's name gives way first, since the kicker above it already says which sector this is */
+@media(max-width:480px){.panel.home{padding:14px 12px}.wallet-tile{padding:9px 11px}.yen{font-size:21px}.track-grid{grid-template-columns:1fr}.streak-sub{font-size:12px}
+  .home-header{flex-wrap:nowrap;padding:8px}.home-words .kicker,.home-words h1{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.home-words .kicker{font-size:10px}.home-words h1{font-size:16px}.home-tools .tiny{font-size:11px;padding:6px 8px}}
 /* ---- a session (v2 3110-3208; st.playArea 3732 to st.goBtn 3779): one 640px column, no card ---- */
 .panel.play{max-width:640px;padding:0;background:none;border:0;box-shadow:none;text-align:left;animation:none}
 .status-row{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:4px}
@@ -473,6 +523,28 @@ html[data-mode=kid][data-bg] body:after,html[data-mode=kid][data-bg=bg_space] bo
 .q-eq{margin:0 6px}.q-ask{color:#9BB2C6}
 .q-word{padding:0 4px;text-align:left;font:700 clamp(20px,5.2vw,27px)/1.35 var(--ui);color:var(--txt)}
 .blank{display:inline-block;min-width:56px;margin:0 4px;border-bottom:3px solid var(--cyan);vertical-align:baseline}
+/* the figure a question is about (app.js figureView, 17 Sep 2026): bars, a lollipop line, a pie or a table. Heights, shares
+   and colours arrive as custom properties; every number beside them is a word, so the drawing carries no fact on its own */
+.q-figured{display:flex;flex-direction:column;align-items:center;gap:14px}
+.q-fig{width:100%;max-width:440px;margin:0;padding:12px 14px 10px;border-radius:14px;background:rgba(7,10,30,.55);border:1px solid var(--v2line)}
+.fig-title{margin-bottom:10px;font:700 11px/1.3 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--dim);text-align:left}
+.fig-plot{display:flex;align-items:flex-end;justify-content:space-around;gap:8px;height:124px}
+.fig-col{flex:1;min-width:0;height:100%;display:flex;flex-direction:column;align-items:center;gap:5px}
+.fig-val{font:600 12.5px/1 var(--mono);color:var(--txt)}
+.fig-bar-wrap{flex:1;width:100%;display:flex;align-items:flex-end;justify-content:center}
+.fig-bar{display:block;width:74%;max-width:46px;height:var(--h);min-height:4px;border-radius:6px 6px 3px 3px;background:var(--bar);box-shadow:0 0 14px -5px var(--bar)}
+.fig-label{font:600 10px/1.2 var(--mono);color:var(--dim);text-align:center;overflow-wrap:anywhere}
+.fig-line .fig-bar{position:relative;width:3px;max-width:3px;border-radius:99px;opacity:.75}
+.fig-line .fig-bar:after{content:"";position:absolute;top:-6px;left:50%;width:13px;height:13px;margin-left:-6.5px;border-radius:50%;background:var(--bar);box-shadow:0 0 10px -2px var(--bar)}
+.fig-pie-wrap{display:flex;align-items:center;justify-content:center;gap:16px;flex-wrap:wrap}
+.fig-pie{flex:0 0 auto;width:114px;height:114px;border-radius:50%;background:var(--pie);box-shadow:0 0 0 2px var(--v2line),0 8px 22px rgba(0,0,0,.45)}
+.fig-legend{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:7px;font:600 12.5px/1.2 var(--mono);color:var(--txt);text-align:left}
+.fig-legend li{display:flex;align-items:center;gap:8px}
+.fig-swatch{width:13px;height:13px;border-radius:4px;background:var(--sw)}
+.fig-table{width:100%;border-collapse:collapse;text-align:left}
+.fig-table th{padding:6px 8px;border-bottom:1.5px solid var(--v2line);font:700 10.5px var(--mono);letter-spacing:.07em;text-transform:uppercase;color:var(--dim)}
+.fig-table td{padding:7px 8px;border-bottom:1px solid var(--row);font:600 13px var(--mono);color:var(--txt)}
+.fig-table tr:last-child td{border-bottom:0}
 /* the answer box (st.inputBox 3760-3766), solid and glowing once something is typed */
 .answer-form{margin:0}
 input.answer-box{display:block;width:100%;max-width:300px;min-height:52px;margin:14px auto 0;padding:6px 12px;text-align:center;border:2px dashed var(--cyan);border-radius:10px;background:var(--void);color:var(--mint);font:600 28px var(--mono)}

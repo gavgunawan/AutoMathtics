@@ -96,5 +96,50 @@ test('a missed question ends on "almost there": the tally, the 100% rule, no coi
   for (const words of ['Session done — almost there!', '24/25', '✗ 1 incorrect', 'The 100% rule: perfect score unlocks the next papers', '⚡ 0 · 🏆 0']) assert.ok(h.root.textContent.includes(words), words);
   assert.ok(!all(h.root).some((n) => n.className === 'splash'), 'no coins without a pass');
   assert.ok(h.nodes('BUTTON').some((b) => b.textContent === 'Try again ▶'));
-  await h.click('Home'); assert.ok(h.root.textContent.includes('grid coins · spend in 🛒') && h.root.textContent.includes('retry'), 'home, with the run in the log');
+  await h.click('Home'); assert.ok(h.root.textContent.includes('grid coins') && h.root.textContent.includes('retry'), 'home, with the run in the log');
+});
+
+// The figure a question is about (the owner's request, 17 Sep 2026: a paper that speaks of a graph must show one). The data is
+// the server's, on the question's display; the page draws it and writes every value beside it, so the drawing is never the
+// only way to the answer. The questions here are written into the open session, so one test covers all three kinds.
+test('a question that arrives with a figure draws it: bars at their share of the tallest, a pie by its shares, and a table with its rows', async (t) => {
+  const { h, kid } = await kidWith(t);
+  await h.click('⚙️ Start Engine ▶');
+  const prog = await h.f.store.get(learning(h, kid)), path = `${learning(h, kid)}/sessions/${prog.activeSession}`;
+  const cls = (n, name) => new RegExp(`(^| )${name}( |$)`).test(n.className || '');
+  async function show(figure, text) {
+    const sess = await h.f.store.get(path);
+    sess.questions[sess.index] = { ...sess.questions[sess.index], display: { layout: 'word', text, choices: null, figure }, answer: { type: 'int', v: 13 } };
+    await h.f.store.put(path, sess);
+    await h.api.refresh(); await h.click('Continue');
+    const drawn = all(h.root).find((n) => cls(n, 'q-fig'));
+    assert.ok(drawn, `a figure on the sheet for ${figure.kind}`);
+    return drawn;
+  }
+  const bars = await show({ kind: 'bars', title: 'Visitors', unit: 'people', bars: [{ label: 'Mon', value: 40 }, { label: 'Tue', value: 25 }, { label: 'Wed', value: 12 }] },
+    'How many more people came on Tuesday than on Wednesday?');
+  assert.ok(cls(bars, 'fig-bars'));
+  for (const words of ['Visitors (people)', 'Mon', 'Tue', 'Wed', '40', '25', '12']) assert.ok(bars.textContent.includes(words), words);
+  assert.deepEqual(all(bars).filter((n) => cls(n, 'fig-bar')).map((n) => n.style.props['--h']), ['100%', '63%', '30%'], 'each bar stands at its share of the tallest');
+  assert.ok(h.root.textContent.includes('How many more people came on Tuesday'), 'the question is still written out under it');
+
+  const pie = await show({ kind: 'pie', title: 'Class colours', slices: [{ label: 'Red', pct: 50 }, { label: 'Blue', pct: 30 }, { label: 'Green', pct: 20 }] },
+    'Is green more, less, or the same as blue?');
+  const disc = all(pie).find((n) => n.tagName === 'SPAN' && cls(n, 'fig-pie')); // the figure itself carries fig-pie too; the disc is the span inside it
+  assert.ok(disc.style.props['--pie'].startsWith('conic-gradient(') && disc.style.props['--pie'].includes('50% 80%'), disc.style.props['--pie']);
+  for (const words of ['Red 50%', 'Blue 30%', 'Green 20%']) assert.ok(pie.textContent.includes(words), words);
+  assert.equal(all(pie).filter((n) => cls(n, 'fig-swatch')).length, 3, 'one swatch per slice, each its own colour');
+
+  const table = await show({ kind: 'table', title: 'Price list', head: ['Fruit', 'Price'], rows: [{ cells: ['Apple', '$2'] }, { cells: ['Pear', '$3'] }] },
+    'What do an apple and a pear cost together?');
+  const grid = all(table).find((n) => n.tagName === 'TABLE');
+  assert.ok(grid, 'a real table');
+  for (const words of ['Fruit', 'Price', 'Apple', '$2', 'Pear', '$3']) assert.ok(grid.textContent.includes(words), words);
+
+  // a kind this release has never heard of draws nothing at all, and the question's own words still carry it
+  const sess = await h.f.store.get(path);
+  sess.questions[sess.index] = { ...sess.questions[sess.index], display: { layout: 'word', text: 'What is 10 less than 100?', choices: null, figure: { kind: 'sundial' } }, answer: { type: 'int', v: 90 } };
+  await h.f.store.put(path, sess);
+  await h.api.refresh(); await h.click('Continue');
+  assert.ok(!all(h.root).some((n) => cls(n, 'q-fig')) && h.root.textContent.includes('What is 10 less than 100?'), 'an unknown figure is simply not drawn');
 });

@@ -1105,7 +1105,7 @@ function pinPane(child) {
 }
 // ---- secure learning + migrated v2 game layer ----
 // qpp: questions per paper (display mirror of progress.mjs Q_PER_PAPER); c: the track's colour class (v2 170-173)
-const TRACK = { engine: { name: 'ENGINE', label: 'Engine', emoji: '⚙️', qpp: 5, c: 'c-cyan' }, nav: { name: 'NAVIGATOR', label: 'Navigator', emoji: '🧭', qpp: 3, c: 'c-gold' } };
+const TRACK = { engine: { name: 'ENGINE', label: 'Engine', emoji: '⚙️', qpp: 5, c: 'c-cyan', blurb: 'drills the numbers' }, nav: { name: 'NAVIGATOR', label: 'Navigator', emoji: '🧭', qpp: 3, c: 'c-gold', blurb: 'reads and reasons' } };
 const EQUIP_SLOT = { pet: 'activePet', fx: 'activeFx', snd: 'activeSnd', bg: 'activeBg', ring: 'ring', outfit: 'activeOutfit', shout: 'activeShout', timer: 'activeTimer', title: 'activeTitle', namefx: 'activeNameFx', map: 'activeMap', vehicle: 'activeVehicle', base: 'activeBase' };
 // The v2 look (main:src/automathtics-src.jsx): display constants only. Prices, crate rolls, unlocks and every other outcome
 // stay with the server; these say how a result it sent is drawn.
@@ -1320,20 +1320,42 @@ function homeHeader(child, st, w) {
   tools.append(button('Switch user', switchUser, 'tiny'));
   header.append(who, tools); return header;
 }
-// the card's opening lines (2892-2902)
+// the card's opening line (2892-2902). The header already names the sector and the tiles below name their own track, so the
+// only thing left to say here is the one thing no tile can: every sector of both tracks is behind this child.
 function homeIntro(e, n) {
-  const p = el('p', null, 'intro'), b = (text) => el('b', text);
-  if (e.done && n.done && e.level === LAST_LEVEL && n.level === LAST_LEVEL) p.append('🏆 All sectors complete — both tracks! Incredible work. Tap a track below to practice any papers again.');
-  else if (e.level === n.level) p.append('Sector ', b(e.levelId), ` · ${LEVEL_NAMES[e.level]}. Two tracks: `, b('⚙️ Engine'), ' drills the numbers, ', b('🧭 Navigator'), ' reads and reasons. Both to 100 to jump.');
-  else p.append(b('⚙️ Engine'), ' is in Sector ', b(e.levelId), ' · ', b('🧭 Navigator'), ' is in Sector ', b(n.levelId), '. Each track jumps on when the other has finished that sector too.');
-  return p;
+  if (!(e.done && n.done && e.level === LAST_LEVEL && n.level === LAST_LEVEL)) return null;
+  return el('p', '🏆 All sectors complete — both tracks! Incredible work. Tap a track below to practice any papers again.', 'intro');
 }
-// the day streak (2913-2920): three pass days in a row pay a bonus block. The run is the server's (S2); shields are held ones.
-function streakNote(run, shields) {
-  const left = 3 - (run % 3);
-  const text = run > 0 && run % 3 === 0 ? `🔥 ${run}-day streak — bonus banked! Keep it going!`
-    : run > 0 ? `🔗 Day ${run % 3} of 3 — ${left} more day${left > 1 ? 's' : ''} in a row for +⚡50 🏆100!` : 'Pass today to start a 3-day streak (+⚡50 🏆100 bonus)!';
-  return el('p', `${text}${shields > 0 ? ` · 🛡️×${shields}` : ''}`, 'streak-note');
+// the two balances (2903-2912), side by side above everything: what this child has, in the two currencies
+function walletRow(w) {
+  const tiles = el('div', null, 'wallet-row');
+  for (const [big, sub, c] of [[`⚡ ${w.gc.toLocaleString()}`, 'grid coins', 'c-cyan'], [`🏆 ${w.rp.toLocaleString()}`, 'reward points', 'c-gold']]) {
+    const tile = el('div', null, `wallet-tile ${c}`); tile.append(el('span', big, 'yen'), el('span', sub, 'wallet-sub')); tiles.append(tile);
+  }
+  return tiles;
+}
+// the day streak (2913-2920), drawn as the owner's mockup has it (17 Sep 2026): the flame, what the run is worth, and the three
+// days of it with the bonus at the end, so a child can see how far off the bonus is. Three pass days in a row pay a bonus block.
+// The run is the server's (S2); shields are held days. A run of 3, 6, 9… has just banked one and starts the next day at day 1.
+const STREAK_BONUS = '+⚡50 🏆100';
+function streakCard(run, shields) {
+  const at = run > 0 && run % 3 === 0 ? 3 : run % 3, left = 3 - at; // where today stands in a run of three
+  const box = el('div', null, at === 3 ? 'streak-card banked' : 'streak-card'), head = el('div', null, 'streak-head'), words = el('div', null, 'streak-words');
+  words.append(el('p', run > 0 ? `${run}-day streak!` : 'Start a streak today', 'streak-title'),
+    el('p', at === 3 ? `Day 3 of 3 — bonus banked! Pass tomorrow to keep it going.`
+      : run > 0 ? `Day ${at} of 3 — ${left} more day${left > 1 ? 's' : ''} in a row for ${STREAK_BONUS}!`
+        : `Pass a paper today to start a 3-day streak (${STREAK_BONUS} bonus)!`, 'streak-sub'));
+  head.append(el('span', '🔥', 'streak-flame'), words);
+  if (shields > 0) head.append(el('span', `🛡️×${shields}`, 'streak-shield'));
+  const days = el('div', null, 'streak-days'); days.setAttribute('aria-label', `day ${at} of a 3-day streak`);
+  for (let k = 1; k <= 3; k++) {
+    const done = k <= at, stop = el('span', null, `streak-stop${done ? ' done' : k === at + 1 ? ' next' : ''}`);
+    stop.append(el('span', done ? '✓' : String(k), 'streak-node'), el('span', `Day ${k}`, 'streak-day'));
+    days.append(stop, el('span', null, done && k < 3 ? 'streak-link done' : 'streak-link'));
+  }
+  const gift = el('span', null, at === 3 ? 'streak-stop gift done' : 'streak-stop gift');
+  gift.append(el('span', '🎁', 'streak-node'), el('span', 'Bonus', 'streak-day'));
+  days.append(gift); box.append(head, days); return box;
 }
 // a track card (2929-2957): the track's colour (mint once the sector is done), what comes next, the sector's five check
 // points as v2's tier map (crowns and numbers, never colour alone), and the button that starts the run the server picks
@@ -1341,7 +1363,10 @@ function trackCard(t, p, start) {
   const T = TRACK[t], done = p.done, due = p.bossDue, passed = Math.min(p.paper - 1, 100), sp = Math.min(p.paper, 100);
   const live = Math.min(5, Math.floor(passed / 20) + (passed > 0 && passed % 20 === 0 ? 0 : 1));
   const card = el('div', null, `track-card ${done ? 'c-mint' : T.c}`), head = el('div', null, 'track-head'), status = el('p', null, 'track-status');
-  head.append(el('span', `${T.emoji} ${T.name} · ${p.levelId}`, 'section-label'), el('span', done ? '✓ COMPLETE' : `${5 * T.qpp} q`, 'track-q'));
+  // the icon carries the space between it and the name, so the head is still read as the one line "⚙️ ENGINE · B"
+  const words = el('div', null, 'track-words');
+  words.append(el('span', `${T.name} · ${p.levelId}`, 'section-label'), el('span', T.blurb, 'track-blurb'));
+  head.append(el('span', `${T.emoji} `, 'track-icon'), words, el('span', done ? '✓ COMPLETE' : `${5 * T.qpp} q`, 'track-q'));
   if (done) status.append('Sector done — practise any papers while the other track catches up.');
   else if (due) status.append(el('b', `👑 CHECK POINT T${p.bossCleared + 1} is due`, 'due'));
   else status.append('Next: ', el('b', `papers ${sp}–${Math.min(sp + 4, 100)}`), ' · 100% to unlock');
@@ -1389,13 +1414,18 @@ function rocketPanel(g) {
   const launched = r.status === 'launched', rp = r.currency === 'rp', sym = rp ? '🏆' : '⚡', min = r.minEach || 0, bal = rp ? g.wallet.rp : g.wallet.gc;
   const box = el('div', null, launched ? 'rocket-panel launched' : 'rocket-panel'), head = el('div', null, 'rocket-head');
   head.append(el('span', '🚀 FAMILY ROCKET', 'section-label'), el('span', `${r.prize.emoji} ${r.prize.name}`, 'rocket-prize'));
-  const tank = el('div', null, 'rocket-track'); setVar(tank, '--w', `${Math.min(100, Math.round((r.totalFuel / (r.goal || 1)) * 100))}%`);
+  const width = `${Math.min(100, Math.round((r.totalFuel / (r.goal || 1)) * 100))}%`;
+  // the sky the rocket climbs as the tank fills (the owner's mockup, 17 Sep 2026): planets and stars in CSS, the rocket riding
+  // the same width as the bar below it. Decoration only — every number is in the bar's label and the crew line.
+  const sky = el('div', null, 'rocket-sky'); setVar(sky, '--w', width); sky.setAttribute('aria-hidden', 'true');
+  const rider = el('span', '🚀', launched ? 'rocket-rider rocket-fly' : 'rocket-rider rocket-ride');
+  sky.append(el('span', null, 'sky-planet far'), el('span', null, 'sky-planet near'), rider);
+  const tank = el('div', null, 'rocket-track'); setVar(tank, '--w', width);
   tank.setAttribute('aria-label', `rocket fuel ${r.totalFuel} of ${r.goal}`);
-  const rider = el('span', '🚀', launched ? 'rocket-rider rocket-fly' : 'rocket-rider rocket-ride'); rider.setAttribute('aria-hidden', 'true');
-  tank.append(el('span', null, 'rocket-fill'), rider);
+  tank.append(el('span', null, 'rocket-fill'));
   const crew = el('p', null, 'rocket-crew'); crew.append(el('span', `${sym}${r.totalFuel} / ${r.goal}`, 'rocket-total'));
   for (const c of Array.isArray(r.crew) ? r.crew : []) crew.append(el('span', `${c.nickname} ${sym}${c.fuel}${min ? (c.metMin ? ' ✓' : ` / ${min}`) : ''}`, min && c.metMin ? 'met' : ''));
-  box.append(head, tank, crew);
+  box.append(head, sky, tank, crew);
   if (launched) box.append(el('p', `🎉 LIFT-OFF! ${r.prize.emoji} ${r.prize.name} is yours — ask your parent for it.`, 'rocket-note lift'));
   else if (!r.isCrew) box.append(el('p', 'you\'re not on this rocket\'s crew — ask your parent', 'rocket-note'));
   else {
@@ -1451,18 +1481,20 @@ async function childScreen(after = {}) {
     ticker.append(el('b', '◉'), ` COMMAND DECK ONLINE · ${child.nickname.toUpperCase()} · ⚙️ ${e.levelId} · 🧭 ${n.levelId} · ALL SYSTEMS GO`); box.append(radar, ticker);
   }
   if (veh) { const v = el('span', veh.emoji, 'vehicle'); v.setAttribute('aria-hidden', 'true'); box.append(v); }
-  const tiles = el('div', null, 'wallet-row'); // the two wallet tiles (2903-2912)
-  for (const [big, sub, c] of [[`⚡ ${w.gc.toLocaleString()}`, 'grid coins · spend in 🛒', 'c-cyan'], [`🏆 ${w.rp.toLocaleString()}`, 'reward points', 'c-gold']]) {
-    const tile = el('div', null, `wallet-tile ${c}`); tile.append(el('span', big, 'yen'), el('span', sub, 'wallet-sub')); tiles.append(tile);
-  }
-  box.append(homeIntro(e, n), tiles, streakNote(g.liveRun || 0, w.shields || 0));
+  const intro = homeIntro(e, n); box.append(walletRow(w), ...(intro ? [intro] : []));
   if (st.active) { const s = st.active.session; box.append(el('p', `A ${s.mode === 'placement' ? 'placement test' : `${TRACK[s.track].name} session`} is open at question ${s.index + 1} of ${s.count}.`, 'notice'), actionRow(button('Continue', () => playView(s, st.active.question), 'primary'))); }
+  box.append(streakCard(g.liveRun || 0, w.shields || 0));
+  const rocket = rocketPanel(g); if (rocket) { if (after.boom === true) rocket.append(moneySplash('big')); box.append(rocket); }
   const tracks = el('div', null, 'track-grid');
   if (pending) tracks.append(placementCard(st)); else for (const t of ['engine', 'nav']) tracks.append(trackCard(t, st[t], st.active ? null : () => beginRun(t, st)));
   box.append(tracks); if (!pending) box.append(jumpBanner(e, n));
-  const rocket = rocketPanel(g); if (rocket) { if (after.boom === true) rocket.append(moneySplash('big')); box.append(rocket); }
-  const nav = el('div', null, 'row-buttons home-nav'); // v2's four (3016-3021); How to opens on Engine, with a tab for Navigator
-  nav.append(button('🛒 Shop', shopScreen, 'ghost'), button('🗺 Map', mapScreen, 'ghost'), button('📖 How to', () => howToScreen('engine', { engine: e.level, nav: n.level }), 'ghost'), button('🎓 Guide', guideScreen, 'ghost'));
+  // v2's four ways out of the home (3016-3021) as the mockup's tiles: the name is the button's own words, so a child, a screen
+  // reader and a test all read the same label; what it is for rides along in data-sub, which styles.css draws under the name.
+  const nav = el('div', null, 'hub-grid'); // How to opens on Engine, with a tab for Navigator
+  for (const [label, sub, action] of [['🛒 Shop', 'spend your coins', shopScreen], ['🗺 Map', 'see your journey', mapScreen],
+    ['📖 How to', 'learn the moves', () => howToScreen('engine', { engine: e.level, nav: n.level })], ['🎓 Guide', 'how it all works', guideScreen]]) {
+    const tile = button(label, action, 'hub-tile'); tile.setAttribute('data-sub', sub); nav.append(tile);
+  }
   box.append(nav);
   if (st.scan?.available && !st.active && !pending) { const scan = actionRow(button('🧠 SYSTEM SCAN — weekly ×2 loot ▶', () => startRun({ track: 'engine', mode: 'scan' }), 'ghost c-violet')); scan.className = 'row-buttons scan-row'; box.append(scan); }
   else if (st.scan?.doneThisWeek) box.append(el('p', '🧠 System Scan done this week · resets Monday', 'subtle'));
@@ -1759,11 +1791,11 @@ const HOWTO = [
 // what each sector's Navigator papers cover (server/questions/navigator.mjs NAV_TOPICS, as in v2's navigator.js; tests/ui-howto
 // holds the two equal)
 const NAV_TOPICS = [
-  { title: 'Sector A · Navigator', lines: ['Numbers to 1,000 — more than, less than, fill the blank.', 'Easy multiplication in stories: rows of eggs, bags of sweets, legs on animals — 2s, 3s, 5s and 10s. No dividing yet. The counts grow as the papers go on.', 'Halves and quarters first; thirds from paper 41; eighths and tenths from paper 61 — which is bigger, how many make a whole, a quarter of 20.', 'Trip times: same hour first, then across the hour, then 24-hour clock with hours AND minutes from paper 61.', 'Metres and centimetres, kilograms, litres, dollars and cents. Which is heavier, longer, holds more, takes longer — think about the real thing.'] },
-  { title: 'Sector B · Navigator', lines: ['Numbers to 10,000. Tables 6, 7, 8, 9 in two-step stories.', 'Two kinds of animal at once — 5 spiders and 7 ants, how many legs altogether?', 'Fractions: equivalent pairs, same top or same bottom — which is bigger, which is smaller? Perimeter of rectangles and squares.', 'Kilometres and millilitres. The 24-hour clock and trips that last hours and minutes. Reading a graph in words.', 'Times as many, how many more, order who is tallest.'] },
-  { title: 'Sector C · Navigator', lines: ['Numbers to 100,000. Factors and multiples.', "Decimals: money and measures with a decimal point (there's a . key).", 'Area of squares and rectangles. Angles bigger or smaller than a right angle.', 'Time across the hour. Multi-step money.'] },
-  { title: 'Sector D · Navigator', lines: ['Percentages of a number. Ratio. Average.', 'Rate — litres per minute, km per hour. Volume of a box.', 'Fraction of a set. Discounts: more or less than?', 'Area of a triangle.'] },
-  { title: 'Sector E · Navigator', lines: ['Speed, distance and time. Simple algebra with n and x.', 'Percentage increase and decrease. Pie charts in words.', "Work backwards from what's left. Circles with π = 22/7.", 'Sharing in a ratio. Dividing fractions.'] },
+  { title: 'Sector A · Navigator', lines: ['Numbers to 1,000 — more than, less than, fill the blank.', 'Easy multiplication in stories: rows of eggs, bags of sweets, legs on animals — 2s, 3s, 5s and 10s. No dividing yet. The counts grow as the papers go on.', 'Halves and quarters first; thirds from paper 41; eighths and tenths from paper 61 — which is bigger, how many make a whole, a quarter of 20.', 'Trip times: same hour first, then across the hour, then 24-hour clock with hours AND minutes from paper 61.', 'Metres and centimetres, kilograms, litres, dollars and cents. Which is the heaviest, the second longest, the one that holds the least — four real things at a time.'] },
+  { title: 'Sector B · Navigator', lines: ['Numbers to 10,000. Tables 6, 7, 8, 9 in two-step stories.', 'Two kinds of animal at once — 5 spiders and 7 ants, how many legs altogether?', 'Fractions: equivalent pairs, same top or same bottom — which is bigger, which is smaller? Perimeter of rectangles and squares.', 'Kilometres and millilitres. The 24-hour clock and trips that last hours and minutes. Reading a bar chart and a table.', 'Times as many, how many more, order who is tallest.'] },
+  { title: 'Sector C · Navigator', lines: ['Numbers to 100,000. Factors and multiples.', "Decimals: money and measures with a decimal point (there's a . key).", 'Area of squares and rectangles. Angles bigger or smaller than a right angle.', 'Time across the hour. Multi-step money from a price list.'] },
+  { title: 'Sector D · Navigator', lines: ['Percentages of a number. Ratio. Average.', 'Rate — litres per minute, km per hour. Volume of a box.', 'Fraction of a set. Discounts: what is the sale price? An average read off a bar chart.', 'Area of a triangle.'] },
+  { title: 'Sector E · Navigator', lines: ['Speed, distance and time. Simple algebra with n and x.', 'Percentage increase and decrease. Pie charts and line graphs to read.', "Work backwards from what's left. Circles with π = 22/7.", 'Sharing in a ratio. Dividing fractions.'] },
   { title: 'Sector F · Navigator', lines: ['PSLE heuristics: guess and check, before–after, remainders, supposition.', 'Chickens and cows. Ages in the future. Meeting in the middle.', 'Unitary method, number patterns, averages that change.', 'Read twice. Draw the model in your head. Then answer.'] },
 ];
 // Navigator's How to (2122-2129): how the track works, then what this sector covers
@@ -1855,9 +1887,57 @@ function guideScreen() {
 const STREAK_AT = [4, 9, 14, 18]; // v2's ladder (60-65): the combo shout, the sheet's heat and the pet's charge climb together
 const streakTier = (s) => STREAK_AT.filter((at) => s >= at).length; // 0 cold, then 1-4
 let playStart = { id: null, at: 0 }; // when this device first showed the session: the footer's minutes, display only
+// ---- the figure a question is about (the owner's request, 17 Sep 2026: a paper that speaks of a graph must show one) ----
+// The server puts the data on the question's display and learning.mjs passes it through untouched; this draws it. A bar's
+// height and a slice's share are custom properties, the only way a number reaches CSS here (setVar). Every value is also a
+// word on the page and the 🔊 button still speaks the whole question, so the drawing is never the only way to the answer.
+const FIG_COLOURS = ['#35E0FF', '#FF2DA8', '#FFB020', '#2DFFB3', '#8A5CFF'], figColour = (i) => FIG_COLOURS[i % FIG_COLOURS.length];
+function figPlot(rows, kind) {
+  const values = rows.map((b) => Math.max(0, Number(b.value) || 0)), max = Math.max(1, ...values);
+  const plot = el('div', null, kind === 'line' ? 'fig-plot fig-line' : 'fig-plot');
+  rows.forEach((b, i) => {
+    const col = el('div', null, 'fig-col'), wrap = el('span', null, 'fig-bar-wrap'), bar = el('span', null, 'fig-bar');
+    setVar(bar, '--h', `${Math.round((values[i] / max) * 100)}%`); setVar(bar, '--bar', figColour(i));
+    wrap.append(bar); col.append(el('span', String(b.value), 'fig-val'), wrap, el('span', String(b.label), 'fig-label')); plot.append(col);
+  });
+  return plot;
+}
+function figPie(slices) {
+  const wrap = el('div', null, 'fig-pie-wrap'), disc = el('span', null, 'fig-pie'), legend = el('ul', null, 'fig-legend'), stops = [];
+  let at = 0;
+  slices.forEach((s, i) => {
+    const pct = Math.max(0, Math.min(100, Number(s.pct) || 0)); stops.push(`${figColour(i)} ${at}% ${at + pct}%`); at += pct;
+    const li = el('li'), swatch = el('span', null, 'fig-swatch'); setVar(swatch, '--sw', figColour(i));
+    li.append(swatch, el('span', `${s.label} ${s.pct}%`)); legend.append(li);
+  });
+  setVar(disc, '--pie', `conic-gradient(${stops.join(',')})`); disc.setAttribute('aria-hidden', 'true'); // the legend beside it says the same in words
+  wrap.append(disc, legend); return wrap;
+}
+function figTable(fig) {
+  const table = el('table', null, 'fig-table'), thead = el('thead'), head = el('tr'), body = el('tbody');
+  for (const h of Array.isArray(fig.head) ? fig.head : []) head.append(el('th', String(h)));
+  thead.append(head);
+  for (const r of Array.isArray(fig.rows) ? fig.rows : []) { const tr = el('tr'); for (const c of Array.isArray(r.cells) ? r.cells : []) tr.append(el('td', String(c))); body.append(tr); }
+  table.append(thead, body); return table;
+}
+function figureView(fig) {
+  if (!fig || typeof fig !== 'object') return null;
+  const box = el('figure', null, `q-fig fig-${fig.kind}`);
+  if (fig.title) box.append(el('figcaption', fig.unit ? `${fig.title} (${fig.unit})` : String(fig.title), 'fig-title'));
+  if (fig.kind === 'bars' || fig.kind === 'line') box.append(figPlot(Array.isArray(fig.bars) ? fig.bars : Array.isArray(fig.points) ? fig.points : [], fig.kind));
+  else if (fig.kind === 'pie') box.append(figPie(Array.isArray(fig.slices) ? fig.slices : []));
+  else if (fig.kind === 'table') box.append(figTable(fig));
+  else return null; // a kind this release does not know: the question's own words still carry it
+  return box;
+}
+// the words of a question, with its figure above them when it has one
+function figured(d, words) {
+  const fig = figureView(d.figure); if (!fig) return words;
+  const wrap = el('div', null, 'q-figured'); wrap.append(fig, words); return wrap;
+}
 // the question on the sheet (QuestionView 1517-1554): a word problem with its blanks, a column sum, a line, or fractions
 function questionView(d) {
-  if (d.layout === 'word') { const box = el('div', null, 'q-word'); String(d.text).split('___').forEach((part, i) => { if (i) box.append(el('span', ' ', 'blank')); box.append(part); }); return box; }
+  if (d.layout === 'word') { const box = el('div', null, 'q-word'); String(d.text).split('___').forEach((part, i) => { if (i) box.append(el('span', ' ', 'blank')); box.append(part); }); return figured(d, box); }
   if (d.layout === 'stack') { // right-aligned digits, each row padded to the widest, the operator in cyan over v2's rule
     const top = String(d.top), bottom = String(d.bottom), width = Math.max(top.length, bottom.length), box = el('div', null, 'q-stack'), op = el('div', null, 'q-op');
     op.append(el('span', d.sym, 'q-sym'), bottom.padStart(width + 1, ' ')); box.append(el('div', top.padStart(width + 2, ' ')), op); return box;
