@@ -44,12 +44,12 @@ const chickenRabbit = (y) => { const c = ri(4, y <= 4 ? 14 : 30), r = ri(3, y <=
 const speed = (y) => {
   const kind = ri(1, 3);
   if (kind === 1) { const v = pick([40, 50, 60, 80, 90]), t = ri(2, 5); return int('logical thinking · speed', `A train travels at ${v} km/h. How far does it go in ${t} hours, in km?`, v * t); }
-  if (kind === 2) { const v1 = pick([40, 50, 60]), v2 = pick([30, 40, 70]), t = ri(2, 4); return int('logical thinking · speed', `Two towns are ${(v1 + v2) * t} km apart. A car leaves one at ${v1} km/h and a van leaves the other at ${v2} km/h at the same time, driving toward each other. After how many hours do they meet?`, t); }
+  if (kind === 2) { const v1 = pick([40, 50, 60, 80]), v2 = pick([30, 40, 70, 90]), t = ri(2, 7); return int('logical thinking · speed', `Two towns are ${(v1 + v2) * t} km apart. A car leaves one at ${v1} km/h and a van leaves the other at ${v2} km/h at the same time, driving toward each other. After how many hours do they meet?`, t); }
   const v = pick([4, 5, 6]), t = ri(2, 4), back = pick([2, 3]), dist = v * t; if (dist % back) return null;
   return int('logical thinking · speed', `${names(1)[0]} walks to a lake at ${v} km/h in ${t} hours and cycles back the same way in ${back} hours. What is the cycling speed, in km/h?`, dist / back);
 };
 const ages = (y) => {
-  const t = pick([5, 10]), [k, m] = pick([[3, 2], [4, 2], [4, 3], [5, 3]]);
+  const t = pick([3, 4, 5, 6, 8, 9, 10, 12, 15]), [k, m] = pick([[3, 2], [4, 2], [4, 3], [5, 3], [5, 2], [6, 4], [7, 4]]);
   const x = (t * (m - 1)) / (k - m); if (!Number.isInteger(x)) return null; // now: child x, mother kx; in t years mother is m times
   return int('logical thinking · ages', `A mother is ${k} times as old as her ${pick(['son', 'daughter'])}. In ${t} years she will be ${m} times as old. How old is the child now?`, x);
 };

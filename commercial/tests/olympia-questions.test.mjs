@@ -77,7 +77,8 @@ test('no moon wording (a fact question aside) keeps the same right answer every 
     const key = `${m.id}:${y <= 2 ? 'low' : y <= 4 ? 'mid' : 'high'} · ${q.display.text.replace(/\d+(?:[.,]\d+)?/g, '#').replace(/\b[A-Z][a-z]+\b/g, 'N').replace(/\bpieces? (?:is|are)\b/g, 'piece(s)').replace(/\b(\w+?)s\b/g, '$1')}`;
     const e = seen.get(key) || seen.set(key, { n: 0, right: new Set() }).get(key); e.n++; e.right.add(answerText(q));
   }
-  const often = [...seen].filter(([, e]) => e.n >= 8);
+  // twelve sightings before a wording is judged: a puzzle whose answer is one of a few values can show the same one eight times by chance
+  const often = [...seen].filter(([, e]) => e.n >= 12);
   assert.deepEqual(often.filter(([, e]) => e.right.size < 2).map(([k, e]) => `${k} → always ${[...e.right]}`), []);
   assert.ok(often.length >= 40, `only ${often.length} wordings came up often enough to judge`);
 });

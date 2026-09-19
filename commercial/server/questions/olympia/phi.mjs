@@ -15,8 +15,8 @@ const numberSense = (y) => {
   const kind = ri(1, 4);
   if (low(y)) { if (kind === 1) { const t = ri(1, 9), o = ri(0, 9); return int('number sense · place value', `What number has ${t} tens and ${o} ones?`, 10 * t + o); } if (kind === 2) { const xs = shuffle([ri(10, 99), ri(10, 99), ri(10, 99), ri(10, 99)]); if (new Set(xs).size < 4) return null; return mcOnly('number sense · comparing', `Which of these numbers is the greatest: ${xs.join(', ')}?`, Math.max(...xs), xs.filter((x) => x !== Math.max(...xs))); } if (kind === 3) { const a = ri(3, 12), b = ri(2, 20 - a); return int('number sense · addition', `${a} + ${b} = ?`, a + b); } const n = ri(11, 98); return int('number sense · counting on', `What number is 10 more than ${n}?`, n + 10); }
   if (mid(y)) { if (kind === 1) { const n = ri(1000, 9999), to = pick([10, 100, 1000]); return int('number sense · rounding', `Round ${n} to the nearest ${to}.`, Math.round(n / to) * to); } if (kind === 2) { const d = pick([3, 4, 5, 6, 8]), n = d * ri(3, 12), k = ri(1, d - 1); return int('number sense · fractions', `What is ${k}/${d} of ${n}?`, (n / d) * k); } if (kind === 3) { const a = ri(12, 99), b = ri(3, 9); return int('number sense · multiplication', `${a} × ${b} = ?`, a * b); } const a = ri(200, 999), b = ri(100, a - 50); return int('number sense · subtraction', `${a} − ${b} = ?`, a - b); }
-  if (kind === 1) { const d = pick([4, 5, 8, 10, 20, 25]), n = ri(1, d - 1); return dec('number sense · decimals', `Write ${n}/${d} as a decimal.`, n / d); }
-  if (kind === 2) { const fs = shuffle([[2, 3], [3, 5], [5, 8], [7, 12], [4, 7], [3, 4], [5, 6]]).slice(0, 4), best = fs.reduce((a, b) => (b[0] * a[1] > a[0] * b[1] ? b : a)); return mcOnly('number sense · fractions', 'Which fraction is the greatest?', `${best[0]}/${best[1]}`, fs.filter((f) => f !== best).map((f) => `${f[0]}/${f[1]}`)); }
+  if (kind === 1) { const d = pick([4, 5, 10, 20, 25, 50]), n = ri(1, d - 1); return dec('number sense · decimals', `Write ${n}/${d} as a decimal.`, n / d); } // denominators whose decimals stop within two places (an eighth would not)
+  if (kind === 2) { const fs = shuffle([[2, 3], [3, 5], [5, 8], [7, 12], [4, 7], [3, 4], [5, 6], [7, 8], [9, 10], [11, 12], [4, 5], [5, 9]]).slice(0, 4), best = fs.reduce((a, b) => (b[0] * a[1] > a[0] * b[1] ? b : a)); return mcOnly('number sense · fractions', 'Which fraction is the greatest?', `${best[0]}/${best[1]}`, fs.filter((f) => f !== best).map((f) => `${f[0]}/${f[1]}`)); } // a long list, so the greatest is not the same one draw after draw
   if (kind === 3) { const d1 = pick([3, 4, 6]), d2 = pick([4, 6, 8]), n1 = 1, n2 = ri(1, d2 - 1); const n = n1 * d2 + n2 * d1, d = d1 * d2; if (d1 === d2 || n >= d) return null; return frac('number sense · fractions', `What is 1/${d1} + ${n2}/${d2}? Give the answer in its simplest form.`, n, d); }
   const p = pick([15, 20, 25, 30, 40, 60, 75]), t = pick([40, 60, 80, 120, 200]); if ((t * p) % 100) return null; return int('number sense · percentages', `What is ${p}% of ${t}?`, (t * p) / 100);
 };
@@ -56,13 +56,17 @@ const statistics = (y) => {
   if (kind === 1) return withFigure(mcOnly('statistics · graphs', `${shows} Who has the most?`, kids[hi], kids.filter((_, i) => i !== hi)), f);
   if (kind === 2) return withFigure(int('statistics · graphs', `${shows} How many more does ${kids[hi]} have than ${kids[lo]}?`, vals[hi] - vals[lo]), f);
   if (low(y)) return withFigure(int('statistics · graphs', `${shows} How many altogether?`, sum(vals)), f);
-  if (mid(y)) { const t = sum(vals); if (t % 4) return null; return withFigure(int('statistics · average', `${shows} What is the average (mean) number per child?`, t / 4), f); }
+  if (mid(y)) { const t = sum(vals); if (t % 4) return null; return withFigure(int('statistics · average', `${shows} What is the average (mean) number per child?`, t / 4), f); } // a fourth of the draws: the strand has other typed kinds
   const xs = [...vals].sort((a, b) => a - b), middle = xs[1] + xs[2]; if (middle % 2) return null; // four numbers: the median is the mean of the middle two, asked only when it is whole
   return withFigure(int('statistics · median', `${shows} What is the median of the four numbers?`, middle / 2), f);
 };
 const probability = (y) => {
   const r = ri(1, 6), b = ri(1, 6), cols = shuffle(['red', 'blue', 'green', 'yellow']).slice(0, 2);
-  if (low(y) || mid(y)) { const words = r > b ? `${cols[0]} is more likely` : r < b ? `${cols[1]} is more likely` : 'both are equally likely'; return mcOnly('probability · chance', `A bag has ${r} ${cols[0]} and ${b} ${cols[1]} marbles. One is taken without looking. Which is true?`, words, [`${cols[0]} is more likely`, `${cols[1]} is more likely`, 'both are equally likely', 'it cannot be told'].filter((w) => w !== words)); }
+  if (low(y) || mid(y)) {
+    // half the time a typed answer, so the strand's short-answer slot always has a kind to draw (the graph's mean is whole only one draw in four)
+    if (Math.random() < 0.5 && r !== b) return int('probability · fair chance', `A bag has ${r} ${cols[0]} and ${b} ${cols[1]} marbles. How many ${r < b ? cols[0] : cols[1]} marbles must be added so that ${cols[0]} and ${cols[1]} are equally likely to be picked?`, Math.abs(r - b));
+    const words = r > b ? `${cols[0]} is more likely` : r < b ? `${cols[1]} is more likely` : 'both are equally likely'; return mcOnly('probability · chance', `A bag has ${r} ${cols[0]} and ${b} ${cols[1]} marbles. One is taken without looking. Which is true?`, words, [`${cols[0]} is more likely`, `${cols[1]} is more likely`, 'both are equally likely', 'it cannot be told'].filter((w) => w !== words));
+  }
   const kind = ri(1, 2);
   if (kind === 1) return frac('probability · fractions', `A bag has ${r} ${cols[0]} and ${b} ${cols[1]} marbles. One is taken without looking. What is the probability that it is ${cols[0]}, in simplest form?`, r, r + b);
   const t = ri(3, 11); let n = 0; for (let a = 1; a <= 6; a++) for (let c = 1; c <= 6; c++) if (a + c === t) n++; return int('probability · counting outcomes', `Two dice are rolled. In how many ways can the numbers add up to ${t}?`, n);
