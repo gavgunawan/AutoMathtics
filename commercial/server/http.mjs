@@ -77,7 +77,7 @@ async function oneClick(req) {
   const text = Buffer.concat(parts).toString('utf8');
   return type === 'multipart/form-data' ? /name="List-Unsubscribe"\r?\n(?:[^\r\n]+\r?\n)*\r?\nOne-Click\r?\n/i.test(text) : new URLSearchParams(text).get('List-Unsubscribe') === 'One-Click';
 }
-export function createApp(service, cfg, { publicDir = new URL('../public/', import.meta.url), reportError = () => {}, learning = null, game = null, billing = null, payments = null, support = null, recovery = null, email = null, feedback = null, leaving = null, waitlist = null, peerFactor = 20 } = {}) {
+export function createApp(service, cfg, { publicDir = new URL('../public/', import.meta.url), reportError = () => {}, learning = null, game = null, olympia = null, tutor = null, billing = null, payments = null, support = null, recovery = null, email = null, feedback = null, leaving = null, waitlist = null, peerFactor = 20 } = {}) {
   // A session cookie lives exactly as long as the session row it names (F12), read back from the row the service has just
   // written: 30 minutes for a parent, 12 hours on the launch pad, or what is left of 30 days on a remembered device. The
   // rotation has already committed, so a failed read never fails the request (review of PR #44): the cookie then gets the
@@ -122,7 +122,7 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
       res.setHeader('X-Content-Type-Options', 'nosniff');
       res.setHeader('Referrer-Policy', 'no-referrer');
       res.setHeader('X-Frame-Options', 'DENY');
-      res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+      res.setHeader('Permissions-Policy', 'camera=(), microphone=(self), geolocation=()'); // the microphone: the tutor's 🎤 on this page only (the child's words go to the device's own speech recognition, then to the tutor)
       if (!cfg.emulator) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
       res.setHeader('Content-Security-Policy', [
         "default-src 'none'", "base-uri 'none'", "frame-ancestors 'none'", "form-action 'self'", "object-src 'none'", "manifest-src 'self'",
@@ -333,7 +333,11 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
       }
       if (stored) throttle(`session:${sha256(token)}`, 120, 60_000);
       const ctx = await service.authenticate(token);
-      if (req.method === 'GET' && path === '/api/me') return json(200, await service.me(ctx));
+      if (req.method === 'GET' && path === '/api/me') {
+        // the Explain-to-me button shows only where the tutor can answer: a key, the parent's switch, and the month's ceiling (server/tutor.mjs)
+        const me = await service.me(ctx);
+        return json(200, { ...me, tutor: { on: tutor ? await tutor.available(me.family) : false } });
+      }
       if (recovery && req.method === 'POST' && path === '/api/auth/recovery/ack') return json(200, await recovery.acknowledge(ctx));
       if (req.method === 'GET' && path === '/api/child/profile') {
         const me = await service.me(ctx);
@@ -344,6 +348,7 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
       // its own transaction; routes never accept authoritative family/role fields from the browser.
       if (learning && req.method === 'GET' && path === '/api/learn/state') return json(200, await learning.state(ctx));
       if (game && req.method === 'GET' && path === '/api/game/state') return json(200, await game.state(ctx));
+      if (olympia && req.method === 'GET' && path === '/api/olympia/state') return json(200, await olympia.state(ctx));
       if (game && req.method === 'GET' && path === '/api/game/parent') return json(200, await game.parentState(ctx));
       // Billing (parent role): plans, the derived subscription state, trial eligibility; trial start and cancel are the only browser-initiated events.
       if (billing && req.method === 'GET' && path === '/api/billing') return json(200, await billing.view(ctx));
@@ -353,6 +358,13 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
       if (learning && path === '/api/learn/session') return json(200, await learning.start(ctx, data));
       if (learning && path === '/api/learn/answer') return json(200, await learning.answer(ctx, data));
       if (learning && path === '/api/learn/quit') return json(200, await learning.quit(ctx, data));
+      // Olympia (server/olympia.mjs): a visit to a moon, its answers (unmarked until the end) and its quit
+      if (olympia && path === '/api/olympia/visit') return json(200, await olympia.start(ctx, data));
+      if (olympia && path === '/api/olympia/answer') return json(200, await olympia.answer(ctx, data));
+      if (olympia && path === '/api/olympia/quit') return json(200, await olympia.quit(ctx, data));
+      // Explain to me (server/tutor.mjs): every cap is the tutor's own; this instance adds a ceiling of its own so a burst from many
+      // sessions cannot turn one instance into a relay, and the route exists only where a tutor was built (a key in the environment)
+      if (tutor && path === '/api/tutor/explain') { throttle('tutor:all', 600, 60 * 60_000); return json(200, await tutor.explain(ctx, data)); }
       if (billing && path === '/api/billing/trial') return json(200, await billing.startTrial(ctx, data));
       if (billing && path === '/api/billing/cancel') return json(200, await (payments ? payments.cancel(ctx, data) : billing.cancel(ctx, data))); // Stage 4.2: the provider hears it first
       if (billing && path === '/api/billing/seats') return json(200, await billing.seats(ctx, data));

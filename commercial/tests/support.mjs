@@ -3,6 +3,8 @@ import { Foundation, grantEntitlement } from '../server/service.mjs';
 import { FirebaseIdentity } from '../server/firebase.mjs';
 import { Learning } from '../server/learning.mjs';
 import { Game } from '../server/game.mjs';
+import { Olympia } from '../server/olympia.mjs';
+import { Tutor } from '../server/tutor.mjs';
 import { Subscriptions } from '../server/subscription.mjs';
 import { Payments, FakeGateway } from '../server/payments.mjs';
 import { Support } from '../server/support.mjs';
@@ -64,7 +66,7 @@ export const fakeHasher = {
 };
 // provider: 'fake' (the default) or 'none', payments not open: no gateway at all (`gateway` is null), and the billing view, the payment
 // routes and the leaving flow built here say so, as main.mjs builds them for PAYMENT_PROVIDER=none
-export function fixture({ provider = 'fake' } = {}) {
+export function fixture({ provider = 'fake', tutorModel = null, tutorLimits = {} } = {}) {
   if (!['fake', 'none'].includes(provider)) throw Error(`fixture: provider must be fake or none, not ${provider}`);
   let clock = Date.parse('2026-09-06T10:00:00Z');
   const store = new MemoryStore(), users = new Map(), tokens = new Map();
@@ -79,6 +81,9 @@ export function fixture({ provider = 'fake' } = {}) {
   const service = new Foundation({ store, identity, hasher: fakeHasher, secret, now: () => clock });
   const learning = new Learning({ foundation: service, store, now: () => clock });
   const game = new Game({ foundation: service, store, now: () => clock, pickIndex: () => 0 });
+  // Olympia and the tutor (19 Sep 2026). tutorModel: a fake model ({ system, messages, maxTokens }) → text; omitted, the tutor is off, as on a service with no key
+  const olympia = new Olympia({ foundation: service, store, now: () => clock });
+  const tutor = new Tutor({ foundation: service, store, now: () => clock, model: tutorModel, limits: tutorLimits });
   const billing = new Subscriptions({ foundation: service, store, now: () => clock, paymentsOpen: provider !== 'none' });
   const gateway = provider === 'none' ? null : new FakeGateway({ secret: webhookSecret });
   const payments = new Payments({ foundation: service, store, billing, provider, gateways: gateway ? { fake: gateway } : {}, now: () => clock });
@@ -124,7 +129,7 @@ export function fixture({ provider = 'fake' } = {}) {
     const childCtx = await service.authenticate(await service.selectChild(selCtx, kid.id, '763829'));
     return { p, child: kid, selCtx, childCtx };
   }
-  return { service, learning, game, billing, payments, support, recovery, email, feedback, waitlist, waitlistMail, leaving, resetPassword, enrollPhone, gateway, store, identity, users, tokens, auth, token, login, family, child, childSession, now: () => clock, advance: (ms) => { clock += ms; } };
+  return { service, learning, game, olympia, tutor, billing, payments, support, recovery, email, feedback, waitlist, waitlistMail, leaving, resetPassword, enrollPhone, gateway, store, identity, users, tokens, auth, token, login, family, child, childSession, now: () => clock, advance: (ms) => { clock += ms; } };
 }
 export const rejected = (code) => (err) => err.code === code;
 // the answer the server holds, in the shape the browser would send — and a nearby wrong one

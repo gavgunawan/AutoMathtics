@@ -81,11 +81,11 @@ test('through the child\'s start: a parent\'s yes shapes the next scan; the unlo
 test('the parent\'s setting: scanFocus for a child of the family, a boolean, a recent sign-in; a pace change leaves it, and the parent view says which', async () => {
   const f = fixture(), k = await f.childSession(); f.advance(2000); const parent = await f.login('parentA');
   assert.equal((await f.game.parentState(parent.ctx)).children[0].scanFocus, false);
-  assert.deepEqual(await f.game.settings(parent.ctx, { childId: k.child.id, scanFocus: true }), { timeZone: 'Asia/Singapore', childId: k.child.id, pacePercent: 100, scanFocus: true });
+  assert.deepEqual(await f.game.settings(parent.ctx, { childId: k.child.id, scanFocus: true }), { timeZone: 'Asia/Singapore', childId: k.child.id, pacePercent: 100, scanFocus: true, tutorOff: false });
   assert.equal((await f.store.get(progPath(k))).scanFocus, true); assert.equal((await f.game.parentState(parent.ctx)).children[0].scanFocus, true);
-  assert.deepEqual(await f.game.settings(parent.ctx, { childId: k.child.id, pacePercent: 120 }), { timeZone: 'Asia/Singapore', childId: k.child.id, pacePercent: 120, scanFocus: true });
+  assert.deepEqual(await f.game.settings(parent.ctx, { childId: k.child.id, pacePercent: 120 }), { timeZone: 'Asia/Singapore', childId: k.child.id, pacePercent: 120, scanFocus: true, tutorOff: false });
   assert.equal((await f.store.get(progPath(k))).scanFocus, true, 'a pace change leaves the focus');
-  assert.deepEqual(await f.game.settings(parent.ctx, { timeZone: 'Asia/Jakarta' }), { timeZone: 'Asia/Jakarta', childId: null, pacePercent: null, scanFocus: null });
+  assert.deepEqual(await f.game.settings(parent.ctx, { timeZone: 'Asia/Jakarta' }), { timeZone: 'Asia/Jakarta', childId: null, pacePercent: null, scanFocus: null, tutorOff: false });
   await assert.rejects(f.game.settings(parent.ctx, { childId: k.child.id, scanFocus: 'yes' }), rejected('INVALID_REQUEST'));
   await assert.rejects(f.game.settings(parent.ctx, { childId: k.child.id }), rejected('INVALID_PACE'), 'a child and nothing to set');
   await assert.rejects(f.game.settings(parent.ctx, { childId: randomUUID(), scanFocus: true }), rejected('INVALID_PACE'), 'not a child of this family');

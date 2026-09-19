@@ -778,3 +778,58 @@ html[data-mode=site] .masthead,html[data-mode=site] footer{max-width:760px}
 .site-links{display:flex;flex-wrap:wrap;justify-content:center;gap:6px 16px;margin:18px 0 0;font:600 10px var(--mono);letter-spacing:.12em;text-transform:uppercase}
 .site-links a{color:var(--dim);text-decoration:none}
 @media(hover:hover) and (pointer:fine){.site-links a:hover,.site-foot a:hover{color:var(--cyan)}}
+/* ---- 🪐 Olympia (19 Sep 2026): the gateway tile, the hub's moons, a visit's hint, the reveal, the moon wares, the two skies, and the tutor's box ---- */
+.wallet-row.three{grid-template-columns:1fr 1fr 1fr}
+.wallet-tile.c-violet{box-shadow:0 0 18px rgba(138,92,255,.18)}
+.gateway-tile{display:flex;flex-direction:column;align-items:flex-start;gap:4px;width:100%;margin:12px 0 0;padding:14px 16px;border-radius:18px;font:700 17px var(--display);letter-spacing:.02em;text-align:left;color:var(--txt);background:radial-gradient(circle at 88% 30%,rgba(138,92,255,.38),transparent 42%),radial-gradient(circle at 12% 80%,rgba(53,224,255,.18),transparent 40%),var(--void);border:1.5px solid var(--violet);box-shadow:0 0 18px rgba(138,92,255,.22)}
+.gateway-tile:after{content:attr(data-sub);font:700 9.5px/1.2 var(--mono);letter-spacing:.09em;text-transform:uppercase;color:var(--dim)}
+.moon-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px;margin:12px 0 0}
+.moon-card{padding:12px 14px 14px;border:1.5px solid var(--c);border-radius:18px;background:linear-gradient(150deg,rgba(255,255,255,.035),transparent 55%),var(--void);text-align:left}
+.moon-card.locked{opacity:.6;border-style:dashed}
+.moon-head{display:flex;align-items:center;gap:8px}
+.moon-face{font-size:26px;line-height:1}
+.moon-name{font:700 15px var(--display);color:var(--c)}
+.moon-band{margin-left:auto;font:600 10.5px var(--mono);color:var(--dim);white-space:nowrap}
+.moon-modelled{margin:6px 0 0;font:600 9.5px/1.4 var(--mono);letter-spacing:.04em;text-transform:uppercase;color:var(--dim)}
+.moon-blurb{margin:6px 0 0;font-size:13px;line-height:1.4;color:var(--txt)}
+.moon-shape{margin:4px 0 0;font-size:11.5px;line-height:1.4;color:var(--dim)}
+.moon-tally{display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin:8px 0 0;font-size:12.5px;color:var(--txt)}
+.moon-note{margin:6px 0 0;font-size:11.5px;color:var(--dim)}
+.moon-card .text-button{margin-top:6px;padding:0;font-size:12px}
+.medal-row{display:inline-flex;gap:4px;margin-right:6px}
+.medal-chip{padding:2px 7px;border-radius:999px;background:rgba(255,176,32,.12);border:1px solid rgba(255,176,32,.35);font:600 11px var(--mono);color:var(--gold);white-space:nowrap}
+.moon-topics{margin:8px 0 0;padding:8px 10px;border-radius:10px;background:var(--panel);font-size:12px;line-height:1.45;color:var(--muted)}
+.moon-topics b{display:block;margin:6px 0 2px;color:var(--txt)}.moon-topics b:first-child{margin-top:0}
+.moon-topics p{margin:0}
+.olympia-log{max-width:560px;margin:14px auto 0;text-align:left}
+.olympia-row{margin:2px 0;font:600 12px var(--mono);color:var(--muted)}
+.olympia-hint{margin:0;padding:6px 10px;border-radius:10px;background:rgba(138,92,255,.12);border:1px dashed rgba(138,92,255,.4);font:600 12px/1.4 var(--mono);color:var(--muted);text-align:center}
+.reveal{display:flex;flex-direction:column;gap:4px;max-width:520px;margin:6px auto 0;text-align:left}
+.reveal-row{display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:10px;background:var(--void);border:1px solid var(--v2line);font-size:13px}
+.reveal-row.ok{border-color:rgba(45,255,179,.4)}.reveal-row.bad{border-color:rgba(255,59,92,.4)}.reveal-row.late{border-color:rgba(255,176,32,.4)}
+.reveal-mark{flex:0 0 auto;font-weight:700}.reveal-row.ok .reveal-mark{color:var(--mint)}.reveal-row.bad .reveal-mark{color:var(--red)}.reveal-row.late .reveal-mark{color:var(--gold)}
+.reveal-cat{flex:1;min-width:0;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.reveal-ans{flex:0 0 auto;font:600 12.5px var(--mono);color:var(--txt)}
+.tutor-btn{padding:10px 8px;border-radius:12px;border:2px solid var(--violet);background:var(--void);color:var(--txt);font:700 13px var(--ui);box-shadow:0 0 12px rgba(138,92,255,.25)}
+.tutor-host:empty{display:none}
+.tutor-box{margin:8px auto 10px;padding:12px 14px;max-width:560px;border:1.5px solid var(--violet);border-radius:14px;background:var(--void);text-align:left;box-shadow:0 0 18px rgba(138,92,255,.22)}
+.tutor-title{margin:0 0 6px;font:700 13px var(--display);letter-spacing:.04em;color:var(--violet)}
+.tutor-warn{margin:0 0 8px;font-size:13.5px;line-height:1.45;color:var(--txt)}
+.tutor-thread{display:flex;flex-direction:column;gap:6px}
+.tutor-line{margin:0;padding:8px 10px;border-radius:10px;background:var(--panel);font-size:14.5px;line-height:1.5;color:var(--txt);white-space:pre-line}
+.tutor-line.me{align-self:flex-end;background:rgba(138,92,255,.18)}
+.tutor-line.wait{color:var(--dim)}.tutor-line.warn{color:var(--gold)}
+.tutor-ask{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:10px}
+.tutor-input{flex:1;min-width:140px;padding:9px 10px;border-radius:10px;border:1.5px solid var(--v2line);background:var(--panel);color:var(--txt);font:500 15px var(--ui)}
+.tutor-left{font:600 10.5px var(--mono);color:var(--dim)}
+.tutor-note{margin:0;font-size:13px;color:var(--mint)}
+.tiny.mic{font-size:16px;padding:6px 10px}
+.fig-grid{border-collapse:collapse;margin:6px auto}
+.fig-grid td{width:34px;height:34px;border:1.5px solid var(--cyan);text-align:center;font:700 14px var(--mono);color:var(--gold);background:rgba(53,224,255,.05)}
+html[data-mode=kid][data-bg=bg_moon] body{background:radial-gradient(circle at 80% 12%,rgba(255,230,150,.14),transparent 24%),linear-gradient(180deg,#070A24 0%,#0B0E2E 60%,#05071A 100%)}
+html[data-mode=kid][data-bg=bg_nebula] body{background:radial-gradient(ellipse at 30% 30%,rgba(138,92,255,.22),transparent 45%),radial-gradient(ellipse at 75% 70%,rgba(255,45,168,.16),transparent 45%),#05071C}
+.moonrise{position:absolute;left:var(--x);top:var(--y);width:58px;height:58px;border-radius:50%;background:radial-gradient(circle at 35% 35%,#FFF6D5,#E8D08A 60%,#B89C57 100%);box-shadow:0 0 40px rgba(255,230,150,.45);opacity:.9}
+.nebula{position:absolute;left:var(--x);top:var(--y);width:46vw;height:46vw;max-width:520px;max-height:520px;border-radius:50%;background:radial-gradient(circle,var(--col),transparent 60%);opacity:.32;filter:blur(18px);animation:nebulaDrift 22s ease-in-out infinite;animation-delay:var(--delay)}
+@keyframes nebulaDrift{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(4%,-3%) scale(1.08)}}
+@media(prefers-reduced-motion:reduce){.nebula{animation:none}}
+@media(max-width:480px){.wallet-row.three{grid-template-columns:1fr 1fr 1fr;gap:6px}.wallet-row.three .yen{font-size:17px}.moon-grid{grid-template-columns:1fr}}

@@ -3,6 +3,7 @@ import { TERMS_VERSION } from './site.mjs';
 import { Fault, fail, sha256, mac, randomToken, object, text, uuid, pin, childInput, startInput, publicChild } from './security.mjs';
 import { initialProgress, normalizeProgress, timeZoneForPhone } from './progress.mjs';
 import { effectiveEntitlement } from './subscription.mjs';
+import { olympiaAccess } from './olympia.mjs';
 import { recoveryView } from './recovery.mjs';
 import { appearanceOf } from './game.mjs';
 import { prefsOf, prefsPath } from './email.mjs';
@@ -159,8 +160,8 @@ export class Foundation {
       const recovery = s.role === 'parent' ? recoveryView(await tx.get(`recoveries/${s.uid}`), this.now()) : null; // Stage 4.4: a finished request is shown until acknowledged
       const emailPrefs = s.role === 'parent' ? prefsOf(await tx.get(prefsPath(s.uid))) : null; // email-v1: Mission Control's switches, as the server holds them
       return { role: s.role, csrf: s.csrf, ...(s.role === 'parent' ? { parent: { uid: s.uid }, recovery, rememberedUntil: s.remember === true ? s.expiresAt : null, emailPrefs } : {}), family: family ? {
-        id: family.id, label: family.label, children,
-        ...(s.role === 'parent' ? { entitlement: effectiveEntitlement(family, this.now()), activeCount: family.activeChildIds.length, deletion: family.deletion ? { requestedAt: family.deletion.requestedAt, effectiveAt: family.deletion.effectiveAt } : null } : {}),
+        id: family.id, label: family.label, children, tutorOff: family.tutorOff === true, // the parent's Explain-to-me switch (game.mjs settings); the route reads it to say whether the tutor is on
+        ...(s.role === 'parent' ? { entitlement: effectiveEntitlement(family, this.now()), olympia: olympiaAccess(family, this.now()), activeCount: family.activeChildIds.length, deletion: family.deletion ? { requestedAt: family.deletion.requestedAt, effectiveAt: family.deletion.effectiveAt } : null } : {}),
       } : null };
     }, { readOnly: true });
   }
