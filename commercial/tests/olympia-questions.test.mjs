@@ -28,7 +28,7 @@ test('every heat is ten questions in the moon\'s real shape: SEAMO four 3-mark a
     if (m.id === 't') { assert.deepEqual(kinds, Array(10).fill('mc')); assert.deepEqual(sections, ['A6', 'A6', 'A6', 'A8', 'A8', ...Array(5).fill('B')], `${m.id} ${y}: the paper's tiers`); for (const q of qs) assert.equal(q.display.choices.length, 4); }
     // the OCEC twins: all short answer, two a category in the real order, every answer a whole number (frac chains are asked as a + b)
     if (m.id === 'hk' || m.id === 'bkk') { assert.deepEqual(kinds, Array(10).fill('sa')); assert.deepEqual(sections, ['LT', 'LT', 'AR', 'AR', 'NT', 'NT', 'GE', 'GE', 'CO', 'CO']); for (const q of qs) assert.equal(q.answer.type, 'int', JSON.stringify(q)); }
-    if (m.id === 'phi') { assert.deepEqual(kinds, [...Array(5).fill('mc'), ...Array(5).fill('sa')]); assert.deepEqual(sections, ['NS', 'GE', 'PA', 'ME', 'SP', 'NS', 'GE', 'PA', 'ME', 'SP']); for (const q of qs.slice(0, 5)) { assert.equal(q.display.choices.length, 5); assert.equal(q.display.choices.at(-1), NONE); } }
+    if (m.id === 'phi') { assert.deepEqual(kinds, [...Array(5).fill('mc'), ...Array(5).fill('sa')]); assert.deepEqual(sections, ['P1', 'P1', 'P1', 'P1', 'P1', 'P2', 'P2', 'P2', 'P3', 'P3'], `${m.id} ${y}: the paper's tiers`); for (const q of qs.slice(0, 5)) { assert.equal(q.display.choices.length, 5); assert.equal(q.display.choices.at(-1), NONE); } }
     if (m.id === 'dc') { assert.deepEqual(kinds, Array(10).fill('mc')); assert.deepEqual(sections, ['E', 'E', 'E', 'E', 'M', 'M', 'M', 'H', 'H', 'H']); for (const q of qs) { assert.equal(q.display.choices.length, 5); assert.ok(!q.display.choices.includes(NONE)); } }
     for (const q of qs) assert.ok(typeof q.cat === 'string' && q.cat.length > 2, `a category on every question: ${JSON.stringify(q)}`);
   }
@@ -69,7 +69,7 @@ test('every figure a moon question carries is one the client can draw: bars, pie
 });
 // a fact question (edges of a cube, the next triangular number) has one answer by nature; every other wording must move
 const FIXED = new Set(['spatial visualisation', 'shapes', 'odd and even numbers', 'systematic listing', 'number patterns', 'counting figures', 'shortest path', 'probability',
-  'geometry · shapes and solids', 'geometry · counting figures', 'arithmetic · smart calculation', 'logical thinking · guessing a number', 'geometry · shapes', 'geometry · symmetry', 'pattern and algebra · shape patterns', 'pattern and algebra · number patterns', 'combinatorics · routing', 'combinatorics · forming numbers', 'geometry · angles', 'truth and lies']);
+  'geometry · shapes and solids', 'geometry · counting figures', 'arithmetic · smart calculation', 'logical thinking · guessing a number', 'geometry · shapes', 'geometry · symmetry', 'pattern and algebra · shape patterns', 'pattern and algebra · number patterns', 'combinatorics · routing', 'combinatorics · forming numbers', 'geometry · angles', 'truth and lies', 'probability · fractions']);
 test('no moon wording (a fact question aside) keeps the same right answer every time', () => {
   const seen = new Map();
   for (const { m, y, qs } of heats(40)) for (const q of qs) {
