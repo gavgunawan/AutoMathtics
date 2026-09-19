@@ -3,7 +3,7 @@
 // strand that names cryptarithms, divisibility tests, number patterns, spatial visualisation and logic. AMO starts at Grade 2,
 // so this moon opens at Year 2; the syllabus is banded 2–4 and 5–6, and so are these generators. A heat is six multiple-choice
 // questions with five options and four short answers (olympia-research.md §4).
-import { ri, pick, shuffle, sum, names, thing, money, int, frac, mcOnly, withFigure, grid, table, buildHeat, slots, digitsOf, gcd, cap } from './common.mjs';
+import { ri, pick, shuffle, sum, names, thing, money, int, frac, mcOnly, withFigure, grid, table, buildHeat, slots, digitsOf, gcd, cap, ord } from './common.mjs';
 
 const upper = (y) => y >= 5;
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -13,7 +13,7 @@ const model = (y) => {
   const kind = upper(y) ? ri(1, 4) : ri(1, 2), [a, b] = names(2), it = thing();
   if (kind === 1) { const small = ri(y <= 3 ? 3 : 8, y <= 3 ? 15 : 40), d = ri(2, y <= 3 ? 8 : 20); return int('model method', `${a} and ${b} have ${2 * small + d} ${it}s altogether. ${a} has ${d} more than ${b}. How many ${it}s does ${b} have?`, small); }
   if (kind === 2) { const k = ri(2, y <= 3 ? 3 : 5), u = ri(2, y <= 3 ? 9 : 15); return int('model method', `${a} has ${k} times as many ${it}s as ${b}. Together they have ${(k + 1) * u}. How many ${it}s does ${a} have?`, k * u); }
-  if (kind === 3) { const d = pick([5, 7, 8, 9]), n = ri(3, d - 1), diff = 2 * n - d, u = ri(2, 12); if (diff <= 0) return null; return int('model method', `In a class, ${n}/${d} of the pupils are girls. There are ${diff * u} more girls than boys. How many pupils are in the class?`, d * u); }
+  if (kind === 3) { const d = pick([5, 7, 8, 9]), n = ri(3, d - 1), diff = 2 * n - d, u = ri(2, 12); if (diff <= 0 || gcd(n, d) !== 1) return null; return int('model method', `In a class, ${n}/${d} of the pupils are girls. There are ${diff * u} more girls than boys. How many pupils are in the class?`, d * u); }
   return equalAfter();
 };
 // b had x, a had kx; a gives g and they are equal: kx − g = x + g, so g = (k−1)x/2 — pick x so that g is whole
@@ -33,9 +33,9 @@ const divisibility = (y) => {
 // ---- patterns ----
 const patterns = (y) => {
   const kind = upper(y) ? ri(1, 3) : ri(1, 2);
-  if (kind === 1) { const s = ri(1, 12), k = ri(2, upper(y) ? 9 : 5), n = upper(y) ? ri(15, 40) : ri(8, 12); return int('number patterns', `${[s, s + k, s + 2 * k, s + 3 * k].join(', ')}, … What is the ${n}th number in this pattern?`, s + (n - 1) * k); }
+  if (kind === 1) { const s = ri(1, 12), k = ri(2, upper(y) ? 9 : 5), n = upper(y) ? ri(15, 40) : ri(8, 12); return int('number patterns', `${[s, s + k, s + 2 * k, s + 3 * k].join(', ')}, … What is the ${ord(n)} number in this pattern?`, s + (n - 1) * k); }
   if (kind === 2) { const k = ri(2, 4), n = ri(5, upper(y) ? 12 : 8); return withFigure(int('number patterns', `Figure 1 uses ${k + 1} dots, Figure 2 uses ${2 * k + 1}, Figure 3 uses ${3 * k + 1}, and the pattern continues. How many dots does Figure ${n} use?`, k * n + 1), table('Dots in each figure', ['Figure', 'Dots'], [[1, k + 1], [2, 2 * k + 1], [3, 3 * k + 1], [4, 4 * k + 1]])); }
-  const n = ri(6, 12); return int('number patterns', `1, 4, 9, 16, 25, … What is the ${n}th number in this pattern?`, n * n);
+  const n = ri(6, 12); return int('number patterns', `1, 4, 9, 16, 25, … What is the ${ord(n)} number in this pattern?`, n * n);
 };
 // ---- spatial visualisation ----
 const spatial = (y) => {
@@ -74,8 +74,8 @@ const money$ = (y) => {
   if (kind === 1) { const ad = pick([6, 8, 10, 12]), ch = pick([3, 4, 5]), na = ri(1, 3), nc = ri(1, 4), paid = pick([50, 60, 100]), cost = ad * na + ch * nc; if (cost >= paid) return null; return int('word problems', `Tickets cost ${money(ad)} for an adult and ${money(ch)} for a child. ${w}'s family of ${na} adult${na > 1 ? 's' : ''} and ${nc} child${nc > 1 ? 'ren' : ''} pays with ${money(paid)}. How much change do they get (in dollars)?`, paid - cost); }
   const price = ri(2, upper(y) ? 15 : 8), n = ri(3, upper(y) ? 12 : 6), had = price * n + ri(1, 20); return int('word problems', `${w} has ${money(had)} and buys ${n} ${thing()}s at ${money(price)} each. How much money is left (in dollars)?`, had - price * n);
 };
-const timeQ = () => { const h = ri(7, 11), m = pick([0, 15, 30, 45]), d = pick([45, 75, 90, 105, 120, 150]), e = h * 60 + m + d, hm = (t) => `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`, took = [Math.floor(d / 60) ? `${Math.floor(d / 60)} h` : '', d % 60 ? `${d % 60} min` : ''].filter(Boolean).join(' '); return mcOnly('time', `A class trip leaves school at ${hm(h * 60 + m)} and the bus ride takes ${took}. When does it arrive?`, hm(e), [hm(e + 15), hm(e - 15), hm(e + 60), hm(e - 30)]); };
-const fractionQ = (y) => { if (!upper(y)) { const d = pick([2, 3, 4, 5]), n = d * ri(2, 8); return int('fractions', `What is 1/${d} of ${n}?`, n / d); } const d = pick([4, 5, 6, 8, 10]), n1 = ri(1, d - 1), n2 = ri(1, d - n1); if (n1 + n2 >= d) return null; return frac('fractions', `${names(1)[0]} ate ${n1}/${d} of a pizza and a friend ate ${n2}/${d}. What fraction of the pizza is left? Give it in its simplest form.`, d - n1 - n2, d); };
+const timeQ = () => { const h = ri(7, 11), m = pick([0, 15, 30, 45]), d = pick([45, 75, 90, 105, 120, 150]), e = h * 60 + m + d, hm = (t) => { const hh = Math.floor(t / 60); return `${hh > 12 ? hh - 12 : hh}:${String(t % 60).padStart(2, '0')} ${hh >= 12 ? 'pm' : 'am'}`; }, took = [Math.floor(d / 60) ? `${Math.floor(d / 60)} h` : '', d % 60 ? `${d % 60} min` : ''].filter(Boolean).join(' '); return mcOnly('time', `A class trip leaves school at ${hm(h * 60 + m)} and the bus ride takes ${took}. When does it arrive?`, hm(e), [hm(e + 15), hm(e - 15), hm(e + 60), hm(e - 30)]); };
+const fractionQ = (y) => { if (!upper(y)) { const d = pick([2, 3, 4, 5]), n = d * ri(2, 8); return int('fractions', `What is 1/${d} of ${n}?`, n / d); } const d = pick([4, 5, 6, 8, 10]), n1 = ri(1, d - 1), n2 = ri(1, d - n1); if (n1 + n2 >= d || gcd(n1, d) !== 1 || gcd(n2, d) !== 1) return null; return frac('fractions', `${names(1)[0]} ate ${n1}/${d} of a pizza and a friend ate ${n2}/${d}. What fraction of the pizza is left? Give it in its simplest form.`, d - n1 - n2, d); };
 const numberSense = (y) => { if (!upper(y)) { const lo = ri(1, 8) * 10, s = ri(3, 15); const cands = []; for (let n = lo + 1; n < lo + 10; n++) if (sum(digitsOf(n)) === s) cands.push(n); if (cands.length !== 1) return null; return int('number sense', `A whole number is greater than ${lo} and less than ${lo + 10}. The sum of its two digits is ${s}. What is the number?`, cands[0]); } const a = ri(2, 9), b = ri(2, 9); return int('number sense', `The product of two whole numbers is ${a * b} and their sum is ${a + b}. What is the larger of the two numbers?`, Math.max(a, b)); };
 
 const POOL_LOW = [['model method', model], ['equal after giving', equalAfter], ['cryptarithm', crypt], ['divisibility', divisibility], ['number patterns', patterns], ['spatial visualisation', spatial], ['solids', solids], ['logic', logic], ['statistics', stats], ['geometry', geometry], ['money', money$], ['time', timeQ], ['fractions', fractionQ], ['number sense', numberSense]];

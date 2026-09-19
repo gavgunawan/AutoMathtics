@@ -53,7 +53,7 @@ export function nearby(v, n = 3, { min = v > 0 ? 1 : 0 } = {}) {
   return out;
 }
 const decNear = (v, n) => { const out = [], seen = new Set([v.toFixed(2)]); for (const d of shuffle([0.1, -0.1, 1, -1, 0.5, -0.5, 0.01, -0.01, 2, -2, 0.2, -0.2])) { const c = Math.round((v + d) * 100) / 100; if (c >= 0 && !seen.has(c.toFixed(2))) { seen.add(c.toFixed(2)); out.push(c); } if (out.length === n) break; } return out.map((x) => String(x)); };
-const fracNear = (nn, d, n) => { const out = [], seen = new Set([`${nn}/${d}`]); for (const [a, b] of shuffle([[nn + 1, d], [nn - 1, d], [nn, d + 1], [nn, d - 1], [d - nn, d], [nn, d * 2], [nn + 1, d + 1], [nn * 2, d], [nn, d + 2]])) { if (a >= 1 && b >= 2 && a < b && !seen.has(`${a}/${b}`)) { seen.add(`${a}/${b}`); out.push(`${a}/${b}`); } if (out.length === n) break; } return out; };
+const fracNear = (nn, d, n) => { const out = [], seen = new Set([`${nn}/${d}`]); for (const [a0, b0] of shuffle([[nn + 1, d], [nn - 1, d], [nn, d + 1], [nn, d - 1], [d - nn, d], [nn, d * 2], [nn + 1, d + 1], [nn * 2, d], [nn, d + 2], [nn + 2, d + 1], [nn, d + 3]])) { const g = gcd(a0, b0) || 1, a = a0 / g, b = b0 / g; if (a >= 1 && b >= 2 && a < b && !seen.has(`${a}/${b}`)) { seen.add(`${a}/${b}`); out.push(`${a}/${b}`); } if (out.length === n) break; } return out; }; // every decoy in lowest terms: a stem that asks for the simplest form must not offer 4/36
 const answerString = (a) => (a.type === 'frac' ? `${a.n}/${a.d}` : a.type === 'dec' ? String(Math.round(a.v * 100) / 100) : String(a.v));
 const decoysFor = (a, n) => (a.type === 'frac' ? fracNear(a.n, a.d, n) : a.type === 'dec' ? decNear(a.v, n) : nearby(a.v, n).map(String));
 
@@ -85,15 +85,16 @@ export function finish(s, kind, { options = 4, none = false, section = null } = 
  * draws again, so a paper never has a hole.
  */
 export function buildHeat(shape, pool, year, opts = {}) {
-  const out = [], used = new Set();
+  const out = [], used = new Set(), seen = new Set(); // pool entries used, and the seed families they produced (two entries can reach one)
   for (const slot of shape) {
     const fits = pool.filter((c) => !c.sections || c.sections.includes(slot.section));
     let q = null;
     for (let t = 0; t < 120 && !q; t++) { // a slot whose kinds mostly answer in the other style needs many draws before it is a hole
       const fresh = fits.filter((c) => !used.has(c.cat)), c = pick(fresh.length ? fresh : fits);
       const s = c.gen(year); if (!s) continue;
+      if (seen.has(s.cat) && t < 60) continue; // the same family twice in a heat only when nothing else fits the slot
       if (slot.kind === 'sa' && (s.mcOnly || !s.answer)) continue;
-      q = finish(s, slot.kind, { ...opts, section: slot.section }); if (q) used.add(c.cat);
+      q = finish(s, slot.kind, { ...opts, section: slot.section }); if (q) { used.add(c.cat); seen.add(s.cat); }
     }
     if (!q) throw Error(`no question for ${slot.section}/${slot.kind} at year ${year}`);
     out.push(q);

@@ -1,7 +1,8 @@
-// 🐘 BKK-MOON — practice modelled on TIMO (the Thailand International Mathematical Olympiad, Olympiad Champion Education Centre
-// with the Tourism Authority of Thailand); not affiliated. The same five categories and the same twenty-five short answers as its
-// Hong Kong twin; what TIMO leans on is the logic set-piece and the arithmetic trick — chicken and rabbit, periodic beads, speed,
-// balance puzzles, Gaussian addition, 25 × 32 × 125 (olympia-research.md §7). The shared generators live in ocec.mjs.
+// 🐘 BKK-MOON — practice modelled on TIMO (the Thailand International Mathematical Olympiad, Olympiad Champion Education Centre;
+// the paper's letterhead names the Thailand Mathematics Society); not affiliated. The same five categories and the same twenty-five
+// short answers as its Hong Kong twin; this moon's cut of the shared pool leans on the logic set-piece and the arithmetic trick —
+// chicken and rabbit, periodic beads, speed, balance puzzles, Gaussian addition, 25 × 32 × 125 — our own way of telling the twins
+// apart, not the paper's (the source check of 20 Sep 2026). The shared generators live in ocec.mjs.
 import { ocecHeat } from './ocec.mjs';
 
 export const heat = (year) => ocecHeat(year, 'bkk');
