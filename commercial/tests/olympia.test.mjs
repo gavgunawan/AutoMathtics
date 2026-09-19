@@ -54,12 +54,12 @@ test('the hub: seven moons, four open, US-Moon locked for a Year 1 child and ope
   const f = fixture(), k1 = await f.childSession();
   const st = await f.olympia.state(k1.childCtx);
   assert.equal(st.year, 1); assert.equal(st.moons.length, 7); assert.equal(st.heat, 10); assert.equal(st.minerals, 0); assert.equal(st.medalCount, 0); assert.equal(st.active, null);
-  assert.deepEqual(st.moons.filter((m) => m.available).map((m) => m.id), ['sea', 'sg', 't']);
-  assert.equal(st.moons.find((m) => m.id === 'us').why, 'opens at Year 2'); assert.equal(st.moons.find((m) => m.id === 'hk').why, 'soon');
+  assert.deepEqual(st.moons.filter((m) => m.available).map((m) => m.id), ['sea', 'sg', 't', 'hk', 'bkk', 'phi']);
+  assert.equal(st.moons.find((m) => m.id === 'us').why, 'opens at Year 2'); assert.equal(st.moons.find((m) => m.id === 'hk').why, null);
   assert.equal(st.moons.find((m) => m.id === 'sea').band, 'Paper A');
   for (const m of st.moons) { assert.equal(m.heat, undefined, 'no generator leaves the server'); assert.ok(m.modelled && m.long); assert.deepEqual(m.medals, { gold: 0, silver: 0, bronze: 0, merit: 0 }); }
   await assert.rejects(f.olympia.start(k1.childCtx, { moon: 'us' }), rejected('MOON_NOT_FOR_YEAR'));
-  await assert.rejects(f.olympia.start(k1.childCtx, { moon: 'hk' }), rejected('MOON_NOT_OPEN'));
+  const hk = await f.olympia.start(k1.childCtx, { moon: 'hk' }); assert.equal(hk.visit.moonName, 'HK-Moon'); assert.equal(hk.question.section, 'LT'); await f.olympia.quit(k1.childCtx, { visitId: hk.visit.id });
   await assert.rejects(f.olympia.start(k1.childCtx, { moon: 'pluto' }), rejected('INVALID_REQUEST'));
   const k2 = await withChild(fixture(), 8, 2); // a second fixture: its own family
   const st2 = await k2.childCtx && (await (async () => { const g = fixture(); const kk = await withChild(g, 8, 2); return g.olympia.state(kk.childCtx); })());

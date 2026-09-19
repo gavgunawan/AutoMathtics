@@ -4,6 +4,7 @@
 // the ordinary curriculum, the difficulty is the puzzle framing and the pace. A heat is five from each half, one paper per
 // grade as WMI has it (olympia-research.md §2).
 import { ri, pick, shuffle, sum, names, thing, int, mcOnly, withFigure, table, bars, buildHeat, slots, isPrime, gcd, lcm, cap } from './common.mjs';
+import { lengthWindow } from './phi.mjs';
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const money = (n) => `Rp${n.toLocaleString('en-US')}`;
@@ -51,7 +52,7 @@ const legs = (y) => { const n = ri(2, y <= 2 ? 6 : 12), m = ri(1, y <= 2 ? 5 : 1
 // ---- Section B: applications by grade ----
 const addSubWords = (y) => { const [w] = names(1), it = thing(); if (y === 1) { const a = ri(3, 12), b = ri(2, 20 - a); return int('word problems', `${w} has ${a} ${it}s and gets ${b} more. How many ${it}s does ${w} have now?`, a + b); } const hi = y === 2 ? 100 : y <= 4 ? 1000 : 10000, a = ri(hi / 5, hi), b = ri(1, a); return int('word problems', `A shop had ${a} ${it}s and sold ${b}. How many are left?`, a - b); };
 const measure = (y) => {
-  if (y <= 2) { const items = shuffle([['a pencil', 15], ['a ruler', 30], ['a door', 200], ['a bus', 1200], ['a paper clip', 3]]).slice(0, 4), top = Math.random() < 0.5, best = items.reduce((p, q) => ((q[1] > p[1]) === top ? q : p)); return mcOnly('measurement', `Which of these is the ${top ? 'longest' : 'shortest'}?`, cap(best[0]), items.filter((i) => i !== best).map((i) => cap(i[0]))); }
+  if (y <= 2) { const items = lengthWindow(), top = Math.random() < 0.5, best = items.reduce((p, q) => ((q[1] > p[1]) === top ? q : p)); return mcOnly('measurement', `Which of these is the ${top ? 'longest' : 'shortest'}?`, cap(best[0]), items.filter((i) => i !== best).map((i) => cap(i[0]))); }
   const kind = ri(1, 2); if (kind === 1) { const m = ri(2, 9), cm = ri(1, 99); return int('units', `How many centimetres are there in ${m} m ${cm} cm?`, m * 100 + cm); } const kg = ri(1, 9), g = ri(1, 9) * 100; return int('units', `How many grams are there in ${kg} kg ${g} g?`, kg * 1000 + g);
 };
 const dataQ = (y) => {
