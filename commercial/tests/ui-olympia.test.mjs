@@ -43,7 +43,7 @@ test('the home: a third wallet tile of Olyminerals and the Gateway jump under th
 test('a visit: the hint that nothing is marked until the end, ten questions with no flash between them, then the reveal with every question, the medal and the minerals; the home then shows them', async (t) => {
   const { h, kid } = await kidIn(t);
   await h.click('🪐 Gateway jump'); await h.click('🌊 Visit SEA-Moon ▶');
-  assert.ok(text(h).includes('SEA-Moon · Multiple choice · 1/10'), text(h).slice(0, 300)); assert.ok(text(h).includes('no marks until the end'));
+  assert.ok(text(h).includes('SEA-Moon · 3 marks · 1/10'), text(h).slice(0, 300)); assert.ok(text(h).includes('no marks until the end'));
   assert.ok(!h.nodes('BUTTON').some((b) => b.textContent === '💡 Explain to me'), 'no tutor without a key');
   assert.ok(!h.nodes('BUTTON').some((b) => b.textContent === '↺ Restart'), 'no restart on a visit');
   for (let i = 0; i < 9; i++) { await answerShown(h, kid, i < 7); assert.ok(text(h).includes(`· ${i + 2}/10`), `question ${i + 2}`); assert.ok(!/⭐ Correct|✗ Not quite|it was/.test(text(h)), 'nothing said between questions'); }

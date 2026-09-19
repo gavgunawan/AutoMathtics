@@ -18,11 +18,11 @@ test('the eight moons, all open, in the owner\'s order (SEAMO, AMO, SMC and WMI 
   assert.equal(moonById('us').years[0], 2, 'AMO has no Year 1 paper'); assert.equal(moonById('dc').years[0], 4, 'the AMC 8 is a Grade 8 paper: DC-Moon opens at Year 4');
   assert.equal(bandOf(moonById('sea'), 1), 'Paper A'); assert.equal(bandOf(moonById('sea'), 4), 'Paper B'); assert.equal(bandOf(moonById('sea'), 6), 'Paper C'); assert.equal(bandOf(moonById('t'), 5), 'Grade 5');
 });
-test('every heat is ten questions in the moon\'s real shape: SEAMO 8 MC + 2 SA with five options and "None of the above" on every paper; AMO 6 MC of five + 4 SA; SMC 2 MC of four + 8 SA; WMI five logic then five applications, all MC; AMC 8 ten MC of five options in three climbing bands', () => {
+test('every heat is ten questions in the moon\'s real shape: SEAMO four 3-mark and four 4-mark MC then two 6-mark SA, five options with "None of the above" on every paper; AMO 6 MC of five + 4 SA; SMC 2 MC of four + 8 SA; WMI five logic then five applications, all MC; AMC 8 ten MC of five options in three climbing bands', () => {
   for (const { m, y, qs } of heats(6)) {
     assert.equal(qs.length, HEAT_QUESTIONS, `${m.id} year ${y}`);
     const kinds = qs.map((q) => (q.answer.type === 'choice' ? 'mc' : 'sa')), sections = qs.map((q) => q.section);
-    if (m.id === 'sea') { assert.deepEqual(kinds, [...Array(8).fill('mc'), 'sa', 'sa'], `${m.id} ${y}`); for (const q of qs.slice(0, 8)) { const c = q.display.choices; assert.equal(c.length, 5, `${m.id} ${y}`); assert.equal(c.at(-1), NONE); } }
+    if (m.id === 'sea') { assert.deepEqual(kinds, [...Array(8).fill('mc'), 'sa', 'sa'], `${m.id} ${y}`); assert.deepEqual(sections, ['M3', 'M3', 'M3', 'M3', 'M4', 'M4', 'M4', 'M4', 'M6', 'M6'], `${m.id} ${y}: the paper's tiers`); for (const q of qs.slice(0, 8)) { const c = q.display.choices; assert.equal(c.length, 5, `${m.id} ${y}`); assert.equal(c.at(-1), NONE); } }
     if (m.id === 'us') { assert.deepEqual(kinds, [...Array(6).fill('mc'), ...Array(4).fill('sa')]); for (const q of qs.slice(0, 6)) { assert.equal(q.display.choices.length, 5); assert.ok(!q.display.choices.includes(NONE)); } }
     if (m.id === 'sg') { assert.deepEqual(kinds, ['mc', 'mc', ...Array(8).fill('sa')]); for (const q of qs.slice(0, 2)) assert.equal(q.display.choices.length, 4); for (const q of qs.slice(2)) assert.notEqual(q.answer.type, 'frac', `the real paper types no fractions: ${q.display.text}`); }
     if (m.id === 't') { assert.deepEqual(kinds, Array(10).fill('mc')); assert.deepEqual(sections, [...Array(5).fill('A'), ...Array(5).fill('B')]); }
@@ -69,7 +69,7 @@ test('every figure a moon question carries is one the client can draw: bars, pie
 });
 // a fact question (edges of a cube, the next triangular number) has one answer by nature; every other wording must move
 const FIXED = new Set(['spatial visualisation', 'shapes', 'odd and even numbers', 'systematic listing', 'number patterns', 'counting figures', 'shortest path', 'probability',
-  'geometry · shapes and solids', 'geometry · counting figures', 'arithmetic · smart calculation', 'logical thinking · guessing a number', 'geometry · shapes', 'geometry · symmetry', 'pattern and algebra · shape patterns', 'pattern and algebra · number patterns', 'combinatorics · routing', 'combinatorics · forming numbers', 'geometry · angles']);
+  'geometry · shapes and solids', 'geometry · counting figures', 'arithmetic · smart calculation', 'logical thinking · guessing a number', 'geometry · shapes', 'geometry · symmetry', 'pattern and algebra · shape patterns', 'pattern and algebra · number patterns', 'combinatorics · routing', 'combinatorics · forming numbers', 'geometry · angles', 'truth and lies']);
 test('no moon wording (a fact question aside) keeps the same right answer every time', () => {
   const seen = new Map();
   for (const { m, y, qs } of heats(40)) for (const q of qs) {
