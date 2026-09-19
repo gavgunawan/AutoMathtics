@@ -19,7 +19,7 @@ export const MOONS = Object.freeze([
   { id: 'sea', name: 'SEA-Moon', emoji: '🌊', c: 'c-cyan', modelled: 'SEAMO', long: 'the Southeast Asian Mathematical Olympiad (Singapore)', years: [1, 6], seconds: 200,
     blurb: 'heuristics: working backwards, queues, pigeonholes, shortest paths, patterns', shape: '8 multiple choice + 2 short answer in the paper’s tiers: four 3-mark, four 4-mark, two 6-mark typed · five options with “None of the above”', open: true, heat: seaHeat, topics: SEA_TOPICS },
   { id: 'us', name: 'US-Moon', emoji: '🦅', c: 'c-magenta', modelled: 'AMO', long: 'the American Mathematics Olympiad (SIMCC with Southern Illinois University)', years: [2, 6], seconds: 200,
-    blurb: 'the model method, cryptarithms, divisibility, patterns, spatial puzzles', shape: '6 multiple choice (five options) + 4 short answer · from Year 2, like the real paper', open: true, heat: usHeat, topics: US_TOPICS },
+    blurb: 'the model method, cryptarithms, divisibility, patterns, spatial puzzles', shape: '6 three-mark multiple choice (five options) then two 5-mark and two 6-mark typed answers · from Year 2, like the real paper', open: true, heat: usHeat, topics: US_TOPICS },
   { id: 'sg', name: 'SG-Moon', emoji: '🦁', c: 'c-gold', modelled: 'SMC', long: 'the Singapore Math Challenge (SIMCC)', years: [1, 6], seconds: 170,
     blurb: 'the Singapore syllabus with its heuristics: bar models, before-and-after, guess and check', shape: '2 multiple choice (four options) + 8 short answer · almost all typed numbers and brisker, as the real paper is', open: true, heat: sgHeat, topics: SG_TOPICS },
   { id: 't', name: 'T-Moon', emoji: '🏮', c: 'c-violet', modelled: 'WMI', long: 'the World Mathematics Invitational (Taiwan)', years: [1, 6], seconds: 190,
