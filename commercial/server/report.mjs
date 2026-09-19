@@ -35,8 +35,8 @@ const FRACTIONS_I = [null, 'Simplifying fractions', 'Adding fractions', 'Subtrac
 const FRACTIONS_II = [null, 'Adding fractions (different denominators)', 'Subtracting fractions (different denominators)', 'Multiplying fractions', 'Dividing fractions', 'Mixed fraction questions'];
 // Navigator is word problems and its template is not stored, so a Navigator style is a sector and a tier, named by the
 // sector's topics in a few words (questions/navigator.mjs NAV_TOPICS has them in full).
-export const NAV_TOPIC = Object.freeze(['numbers, early multiplication, time and measures', 'tables 6 to 9, fractions and perimeter', 'big numbers, decimals, area and angles',
-  'percentages, ratio, rate and averages', 'speed, simple algebra and percentage change', 'problem-solving heuristics']);
+export const NAV_TOPIC = Object.freeze(['adding, told in stories', 'taking away, told in stories', 'times tables in stories', 'sharing and grouping in stories',
+  'fractions of real things', 'fractions with different bottoms, in stories']);
 export function styleLabel({ track, level, tier }) {
   const diff = `difficulty ${tier} of 5`;
   if (track === 'nav') return `Word problems · Sector ${LEVELS[level]?.id || '?'} (${NAV_TOPIC[level] || 'mixed topics'}) · ${diff}`;

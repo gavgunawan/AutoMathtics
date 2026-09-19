@@ -188,7 +188,7 @@ test('a child\'s week from history alone: rows dated in the week only, sessions 
   assert.equal(normalizeProgress({ history: times(70, () => row('2026-09-02', [])) }).history.length, HISTORY_KEPT, 'the progress document keeps this many');
   // the lists carry words for the parent, never an id
   const mixed = buildChildReport({ history: [row('2026-09-01', [...right(11, 40, 3, 2), ...wrongIn(3, 3, 2), ...times(5, () => ans('nav', 3, 3, 90, true))])], levels: { engine: { level: 3, paper: 41 } }, week });
-  assert.deepEqual(mixed.trouble.map((s) => s.label), ['Division · difficulty 2 of 5']); assert.deepEqual(mixed.slow.map((s) => s.label), ['Word problems · Sector D (percentages, ratio, rate and averages) · difficulty 3 of 5']);
+  assert.deepEqual(mixed.trouble.map((s) => s.label), ['Division · difficulty 2 of 5']); assert.deepEqual(mixed.slow.map((s) => s.label), ['Word problems · Sector D (sharing and grouping in stories) · difficulty 3 of 5']);
   assert.deepEqual(mixed.focusStyles.map((w) => [w.key, w.cls, w.label]), [['engine:3:2', 'trouble', 'Division · difficulty 2 of 5']], 'the scan focus is Engine only');
 });
 
@@ -239,7 +239,7 @@ test('style words: the operation (by tier in the fraction sectors) or the word-p
   assert.equal(styleLabel({ track: 'engine', level: 0, tier: 1 }), 'Addition · difficulty 1 of 5'); assert.equal(styleLabel({ track: 'engine', level: 3, tier: 5 }), 'Division · difficulty 5 of 5');
   assert.equal(styleLabel({ track: 'engine', level: 4, tier: 1 }), 'Simplifying fractions · difficulty 1 of 5'); assert.equal(styleLabel({ track: 'engine', level: 4, tier: 3 }), 'Subtracting fractions · difficulty 3 of 5');
   assert.equal(styleLabel({ track: 'engine', level: 5, tier: 4 }), 'Dividing fractions · difficulty 4 of 5'); assert.equal(styleLabel({ track: 'engine', level: 5, tier: 5 }), 'Mixed fraction questions · difficulty 5 of 5');
-  assert.equal(styleLabel({ track: 'nav', level: 0, tier: 2 }), 'Word problems · Sector A (numbers, early multiplication, time and measures) · difficulty 2 of 5');
+  assert.equal(styleLabel({ track: 'nav', level: 0, tier: 2 }), 'Word problems · Sector A (adding, told in stories) · difficulty 2 of 5');
   assert.equal(NAV_TOPIC.length, NAV_TOPICS.length); assert.equal(NAV_TOPIC.length, LEVELS.length);
   for (let level = 0; level < LEVELS.length; level++) for (let tier = 1; tier <= 5; tier++) for (const track of ['engine', 'nav']) assert.doesNotMatch(styleLabel({ track, level, tier }), /undefined|null|\?/);
 });

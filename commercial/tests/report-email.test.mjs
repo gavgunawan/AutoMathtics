@@ -31,7 +31,7 @@ function links(d) {
 test('the subject names who played and how many sessions were started and finished; each child\'s section says what went right and fast, right but slow, and wrong again and again', () => {
   const d = family(), r = renderReport(d, links(d));
   assert.equal(r.subject, 'Allison and Geralt this week: 5 sessions started, 5 finished'); assert.equal(subjectFor(d), r.subject);
-  for (const s of ['✅ Right and fast', 'Division · difficulty 3 of 5 — 50 of 50 right, using about 30% of the time allowed', 'Word problems · Sector D (percentages, ratio, rate and averages) · difficulty 3 of 5 — 15 of 15 right, using about 40% of the time allowed',
+  for (const s of ['✅ Right and fast', 'Division · difficulty 3 of 5 — 50 of 50 right, using about 30% of the time allowed', 'Word problems · Sector D (sharing and grouping in stories) · difficulty 3 of 5 — 15 of 15 right, using about 40% of the time allowed',
     '⚠️ Wrong again and again', 'Division · difficulty 4 of 5 — wrong 8 times out of 20 (3 ran out of time)',
     '🐢 Right but slow', 'Subtracting fractions · difficulty 3 of 5 — 10 of 12 right, but using about 90% of the time allowed', 'Adding fractions · difficulty 2 of 5 — 8 of 8 right, but using about 85% of the time allowed',
     '3 sessions started · 3 finished · 3 passed (15 papers) · 65 questions answered · 100% right · 36 minutes', '2 sessions started · 2 finished · 40 questions answered · 75% right · 24 minutes',
