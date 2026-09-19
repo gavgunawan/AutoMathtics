@@ -114,7 +114,7 @@ const newOp = () => {
 const fractions = () => {
   const kind = ri(1, 3), [w] = names(1);
   if (kind === 1) { const [f1, f2, mult, rem] = pick([['a third', 'a quarter', 2, 'half'], ['a quarter', 'a third', 2, 'half'], ['a fifth', 'half', 5, 'two fifths'], ['half', 'a third', 3, 'a third']]); const c = mult === 5 ? ri(3, 12) * 2 : ri(4, 40); const first = mult === 5 ? (c * 5) / 2 : c * mult; return int('fractions', `${w} spent ${f1} of ${w}'s money on a book, then ${f2} of the remainder on a pen, and had ${money(c)} left. How much money did ${w} have at first (in dollars)?`, first, { read: `${w} spent ${f1} of the money on a book, then ${f2} of the remainder on a pen, and had ${c} dollars left; ${rem} was left. How much at first?` }); }
-  if (kind === 2) { const fs = shuffle([[2, 3], [3, 5], [5, 8], [7, 12], [4, 7], [5, 9], [3, 4], [7, 10]]).slice(0, 4), best = fs.reduce((a, b) => (b[0] * a[1] > a[0] * b[1] ? b : a)); return mcOnly('fractions', 'Which fraction is the largest?', `${best[0]}/${best[1]}`, fs.filter((f) => f !== best).map((f) => `${f[0]}/${f[1]}`)); }
+  if (kind === 2) { const fs = shuffle([[2, 3], [3, 5], [5, 8], [7, 12], [4, 7], [5, 9], [3, 4], [7, 10], [4, 5], [5, 6], [7, 8], [9, 10], [11, 12]]).slice(0, 4), best = fs.reduce((a, b) => (b[0] * a[1] > a[0] * b[1] ? b : a)); return mcOnly('fractions', 'Which fraction is the largest?', `${best[0]}/${best[1]}`, fs.filter((f) => f !== best).map((f) => `${f[0]}/${f[1]}`)); }
   const d = pick([3, 4, 5, 6, 8]), n = ri(1, d - 1), whole = d * ri(3, 12); return int('fractions', `What is ${n}/${d} of ${whole}?`, (whole / d) * n);
 };
 const primes = () => {

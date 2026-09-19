@@ -89,7 +89,7 @@ export function buildHeat(shape, pool, year, opts = {}) {
   for (const slot of shape) {
     const fits = pool.filter((c) => !c.sections || c.sections.includes(slot.section));
     let q = null;
-    for (let t = 0; t < 40 && !q; t++) {
+    for (let t = 0; t < 120 && !q; t++) { // a slot whose kinds mostly answer in the other style needs many draws before it is a hole
       const fresh = fits.filter((c) => !used.has(c.cat)), c = pick(fresh.length ? fresh : fits);
       const s = c.gen(year); if (!s) continue;
       if (slot.kind === 'sa' && (s.mcOnly || !s.answer)) continue;
