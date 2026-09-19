@@ -69,7 +69,7 @@ test('every figure a moon question carries is one the client can draw: bars, pie
 });
 // a fact question (edges of a cube, the next triangular number) has one answer by nature; every other wording must move
 const FIXED = new Set(['spatial visualisation', 'shapes', 'odd and even numbers', 'systematic listing', 'number patterns', 'counting figures', 'shortest path', 'probability',
-  'geometry · shapes and solids', 'geometry · counting figures', 'arithmetic · smart calculation', 'logical thinking · guessing a number', 'geometry · shapes', 'geometry · symmetry', 'pattern and algebra · shape patterns', 'pattern and algebra · number patterns', 'combinatorics · routing', 'combinatorics · forming numbers', 'geometry · angles', 'truth and lies', 'probability · fractions']);
+  'geometry · shapes and solids', 'geometry · counting figures', 'arithmetic · smart calculation', 'logical thinking · guessing a number', 'geometry · shapes', 'geometry · symmetry', 'pattern and algebra · shape patterns', 'pattern and algebra · number patterns', 'combinatorics · routing', 'combinatorics · forming numbers', 'geometry · angles', 'truth and lies', 'probability · fractions', 'counting · letters']);
 test('no moon wording (a fact question aside) keeps the same right answer every time', () => {
   const seen = new Map();
   for (const { m, y, qs } of heats(40)) for (const q of qs) {
