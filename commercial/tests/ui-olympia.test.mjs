@@ -35,8 +35,8 @@ test('the home: a third wallet tile of Olyminerals and the Gateway jump under th
   for (const name of ['SEA-Moon', 'US-Moon', 'SG-Moon', 'T-Moon', 'HK-Moon', 'BKK-Moon', 'PHI-Moon']) assert.ok(text(h).includes(name), name);
   assert.ok(text(h).includes('modelled on SEAMO') && text(h).includes('not affiliated') && text(h).includes('Paper B') && text(h).includes('Grade 3'));
   const visits = h.nodes('BUTTON').filter((b) => /^.+ Visit .+-Moon ▶$/.test(b.textContent)).map((b) => b.textContent);
-  assert.deepEqual(visits, ['🌊 Visit SEA-Moon ▶', '🦅 Visit US-Moon ▶', '🦁 Visit SG-Moon ▶', '🏮 Visit T-Moon ▶', '🐉 Visit HK-Moon ▶', '🐘 Visit BKK-Moon ▶', '🌴 Visit PHI-Moon ▶'], 'Year 3: all seven moons');
-  assert.ok(!text(h).includes('🔒'), 'nothing locked for a Year 3 child');
+  assert.deepEqual(visits, ['🌊 Visit SEA-Moon ▶', '🦅 Visit US-Moon ▶', '🦁 Visit SG-Moon ▶', '🏮 Visit T-Moon ▶', '🐉 Visit HK-Moon ▶', '🐘 Visit BKK-Moon ▶', '🌴 Visit PHI-Moon ▶'], 'Year 3: the seven moons open at Year 3');
+  assert.ok(text(h).includes('DC-Moon') && text(h).includes('🔒 opens at Year 4'), 'DC-Moon, the AMC 8, waits for Year 4');
   await h.click('What does it ask?'); assert.ok(text(h).includes('Paper A · Years 1–2'), 'the syllabus lines under a tap');
   await h.click('Back'); assert.ok(h.nodes('BUTTON').some((b) => b.textContent === '🪐 Gateway jump'));
 });
