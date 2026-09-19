@@ -48,6 +48,8 @@ jobs:
       EMAIL_FROM: AutoMathtics <control.tower@automathtics.net>
       WAITLIST_FROM: AutoMathtics <no-reply@automathtics.net>
       WAITLIST_REPLY_TO: support@automathtics.net
+      # the tutor's month in dollars (DEPLOY_V3.md 5d): a repository variable, empty until the owner names the figure
+      TUTOR_MONTHLY_USD: ${{ vars.TUTOR_MONTHLY_USD }}
       # The project's own host, which every link and email carries: automathtics.net moved to the live project at the cutover
       # (DEPLOY_V3.md: The cutover). The firebaseapp.com host keeps taking forms from the devices that opened the app there.
       APP_ORIGIN: https://automathtics-v3-staging.web.app
@@ -115,6 +117,8 @@ jobs:
       APP_ORIGIN: https://automathtics.net
       APP_ALSO_ORIGINS: https://${{ vars.LIVE_PROJECT_ID }}.web.app,https://${{ vars.LIVE_PROJECT_ID }}.firebaseapp.com
       WAITLIST_SHEET_ID: 1vceAjJRQQYa1u3Z0okf7Tt3AOsZVBWui5Xvav985dNQ
+      # the tutor's month in dollars on the live service (DEPLOY_V3.md 5d): LIVE_TUTOR_MONTHLY_USD, empty until the owner names the figure
+      TUTOR_MONTHLY_USD: ${{ vars.LIVE_TUTOR_MONTHLY_USD }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
