@@ -1,8 +1,9 @@
 // 🌴 PHI-MOON — practice modelled on PhIMO (the Philippine International Mathematical Olympiad, Math Olympiads Training League);
 // not affiliated. Its own family, not OCEC's: the Philippine K-12 strands — Number and Number Sense, Geometry, Pattern and
-// Algebra, Measurements, Statistics and Probability — at every grade, in a paper that ramps from ten accessible multiple-choice
-// questions through ten short answers to five hard ones (olympia-research.md §6 and the addendum). A heat is one multiple-choice
-// and one short answer from each strand, the multiple choice first, one paper per grade.
+// Algebra, Measurements, Statistics and Probability — at every grade, in a paper that ramps from ten multiple-choice questions
+// of five options with "None of the above" (2 marks) through ten short answers (3) to five hard ones (5): the 2025 heat papers,
+// 25 questions in 90 minutes, no calculator, no penalty (the source check of 20 Sep 2026). A heat is one multiple-choice and one
+// short answer from each strand, the multiple choice first — our own rotation, the real paper mixes its strands — one paper per grade.
 import { ri, pick, shuffle, sum, names, thing, int, dec, frac, mcOnly, withFigure, table, bars, buildHeat, slots, gcd, cap } from './common.mjs';
 
 const low = (y) => y <= 2, mid = (y) => y >= 3 && y <= 4;
@@ -15,7 +16,7 @@ const numberSense = (y) => {
   const kind = ri(1, 4);
   if (low(y)) { if (kind === 1) { const t = ri(1, 9), o = ri(0, 9); return int('number sense · place value', `What number has ${t} tens and ${o} ones?`, 10 * t + o); } if (kind === 2) { const xs = shuffle([ri(10, 99), ri(10, 99), ri(10, 99), ri(10, 99)]); if (new Set(xs).size < 4) return null; return mcOnly('number sense · comparing', `Which of these numbers is the greatest: ${xs.join(', ')}?`, Math.max(...xs), xs.filter((x) => x !== Math.max(...xs))); } if (kind === 3) { const a = ri(3, 12), b = ri(2, 20 - a); return int('number sense · addition', `${a} + ${b} = ?`, a + b); } const n = ri(11, 98); return int('number sense · counting on', `What number is 10 more than ${n}?`, n + 10); }
   if (mid(y)) { if (kind === 1) { const n = ri(1000, 9999), to = pick([10, 100, 1000]); return int('number sense · rounding', `Round ${n} to the nearest ${to}.`, Math.round(n / to) * to); } if (kind === 2) { const d = pick([3, 4, 5, 6, 8]), n = d * ri(3, 12), k = ri(1, d - 1); return int('number sense · fractions', `What is ${k}/${d} of ${n}?`, (n / d) * k); } if (kind === 3) { const a = ri(12, 99), b = ri(3, 9); return int('number sense · multiplication', `${a} × ${b} = ?`, a * b); } const a = ri(200, 999), b = ri(100, a - 50); return int('number sense · subtraction', `${a} − ${b} = ?`, a - b); }
-  if (kind === 1) { const d = pick([4, 5, 10, 20, 25, 50]), n = ri(1, d - 1); return dec('number sense · decimals', `Write ${n}/${d} as a decimal.`, n / d); } // denominators whose decimals stop within two places (an eighth would not)
+  if (kind === 1) { const d = pick([4, 5, 10, 20, 25, 50]), n = ri(1, d - 1); if (gcd(n, d) !== 1) return null; return dec('number sense · decimals', `Write ${n}/${d} as a decimal.`, n / d); } // denominators whose decimals stop within two places (an eighth would not)
   if (kind === 2) { const fs = shuffle([[2, 3], [3, 5], [5, 8], [7, 12], [4, 7], [3, 4], [5, 6], [7, 8], [9, 10], [11, 12], [4, 5], [5, 9]]).slice(0, 4), best = fs.reduce((a, b) => (b[0] * a[1] > a[0] * b[1] ? b : a)); return mcOnly('number sense · fractions', 'Which fraction is the greatest?', `${best[0]}/${best[1]}`, fs.filter((f) => f !== best).map((f) => `${f[0]}/${f[1]}`)); } // a long list, so the greatest is not the same one draw after draw
   if (kind === 3) { const d1 = pick([3, 4, 6]), d2 = pick([4, 6, 8]), n1 = 1, n2 = ri(1, d2 - 1); const n = n1 * d2 + n2 * d1, d = d1 * d2; if (d1 === d2 || n >= d) return null; return frac('number sense · fractions', `What is 1/${d1} + ${n2}/${d2}? Give the answer in its simplest form.`, n, d); }
   const p = pick([15, 20, 25, 30, 40, 60, 75]), t = pick([40, 60, 80, 120, 200]); if ((t * p) % 100) return null; return int('number sense · percentages', `What is ${p}% of ${t}?`, (t * p) / 100);
@@ -27,7 +28,7 @@ const geometry = (y) => {
   if (mid(y)) { if (kind === 1) { const l = ri(4, 20), w = ri(2, l - 1); return int('geometry · perimeter', `A rectangle is ${l} cm long and ${w} cm wide. What is its perimeter, in cm?`, 2 * (l + w)); } if (kind === 2) { const a = ri(30, 80), b = ri(20, 170 - a); return int('geometry · angles', `Two angles of a triangle are ${a}° and ${b}°. What is the third angle, in degrees?`, 180 - a - b); } const c = pick([['acute', 'less than 90°'], ['obtuse', 'more than 90° but less than 180°'], ['right', 'exactly 90°']]); return mcOnly('geometry · angles', `An angle of ${c[0] === 'acute' ? ri(20, 80) : c[0] === 'obtuse' ? ri(100, 170) : 90}° is called…`, `${c[0]} angle`, ['acute angle', 'obtuse angle', 'right angle', 'straight angle'].filter((x) => x !== `${c[0]} angle`)); }
   if (kind === 1) { const r = pick([7, 14, 21]); return int('geometry · circles', `Taking π as 22/7, what is the area of a circle of radius ${r} cm, in cm²?`, (22 / 7) * r * r); }
   if (kind === 2) { const l = ri(3, 10), w = ri(2, 8), h = ri(2, 6); return int('geometry · volume', `A box is ${l} cm by ${w} cm by ${h} cm. What is its volume, in cm³?`, l * w * h); }
-  const a = ri(50, 120), b = ri(50, 120), c = ri(40, 359 - a - b - 30); return int('geometry · angles', `Three angles of a quadrilateral are ${a}°, ${b}° and ${c}°. What is the fourth angle, in degrees?`, 360 - a - b - c);
+  const a = ri(50, 120), b = ri(50, 120), c = ri(40, 359 - a - b - 30); if (360 - a - b - c >= 180) return null; return int('geometry · angles', `Three angles of a quadrilateral are ${a}°, ${b}° and ${c}°. What is the fourth angle, in degrees?`, 360 - a - b - c);
 };
 // ---- Pattern and Algebra ----
 const pattern = (y) => {
@@ -36,7 +37,7 @@ const pattern = (y) => {
   if (mid(y)) { if (kind === 1) { const s = ri(2, 20), k = ri(3, 9), n = ri(10, 20); return int('pattern and algebra · number patterns', `${s}, ${s + k}, ${s + 2 * k}, ${s + 3 * k}, … What is the ${n}th number in the pattern?`, s + (n - 1) * k); } if (kind === 2) { const a = ri(2, 9), x = ri(2, 12); return int('pattern and algebra · missing number', `${a} × ▢ = ${a * x}. What number goes in the box?`, x, { read: `${a} times what number makes ${a * x}?` }); } const k = ri(2, 4), n = ri(5, 10); return int('pattern and algebra · growing patterns', `Figure 1 is made of ${k + 1} sticks, Figure 2 of ${2 * k + 1}, Figure 3 of ${3 * k + 1}, and each figure has ${k} more sticks than the one before. How many sticks are in Figure ${n}?`, n * k + 1); }
   if (kind === 1) { const a = ri(2, 9), x = ri(2, 20), b = ri(1, 30); return int('pattern and algebra · equations', `If ${a}x + ${b} = ${a * x + b}, what is x?`, x); }
   if (kind === 2) { const n = ri(6, 15); return int('pattern and algebra · number patterns', `1, 4, 9, 16, 25, … What is the ${n}th number in the pattern?`, n * n); }
-  const x = ri(3, 30), k = ri(2, 6), d = ri(1, 20); return int('pattern and algebra · equations', `A number is multiplied by ${k}, then ${d} is subtracted, and the result is ${k * x - d}. What is the number?`, x);
+  const x = ri(3, 30), k = ri(2, 6), d = ri(1, 20); if (k * x - d <= 0) return null; return int('pattern and algebra · equations', `A number is multiplied by ${k}, then ${d} is subtracted, and the result is ${k * x - d}. What is the number?`, x);
 };
 // ---- Measurements ----
 const measurement = (y) => {
@@ -50,7 +51,7 @@ const measurement = (y) => {
 // ---- Statistics and Probability ----
 const statistics = (y) => {
   const kind = ri(1, 3), kids = shuffle(['Ana', 'Ben', 'Carlo', 'Dina', 'Elsa']).slice(0, 4), vals = kids.map(() => ri(1, low(y) ? 9 : 30)), what = pick(['books read', 'stickers', 'goals']);
-  const hi = vals.indexOf(Math.max(...vals)), lo = vals.indexOf(Math.min(...vals)); if (hi === lo) return null;
+  const hi = vals.indexOf(Math.max(...vals)), lo = vals.indexOf(Math.min(...vals)); if (hi === lo || new Set(vals).size !== vals.length) return null; // a tie at the top would mark one child right and the other wrong
   const f = low(y) ? table(cap(what), ['Name', cap(what)], kids.map((n, i) => [n, '⭐'.repeat(vals[i])])) : bars(cap(what), null, kids.map((n, i) => [n, vals[i]]));
   const shows = `The ${low(y) ? 'picture graph' : 'bar graph'} shows the ${what} of four children${low(y) ? ' (each ⭐ is one)' : ''}.`;
   if (kind === 1) return withFigure(mcOnly('statistics · graphs', `${shows} Who has the most?`, kids[hi], kids.filter((_, i) => i !== hi)), f);
@@ -76,7 +77,7 @@ const STRANDS = [['NS', 'number sense', numberSense], ['GE', 'geometry', geometr
 const pool = (y) => STRANDS.map(([code, name, gen]) => ({ cat: name, gen, sections: [code] }));
 // one multiple-choice and one short answer from each strand, the five multiple-choice first, as the real paper ramps
 const SHAPE = slots([['NS', 'mc', 1], ['GE', 'mc', 1], ['PA', 'mc', 1], ['ME', 'mc', 1], ['SP', 'mc', 1], ['NS', 'sa', 1], ['GE', 'sa', 1], ['PA', 'sa', 1], ['ME', 'sa', 1], ['SP', 'sa', 1]]);
-export const heat = (year) => buildHeat(SHAPE, pool(year), year, { options: 4 });
+export const heat = (year) => buildHeat(SHAPE, pool(year), year, { options: 5, none: true }); // five choices with "None of the above", as the 2025 paper's Part 1 (the source check of 20 Sep 2026)
 export const TOPICS = [
   { band: 'Grades 1–2', lines: ['number sense: tens and ones, the greatest number, adding within 20', 'geometry and patterns: sides and corners, lines of symmetry, what comes next', 'measurement: longest and shortest, o\'clock, lengths added', 'statistics and probability: picture graphs, which colour is more likely'] },
   { band: 'Grades 3–4', lines: ['number sense: rounding, fractions of a number, multiplying and subtracting', 'geometry: perimeter, angles in a triangle, kinds of angles', 'patterns: the n-th number, missing numbers, growing figures', 'measurement and statistics: metres and centimetres, kilograms, bar graphs and the mean'] },

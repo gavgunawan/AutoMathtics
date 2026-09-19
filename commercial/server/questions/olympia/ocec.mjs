@@ -1,9 +1,11 @@
 // 🐉🐘 The OCEC family — what HK-Moon (HKIMO) and BKK-Moon (TIMO) share (olympia-research.md §5, §7 and the addendum). The real
 // heats are twins: five categories — Logical Thinking, Arithmetic, Number Theory, Geometry, Combinatorics — five short answers
-// each, four marks each, ninety minutes, no calculators, and at primary the answer is essentially always a whole number. What
-// tells them apart is emphasis: HKIMO leans on number theory and counting, TIMO on logic set-pieces (chicken-rabbit, periodic
-// problems, speed) and arithmetic tricks. So the categories live here once, every kind tagged, and each moon's heat prefers its
-// own tags: two questions a category, all typed answers, in the syllabus's own progression by primary year.
+// each, four marks each, ninety minutes, no calculators, and at primary the answer is mostly a whole number (a few fractions,
+// and at P1–P2 the odd word answer, occur on the real papers). The official sample papers are one template with the numbers
+// changed and the 2025 heat papers spread evenly over the five areas, so the "HKIMO leans on number theory, TIMO on logic"
+// split below is OUR differentiation, not the competitions' (the source check of 20 Sep 2026). The categories live here once,
+// every kind tagged, and each moon's heat prefers its own tags: two questions a category, all typed answers, in the syllabus's
+// own progression by primary year.
 import { ri, pick, shuffle, sum, names, thing, int, withFigure, grid, buildHeat, slots, isPrime, factorsOf, digitsOf, gcd, lcm, ord } from './common.mjs';
 
 const choose = (n, k) => { let r = 1; for (let i = 1; i <= k; i++) r = (r * (n - k + i)) / i; return Math.round(r); };
@@ -21,7 +23,8 @@ const balance = (y) => {
 const guessTwoDigit = () => { const t = ri(3, 9), u = ri(0, t - 1); return int('logical thinking · guessing a number', `A two-digit number has digits that add up to ${t + u}. Its tens digit is ${t - u} more than its ones digit. What is the number?`, 10 * t + u); };
 const guessFourDigit = () => {
   const h = pick([2, 3]), th = 2 * h, t = 3 * h, o = t - 5;
-  return int('logical thinking · guessing a number', `In a four-digit number, the thousands digit is twice the hundreds digit, the tens digit is the sum of the thousands and hundreds digits, and the ones digit is 5 less than the tens digit. What is the number?`, 1000 * th + 100 * h + 10 * t + o);
+  // the digit sum pins the number: without it 4261 and 6394 both fit the clues (the source check of 20 Sep 2026)
+  return int('logical thinking · guessing a number', `In a four-digit number, the thousands digit is twice the hundreds digit, the tens digit is the sum of the thousands and hundreds digits, the ones digit is 5 less than the tens digit, and the four digits add up to ${th + h + t + o}. What is the number?`, 1000 * th + 100 * h + 10 * t + o);
 };
 const periodic = (y) => {
   const p = ri(3, y <= 3 ? 4 : 6), cs = shuffle(COLOURS).slice(0, p), counts = cs.map(() => ri(1, y <= 3 ? 2 : 3)), cycle = cs.flatMap((c, i) => Array(counts[i]).fill(c)), L = cycle.length, n = ri(y <= 3 ? 15 : 40, y <= 3 ? 40 : 120);
@@ -45,12 +48,12 @@ const speed = (y) => {
   const kind = ri(1, 3);
   if (kind === 1) { const v = pick([40, 50, 60, 80, 90]), t = ri(2, 5); return int('logical thinking · speed', `A train travels at ${v} km/h. How far does it go in ${t} hours, in km?`, v * t); }
   if (kind === 2) { const v1 = pick([40, 50, 60, 80]), v2 = pick([30, 40, 70, 90]), t = ri(2, 7); return int('logical thinking · speed', `Two towns are ${(v1 + v2) * t} km apart. A car leaves one at ${v1} km/h and a van leaves the other at ${v2} km/h at the same time, driving toward each other. After how many hours do they meet?`, t); }
-  const v = pick([4, 5, 6]), t = ri(2, 4), back = pick([2, 3]), dist = v * t; if (dist % back) return null;
+  const v = pick([4, 5, 6]), t = ri(2, 4), back = pick([2, 3]), dist = v * t; if (dist % back || t <= back) return null; // cycling back must be faster than walking there
   return int('logical thinking · speed', `${names(1)[0]} walks to a lake at ${v} km/h in ${t} hours and cycles back the same way in ${back} hours. What is the cycling speed, in km/h?`, dist / back);
 };
 const ages = (y) => {
   const t = pick([3, 4, 5, 6, 8, 9, 10, 12, 15]), [k, m] = pick([[3, 2], [4, 2], [4, 3], [5, 3], [5, 2], [6, 4], [7, 4]]);
-  const x = (t * (m - 1)) / (k - m); if (!Number.isInteger(x)) return null; // now: child x, mother kx; in t years mother is m times
+  const x = (t * (m - 1)) / (k - m); if (!Number.isInteger(x) || k * x < x + 18 || k * x > x + 45) return null; // now: child x, mother kx; in t years mother is m times — and a mother 18 to 45 years older, not 5 or 120 (the source check)
   return int('logical thinking · ages', `A mother is ${k} times as old as her ${pick(['son', 'daughter'])}. In ${t} years she will be ${m} times as old. How old is the child now?`, x);
 };
 const daysBetween = (y) => { const months = [['March', 31], ['April', 30], ['May', 31], ['June', 30], ['July', 31], ['August', 31], ['September', 30], ['October', 31]]; const i = ri(0, months.length - 2), d1 = ri(1, 25), d2 = ri(1, 28); const days = months[i][1] - d1 + d2; return int('logical thinking · dates', `How many days are there from ${d1} ${months[i][0]} to ${d2} ${months[i + 1][0]} of the same year, counting both days?`, days + 1); };
@@ -71,7 +74,7 @@ const multiplyTrick = () => { const kind = ri(1, 3); if (kind === 1) { const a =
 const geometricSum = () => { const kind = ri(1, 2); if (kind === 1) { const n = ri(6, 10); return int('arithmetic · sum of a geometric sequence', `1 + 2 + 4 + 8 + … + ${2 ** n} = ?`, 2 ** (n + 1) - 1); } const n = ri(4, 6); return int('arithmetic · sum of a geometric sequence', `1 + 3 + 9 + … + ${3 ** n} = ?`, (3 ** (n + 1) - 1) / 2); };
 const squaresSum = () => { const n = ri(5, 12); return int('arithmetic · sum of squares', `1² + 2² + 3² + … + ${n}² = ?`, (n * (n + 1) * (2 * n + 1)) / 6); };
 const decimalTrick = () => { const kind = ri(1, 2); if (kind === 1) { const a = ri(13, 99); return int('arithmetic · decimals', `0.25 × ${a} × 4 = ?`, a); } const a = ri(2, 9); return int('arithmetic · decimals', `0.5 × ${a * 2} × 12.5 × 8 = ?`, a * 100); };
-const fractionChain = () => { const n = ri(3, 6), num = 2 ** n - 1, den = 2 ** n; return int('arithmetic · fractions', `1/2 + 1/4 + 1/8 + … + 1/${den} is a fraction a/b in its simplest form. What is a + b?`, num + den); };
+const fractionChain = () => { const n = ri(3, 6), num = 2 ** n - 1, den = 2 ** n, terms = n <= 4 ? Array.from({ length: n }, (_, i) => `1/${2 ** (i + 1)}`).join(' + ') : `1/2 + 1/4 + 1/8 + … + 1/${den}`; return int('arithmetic · fractions', `${terms} is a fraction a/b in its simplest form. What is a + b?`, num + den); };
 const missingDigit = (y) => { const A = ri(1, 9), a = ri(0, 9), b = ri(10, y <= 2 ? 50 : 89), s = 10 * A + a + b; return int('arithmetic · missing digit', `In the sum ▢${a} + ${b} = ${s}, what digit is ▢?`, A, { read: `A two-digit number with ones digit ${a} plus ${b} makes ${s}. What is its tens digit?` }); };
 // ---- Number Theory ----
 const evenOddCount = (y) => { const a = ri(1, 20), n = ri(10, y <= 2 ? 30 : 60), b = a + n, even = Math.random() < 0.5; let c = 0; for (let k = a; k <= b; k++) if ((k % 2 === 0) === even) c++; return int('number theory · odd and even', `How many ${even ? 'even' : 'odd'} numbers are there from ${a} to ${b}, counting both?`, c); };
@@ -82,8 +85,8 @@ const divisibility = (y) => { const kind = ri(1, 3); if (kind === 1) { const d =
 const factorsCount = () => { const n = pick([36, 48, 60, 72, 84, 90, 96, 100, 120, 144, 180, 200, 240, 360, 720]); return int('number theory · number of factors', `How many positive factors does ${n} have?`, factorsOf(n).length); };
 const factorsSum = () => { const n = pick([12, 18, 20, 24, 28, 30, 36, 40, 45, 48]); return int('number theory · sum of factors', `What is the sum of all the positive factors of ${n}?`, sum(factorsOf(n))); };
 const unitDigit = () => { const base = pick([2, 3, 4, 7, 8, 9]), cyc = { 2: [2, 4, 8, 6], 3: [3, 9, 7, 1], 4: [4, 6], 7: [7, 9, 3, 1], 8: [8, 4, 2, 6], 9: [9, 1] }[base], n = ri(10, 99); return int('number theory · unit digit', `What is the ones digit of ${base} to the power ${n}, that is ${base} multiplied by itself ${n} times?`, cyc[(n - 1) % cyc.length]); };
-const remainders = () => { const a = pick([3, 4, 5]), b = pick([5, 7]); if (a === b) return null; const ra = ri(1, a - 1), rb = ri(1, b - 1); let N = 1; while (N % a !== ra || N % b !== rb) N++; return int('number theory · remainders', `A number leaves a remainder of ${ra} when divided by ${a}, and a remainder of ${rb} when divided by ${b}. What is the smallest such number?`, N); };
-const digitSumProperty = () => { const s = ri(12, 24), n = pick([3, 4]); let k = 10 ** (n - 1); while (sum(digitsOf(k)) !== s) k++; return int('number theory · digits', `What is the smallest ${n}-digit number whose digits add up to ${s}?`, k); };
+const remainders = () => { const a = pick([3, 4, 5]), b = pick([5, 7]); if (a === b) return null; const ra = ri(1, a - 1), rb = ri(1, b - 1); if (ra === rb) return null; let N = 1; while (N % a !== ra || N % b !== rb) N++; if (N <= b) return null; return int('number theory · remainders', `A number leaves a remainder of ${ra} when divided by ${a}, and a remainder of ${rb} when divided by ${b}. What is the smallest such number?`, N); };
+const digitSumProperty = () => { const s = ri(12, 24), n = pick([3, 4]); let k = 10 ** (n - 1); while (sum(digitsOf(k)) !== s) k++; return int('number theory · digit sums', `What is the smallest ${n}-digit number whose digits add up to ${s}?`, k); };
 // ---- Geometry ----
 const shapesQ = () => { const c = pick([['How many sides does a hexagon have?', 6], ['How many corners does an octagon have?', 8], ['How many sides do a triangle and a pentagon have altogether?', 8], ['How many corners do two squares and a triangle have altogether?', 11], ['How many faces does a cube have?', 6], ['How many edges does a cube have?', 12], ['How many vertices does a square-based pyramid have?', 5], ['How many edges does a triangular prism have?', 9], ['How many faces does a cuboid have?', 6]]); return int('geometry · shapes and solids', c[0], c[1]); };
 const countSquares = (y) => { const n = y <= 2 ? 2 : y <= 4 ? 3 : pick([4, 5]); if (y >= 5 && Math.random() < 0.5) { const r = ri(2, 3), c = ri(3, 4); return withFigure(int('geometry · counting figures', `How many rectangles of every size, squares included, are there in this ${r} by ${c} grid?`, choose(r + 1, 2) * choose(c + 1, 2)), grid('Count the rectangles', r, c)); } return withFigure(int('geometry · counting figures', `How many squares of every size are there in this ${n} by ${n} grid?`, sum(Array.from({ length: n }, (_, i) => (i + 1) * (i + 1)))), grid('Count the squares', n, n)); };

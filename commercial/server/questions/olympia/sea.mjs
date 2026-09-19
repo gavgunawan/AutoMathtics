@@ -1,8 +1,9 @@
 // 🌊 SEA-MOON — practice modelled on SEAMO (the Southeast Asian Mathematical Olympiad, Terry Chew Institute, Singapore); not
 // affiliated. The real paper's tell is its heuristics named as topics — working backwards, queuing, pigeonhole, shortest path,
 // number patterns, sums of sequences — and low reading with high structure. Bands as SEAMO's: Paper A = Years 1–2, B = 3–4,
-// C = 5–6. A heat is eight multiple-choice and two short-answer questions; Paper C's choices carry the real paper's fifth
-// option, "None of the above", which is sometimes the right one (olympia-research.md §1).
+// C = 5–6. A heat is eight multiple-choice and two short-answer questions; every paper's choices carry the real paper's fifth
+// option, "None of the above", which is sometimes the right one: the 2018 Papers A, B and C all have it, only the official
+// sample Paper A shows four options (the source check of 20 Sep 2026, against seamo-official.org's samples and syllabi).
 import { ri, pick, shuffle, sum, names, thing, money, int, frac, mcOnly, withFigure, grid, bars, buildHeat, slots, isPrime, factorsOf, digitsOf, cap, ord } from './common.mjs';
 
 const band = (y) => (y <= 2 ? 1 : y <= 4 ? 2 : 3);
@@ -66,7 +67,8 @@ const time = (y) => {
   if (b === 1) { if (kind === 1) { const h = ri(1, 9), d = ri(1, 3); return int('time', `A film starts at ${hm(h, 0)} and ends at ${hm(h + d, 0)}. How many hours long is it?`, d); } const h = ri(1, 9), m = pick([0, 30]), d = ri(1, 3); const end = hm(h + d, m); return mcOnly('time', `It is ${hm(h, m)} now. What time will it be in ${d} hour${d > 1 ? 's' : ''}?`, end, [hm(h + d + 1, m), hm(h + d, m === 0 ? 30 : 0), hm(h, m)]); }
   if (b === 2) { const h = ri(1, 9), m = ri(1, 11) * 5, d = ri(3, 11) * 5, e = h * 60 + m + d; if (kind === 1) return int('time', `A bus leaves at ${hm(h, m)} and arrives at ${hm(Math.floor(e / 60), e % 60)}. How many minutes does the ride take?`, d); return mcOnly('time', `A lesson starts at ${hm(h, m)} and lasts ${d} minutes. When does it end?`, hm(Math.floor(e / 60), e % 60), [hm(Math.floor((e + 10) / 60), (e + 10) % 60), hm(Math.floor((e - 5) / 60), (e - 5) % 60), hm(Math.floor((e + 60) / 60), (e + 60) % 60)]); }
   const h = ri(13, 21), m = ri(0, 11) * 5, dh = ri(1, 2), dm = ri(1, 11) * 5, e = h * 60 + m + dh * 60 + dm;
-  if (kind === 1) return mcOnly('time', `A concert starts at ${hm(h, m)} and lasts ${dh} h ${dm} min. At what time does it end (24-hour clock)?`, hm(Math.floor(e / 60), e % 60), [hm(Math.floor((e + 10) / 60), (e + 10) % 60), hm(Math.floor((e - 60) / 60), (e - 60) % 60), hm(Math.floor((e + 5) / 60), (e + 5) % 60)]);
+  const at = (mins) => { const t = ((mins % 1440) + 1440) % 1440; return hm(Math.floor(t / 60), t % 60); }; // past midnight the clock reads 0:10, never 24:10 (the source check found 24:xx in 1.4 % of these)
+  if (kind === 1) return mcOnly('time', `A concert starts at ${hm(h, m)} and lasts ${dh} h ${dm} min. At what time does it end (24-hour clock)?`, at(e), [at(e + 10), at(e - 60), at(e + 5)]);
   const days = ri(2, 6), hrs = ri(1, 23); return int('time', `How many hours are there in ${days} days and ${hrs} hours?`, days * 24 + hrs);
 };
 const squares = (y) => {
@@ -75,8 +77,9 @@ const squares = (y) => {
   const r = ri(2, 3), c = ri(3, 4); return withFigure(int('counting figures', `How many rectangles of every size (squares included) are there in this ${r} by ${c} grid?`, choose(r + 1, 2) * choose(c + 1, 2)), grid('Count the rectangles', r, c));
 };
 const shortestPath = (y) => {
-  const b = band(y), [r, c] = b === 1 ? pick([[1, 2], [2, 2], [1, 3]]) : b === 2 ? pick([[2, 3], [3, 3], [2, 4]]) : pick([[3, 4], [2, 5], [4, 4]]);
-  return withFigure(int('shortest path', `The grid has ${r} row${r > 1 ? 's' : ''} and ${c} columns of blocks. Walking along the lines only to the right or down, how many different shortest paths are there from corner A to corner B?`, choose(r + c, r)), grid('Paths from A to B', r, c, { '0,0': 'A', [`${r - 1},${c - 1}`]: 'B' }));
+  const b = band(y), [r, c] = b === 1 ? pick([[2, 2], [2, 3], [3, 2]]) : b === 2 ? pick([[3, 3], [2, 4], [3, 4]]) : pick([[4, 4], [3, 5], [4, 5]]);
+  // square to square, as the figure shows it: A and B sit in the corner squares, so the count is C(r+c−2, r−1), not the lattice-point count the old wording implied
+  return withFigure(int('shortest path', `The grid has ${r} rows and ${c} columns of squares. Moving only right or down from one square to the next, how many different shortest routes are there from square A to square B?`, choose(r + c - 2, r - 1)), grid('Routes A to B', r, c, { '0,0': 'A', [`${r - 1},${c - 1}`]: 'B' }));
 };
 const logic = (y) => {
   const b = band(y);
@@ -99,7 +102,7 @@ const digits = () => { const t = ri(3, 9), u = ri(0, t - 1); if (t === u) return
 const handshakes = (y) => { const n = band(y) === 2 ? ri(4, 7) : ri(6, 12); return int('counting', `${n} friends meet. Each shakes hands once with every other friend. How many handshakes are there?`, (n * (n - 1)) / 2); };
 const remainder = (y) => {
   const b = band(y);
-  if (b === 2 || Math.random() < 0.4) { const d = ri(4, 9), r = ri(1, d - 1), k = ri(3, 12), N = d * k + r, lo = N - ri(0, d - 2); return int('remainders', `A number between ${lo} and ${lo + d - 2} leaves a remainder of ${r} when divided by ${d}. What is the number?`, N); }
+  if (b === 2 || Math.random() < 0.4) { const d = ri(4, 9), r = ri(1, d - 1), k = ri(3, 12), N = d * k + r, lo = N - ri(0, d - 2); return int('remainders', `A whole number from ${lo} to ${lo + d - 2} leaves a remainder of ${r} when divided by ${d}. What is the number?`, N); }
   const base = pick([2, 3, 7, 9]), cyc = { 2: [2, 4, 8, 6], 3: [3, 9, 7, 1], 7: [7, 9, 3, 1], 9: [9, 1] }[base], n = ri(5, 30);
   return int('ones digit', `What is the ones digit of ${base} multiplied by itself ${n} times (${base} to the power ${n})?`, cyc[(n - 1) % cyc.length]);
 };
@@ -157,7 +160,7 @@ const POOL_C = [['working backwards', workBack], ['number patterns', pattern], [
   ['new operations', newOp], ['fractions', fractions], ['primes and factors', primes], ['average', average], ['ratio and percentage', ratioPercent], ['geometry', geometry], ['probability', probability], ['charts', chart], ['digits', digitSum]];
 const pool = (y) => (band(y) === 1 ? POOL_A : band(y) === 2 ? POOL_B : POOL_C).map(([cat, gen]) => ({ cat, gen }));
 const SHAPE = slots([['MC', 'mc', 8], ['SA', 'sa', 2]]);
-export const heat = (year) => buildHeat(SHAPE, pool(year), year, band(year) === 3 ? { options: 5, none: true } : { options: 4 });
+export const heat = (year) => buildHeat(SHAPE, pool(year), year, { options: 5, none: true }); // five options with "None of the above" on every paper, as the real ones
 export const TOPICS = [
   { band: 'Paper A · Years 1–2', lines: ['working backwards, number patterns and sums of a sequence', 'queues, pigeonholes and odd and even', 'counting squares and shortest paths on a grid', 'time, simple speed and equal groups'] },
   { band: 'Paper B · Years 3–4', lines: ['everything in Paper A with bigger numbers', 'remainders and the ones digit', 'number puzzles, handshakes and sets', 'bar charts: totals, differences, the fewest'] },

@@ -1,8 +1,9 @@
 // 🐉 HK-MOON — practice modelled on HKIMO (the Hong Kong International Mathematical Olympiad, Olympiad Champion Education
 // Centre); not affiliated. The real heat is twenty-five short answers, five from each of Logical Thinking, Arithmetic, Number
-// Theory, Geometry and Combinatorics, four marks each, whole-number answers, no calculators, one paper per grade. HKIMO's own
-// emphasis, told apart from its Thai twin, is number theory and counting: factors, unit digits, remainders, permutations and
-// combinations, inclusion-exclusion (olympia-research.md §5). The shared generators live in ocec.mjs.
+// Theory, Geometry and Combinatorics, four marks each, mostly whole-number answers, no calculators, one paper per grade. This
+// moon's cut of the shared pool leans on number theory and counting — factors, unit digits, remainders, permutations and
+// combinations, inclusion-exclusion — our own way of telling the twins apart, not the paper's (the source check of 20 Sep 2026
+// found the HKIMO and TIMO papers spread evenly). The shared generators live in ocec.mjs.
 import { ocecHeat } from './ocec.mjs';
 
 export const heat = (year) => ocecHeat(year, 'hk');

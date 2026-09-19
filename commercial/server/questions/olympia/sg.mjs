@@ -1,9 +1,12 @@
 // 🦁 SG-MOON — practice modelled on SMC (the Singapore Math Challenge, SIMCC); not affiliated. The real paper is the Singapore
 // primary syllabus almost verbatim plus "heuristics skills" at every grade: bar models, before-and-after, guess and check,
 // working backwards, remainders, making a list. Its word problems are the Singapore-standard ones that were Navigator until
-// 19 Sep 2026 (singapore.mjs, one pool per year), joined here by the heuristics. A heat is five multiple-choice and five
-// short-answer questions, brisker than the other moons (olympia-research.md §3).
-import { ri, pick, shuffle, sum, names, thing, money, int, dec, frac, mcOnly, buildHeat, slots, cap } from './common.mjs';
+// 19 Sep 2026 (singapore.mjs, one pool per year), joined here by the heuristics. The published 2023 papers (one a grade,
+// 32–45 questions in 90 minutes, no key) are almost all short answer written on an answer sheet, with a few four-option items
+// at Grades 2–4 and none at 5–6, and a fraction appears only as an option, never typed — so a heat is two multiple-choice and
+// eight short-answer questions, brisker than the other moons (2–2.8 minutes a question there; the source check of 20 Sep 2026
+// corrected olympia-research.md §3, whose "15 MC + 16 SA" matched no published paper).
+import { ri, pick, shuffle, sum, names, thing, money, int, dec, frac, mcOnly, buildHeat, slots, cap, gcd } from './common.mjs';
 import { genSingapore } from '../singapore.mjs';
 
 // a Singapore-standard word problem for the year, as a seed: the module's own choices stay its choices
@@ -12,7 +15,7 @@ const syllabus = (y) => {
     const q = genSingapore(y - 1, ri(2, 5)); if (!q || !q.display) continue;
     const s = { cat: 'syllabus word problem', text: q.display.text, read: q.read, ...(q.display.figure ? { figure: q.display.figure } : {}) };
     if (q.answer.type === 'choice') return { ...s, answer: null, right: q.display.choices[q.answer.v], decoys: q.display.choices.filter((_, i) => i !== q.answer.v), mcOnly: true };
-    return { ...s, answer: q.answer };
+    return { ...s, answer: q.answer, ...(q.answer.type === 'frac' ? { mcOnly: true } : {}) }; // a fraction is only ever an option on the real paper
   }
   return null;
 };
@@ -42,7 +45,7 @@ const remainderFrac = () => { const [w] = names(1), [f1, f2, mult] = pick([['1/3
 const gapDiff = (y) => { const small = ri(y <= 2 ? 2 : 5, y <= 2 ? 10 : y <= 4 ? 40 : 200), d = ri(2, y <= 2 ? 6 : y <= 4 ? 12 : 60); return int('sum and difference', `The sum of two numbers is ${2 * small + d} and their difference is ${d}. What is the bigger number?`, small + d); };
 const units = (y) => {
   const kind = ri(1, 3);
-  if (kind === 1) { const a = ri(2, 5), b = ri(a + 1, 9), u = ri(3, 15); return int('ratio', `The ratio of boys to girls in a club is ${a} : ${b}. There are ${u * (b - a)} more girls than boys. How many children are in the club?`, u * (a + b)); }
+  if (kind === 1) { const a = ri(2, 5), b = ri(a + 1, 9), u = ri(3, 15); if (gcd(a, b) !== 1) return null; return int('ratio', `The ratio of boys to girls in a club is ${a} : ${b}. There are ${u * (b - a)} more girls than boys. How many children are in the club?`, u * (a + b)); }
   if (kind === 2) { const t = pick([40, 60, 80, 120, 150, 200]), p = pick([10, 20, 25, 30, 40, 50, 60, 75].filter((x) => (t * x) % 100 === 0)); return int('percentage', `${p}% of the ${t} pupils in a hall wear glasses. How many pupils do not wear glasses?`, t - (t * p) / 100); }
   const price = pick([20, 40, 50, 80, 120]), off = pick([10, 20, 25, 30, 50].filter((x) => (price * x) % 100 === 0)); return int('percentage', `A shirt costs ${money(price)}. It is sold at a discount of ${off}%. What is the discount, in dollars?`, (price * off) / 100);
 };
@@ -63,18 +66,18 @@ const placeValue = (y) => {
 const timeMoney = (y) => {
   const kind = ri(1, 2);
   if (kind === 1) { const h = ri(1, 10), m = pick([0, 15, 30, 45]), d = y <= 2 ? pick([30, 60]) : pick([25, 40, 45, 70, 95]), e = h * 60 + m + d, hm = (t) => `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; return mcOnly('time', `A lesson starts at ${hm(h * 60 + m)} and lasts ${d} minutes. When does it end?`, hm(e), [hm(e + 15), hm(e - 15), hm(e + 60)]); }
-  const coins = y <= 2 ? [[50, ri(1, 4)], [20, ri(1, 4)], [10, ri(1, 5)]] : [[100, ri(1, 3)], [50, ri(1, 4)], [20, ri(1, 4)], [5, ri(1, 6)]]; const total = sum(coins.map(([v, n]) => v * n)); return dec('money', `${names(1)[0]} has ${coins.map(([v, n]) => `${n} ${v}-cent coin${n > 1 ? 's' : ''}`).join(', ').replace(/, ([^,]*)$/, ' and $1')}. How much money is that, in dollars?`, total / 100);
+  const coins = y <= 2 ? [[50, ri(1, 4)], [20, ri(1, 4)], [10, ri(1, 5)]] : [[100, ri(1, 3)], [50, ri(1, 4)], [20, ri(1, 4)], [5, ri(1, 6)]]; const total = sum(coins.map(([v, n]) => v * n)); return dec('money', `${names(1)[0]} has ${coins.map(([v, n]) => `${n} ${v === 100 ? '$1' : `${v}-cent`} coin${n > 1 ? 's' : ''}`).join(', ').replace(/, ([^,]*)$/, ' and $1')}. How much money is that, in dollars?`, total / 100);
 };
 const fractionsQ = (y) => {
   if (y <= 2) { const d = pick([2, 4]), n = d * ri(2, 6); return int('fractions', `${names(1)[0]} has ${n} ${thing()}s and gives ${d === 2 ? 'half' : 'a quarter'} of them away. How many are given away?`, n / d); }
-  if (y <= 4) { const d = pick([3, 4, 5, 6, 8]), a = ri(1, d - 2), b = ri(1, d - a - 1); return frac('fractions', `What is ${a}/${d} + ${b}/${d}? Give your answer in its simplest form.`, a + b, d); }
-  const d1 = pick([2, 3, 4]), d2 = pick([3, 4, 6]), n1 = 1, n2 = 1; if (d1 === d2) return null; const n = n1 * d2 + n2 * d1, d = d1 * d2; if (n >= d) return null; return frac('fractions', `What is 1/${d1} + 1/${d2}? Give your answer in its simplest form.`, n, d);
+  if (y <= 4) { const d = pick([3, 4, 5, 6, 8]), a = ri(1, d - 2), b = ri(1, d - a - 1); return frac('fractions', `What is ${a}/${d} + ${b}/${d}? Give your answer in its simplest form.`, a + b, d, { mcOnly: true }); } // a fraction is only ever an option on the real paper
+  const d1 = pick([2, 3, 4]), d2 = pick([3, 4, 6]), n1 = 1, n2 = 1; if (d1 === d2) return null; const n = n1 * d2 + n2 * d1, d = d1 * d2; if (n >= d) return null; return frac('fractions', `What is 1/${d1} + 1/${d2}? Give your answer in its simplest form.`, n, d, { mcOnly: true });
 };
 const graphs = (y) => syllabus(y); // the syllabus pool draws bar, pie, table and line questions of its own
 
 const POOL = (y) => [['syllabus', syllabus], ['syllabus 2', syllabus], ['listing', listing], ['before and after', beforeAfter], ['guess and check', guessCheck], ['working backwards', workBack], ['sum and difference', gapDiff], ['geometry', geometry], ['place value', placeValue], ['time and money', timeMoney], ['fractions', fractionsQ],
   ...(y >= 5 ? [['fraction of a remainder', remainderFrac], ['ratio and percentage', units]] : []), ...(y >= 3 ? [['graphs', graphs]] : [])].map(([cat, gen]) => ({ cat, gen }));
-const SHAPE = slots([['MC', 'mc', 5], ['SA', 'sa', 5]]);
+const SHAPE = slots([['MC', 'mc', 2], ['SA', 'sa', 8]]);
 export const heat = (year) => buildHeat(SHAPE, POOL(year), year, { options: 4 });
 export const TOPICS = [
   { band: 'Grades 1–2', lines: ['numbers to 100 and 1000, tens and ones, ordinal numbers', 'towers and lists, chickens and rabbits, working backwards', 'halves and quarters, coins, the time a lesson ends', 'the Singapore-standard word problems on measures and graphs'] },
