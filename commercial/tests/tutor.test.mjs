@@ -123,3 +123,17 @@ test('the model client: one call to the Messages API with the key in its header,
   await assert.rejects(bad({ system: 'S', messages: [], maxTokens: 1 }), (e) => e.status === 429);
   assert.throws(() => createModel({ apiKey: '' }));
 });
+test('config: the month\'s ceiling in dollars becomes calls at USD_PER_CALL, calls stand on their own, and a key must look like one', async () => {
+  const { config, USD_PER_CALL } = await import('../server/config.mjs');
+  const env = { APP_MODE: 'emulator', FIREBASE_PROJECT_ID: 'demo-am-foundation', APP_ORIGIN: 'http://127.0.0.1:8787', SESSION_SECRET: 'a1'.repeat(32), PIN_PEPPER: 'b2'.repeat(32),
+    FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:9099', FIRESTORE_EMULATOR_HOST: '127.0.0.1:8088', FIREBASE_WEB_API_KEY: 'k', FIREBASE_WEB_APP_ID: 'a', PAYMENT_PROVIDER: 'none' };
+  assert.deepEqual(config(env).tutor, { apiKey: null, model: 'claude-haiku-4-5-20251001', monthlyCalls: 3000, monthlyUsd: null, dailyPerChild: 12 });
+  assert.equal(config({ ...env, TUTOR_MONTHLY_USD: '6' }).tutor.monthlyCalls, Math.floor(6 / USD_PER_CALL));
+  assert.equal(config({ ...env, TUTOR_MONTHLY_USD: '6', TUTOR_MONTHLY_CALLS: '10' }).tutor.monthlyCalls, 2000, 'dollars win');
+  assert.equal(config({ ...env, TUTOR_MONTHLY_CALLS: '10', TUTOR_DAILY_PER_CHILD: '3' }).tutor.monthlyCalls, 10);
+  assert.equal(config({ ...env, TUTOR_DAILY_PER_CHILD: '3' }).tutor.dailyPerChild, 3);
+  assert.equal(config({ ...env, ANTHROPIC_API_KEY: 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz' }).tutor.apiKey, 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz');
+  assert.throws(() => config({ ...env, ANTHROPIC_API_KEY: 'not-a-key' }), /ANTHROPIC_API_KEY/);
+  assert.throws(() => config({ ...env, TUTOR_MONTHLY_USD: 'lots' }), /TUTOR_MONTHLY_USD/);
+  assert.throws(() => config({ ...env, TUTOR_MONTHLY_CALLS: '1.5' }), /TUTOR_MONTHLY_CALLS/);
+});

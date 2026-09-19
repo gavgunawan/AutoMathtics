@@ -741,9 +741,11 @@ before, with the button hidden.
 
 **Caps** (the owner's condition: the tutor must never run away with the usage). Per child a day: 12 explanations and 40 follow-up
 messages (`TUTOR_DAILY_PER_CHILD` sets the first); per question: 6 turns, 240 characters a message, about 350 tokens a reply; and
-for the whole service: `TUTOR_MONTHLY_CALLS` calls a month (default 3000; export it before deploying to change it) — at the ceiling
-the button hides for everyone until the month turns. Usage is readable in Firestore: `tutor/usage-YYYY-MM` (the month's calls) and
-`families/{f}/learning/{c}/tutor/{date}` (a child's day). At Haiku 4.5's prices 3000 calls is a few dollars a month.
+for the whole service, a month's ceiling: `TUTOR_MONTHLY_USD` in dollars (the owner's figure; a call is taken as $0.003, so $6 is
+2000 calls) or `TUTOR_MONTHLY_CALLS` in calls (default 3000, about $7.50) — export one before deploying; at the ceiling the button
+hides for everyone until the month turns. The key's own workspace spend limit in the Anthropic console (Settings → Limits) is the
+hard stop behind this one: give the tutor its own workspace and set that limit to the same figure. Usage is readable in Firestore:
+`tutor/usage-YYYY-MM` (the month's calls) and `families/{f}/learning/{c}/tutor/{date}` (a child's day).
 
 **Scope.** The prompt lets the tutor talk only about the live question and the idea it needs, on a parallel example, never the
 answer; anything else gets one sentence back. The paper a child used it on counts for nothing (no progress, no coins, no medal).
