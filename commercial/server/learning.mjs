@@ -31,7 +31,7 @@ export class Learning {
   }
   publicSession(sess) {
     return { id: sess.id, track: sess.track, mode: sess.mode, level: sess.level, levelId: LEVELS[sess.level].id, startPaper: sess.startPaper,
-      tierEnd: sess.tierEnd, count: sess.questions.length, index: sess.index, status: sess.status };
+      tierEnd: sess.tierEnd, count: sess.questions.length, index: sess.index, status: sess.status, tutored: sess.tutored === true };
   }
   publicQuestion(sess, i) {
     const q = sess.questions[i];
@@ -156,7 +156,10 @@ export class Learning {
     const timeout = sess.results.filter((r) => r.r === 'timeout').length, incorrect = total - correct - timeout, passed = correct === total, date = dayISO(now, timeZone);
     const row = { ts: now, date, track: sess.track, mode: sess.mode, level: sess.level, levelId: LEVELS[sess.level].id, papers: this.label(sess), correct, incorrect, timeout, total, passed,
       secs: Math.round((now - sess.createdAt) / 1000), qlog: sess.results.map((r) => ({ t: r.tier, l: r.level, track: r.track, s: r.secs, a: r.allowed, ok: r.r === 'correct' ? 1 : 0 })) };
-    let np = { ...prog, activeSession: null, history: [row, ...prog.history].slice(0, HISTORY_MAX), stats: { sessions: prog.stats.sessions + 1, passes: prog.stats.passes + (passed ? 1 : 0) }, wallet: { ...prog.wallet } };
+    // Explain to me was used (server/tutor.mjs): the paper counts for nothing — no pass, no progress, no coins, no streak day (the
+    // owner's rule, 19 Sep 2026). The row keeps the score and says why it paid nothing.
+    const tutored = sess.tutored === true; if (tutored) row.tutored = true;
+    let np = { ...prog, activeSession: null, history: [row, ...prog.history].slice(0, HISTORY_MAX), stats: { sessions: prog.stats.sessions + 1, passes: prog.stats.passes + (passed && !tutored ? 1 : 0) }, wallet: { ...prog.wallet } };
     if (sess.mode === 'placement') { // the test places each track and pays nothing; no pass, no streak day, no coins
       const placement = placementFromResults(sess.results, sess.level);
       for (const t of TRACKS) np = withTrk(np, t, { level: placement[t].level, paper: placement[t].paper, bossCleared: placement[t].bossCleared });
@@ -170,8 +173,8 @@ export class Learning {
     let gcEarned = 0, rpEarned = 0, jumped = [];
     // A finished sector's practice runs are unpaid and count for no streak: passing the same papers
     // again while the other track catches up must not become a way to farm coins.
-    const rewarded = passed && sess.mode !== 'practice';
-    if (passed) {
+    const rewarded = passed && sess.mode !== 'practice' && !tutored;
+    if (passed && !tutored) {
       const cur = trk(np, sess.track);
       if (sess.mode === 'boss') np = withTrk(np, sess.track, { bossCleared: Math.min(5, cur.bossCleared + 1) });
       else if (sess.mode === 'paper') np = withTrk(np, sess.track, { paper: Math.min(sess.startPaper + PAPERS_PER_SESSION, PAPERS_PER_LEVEL + 1) });
@@ -193,7 +196,7 @@ export class Learning {
     np.wallet.gc = prog.wallet.gc + gcEarned; np.wallet.rp = prog.wallet.rp + rpEarned;
     // Earned pets, a hatching egg and a streak shield are derived from trusted progress, in this transaction.
     const derived = applyGameDerived(np, now, timeZone); np = derived.progress;
-    const summary = { passed, rewarded, correct, incorrect, timeout, total, gcEarned: np.wallet.gc - prog.wallet.gc, rpEarned: np.wallet.rp - prog.wallet.rp, wallet: np.wallet,
+    const summary = { passed, rewarded, tutored, correct, incorrect, timeout, total, gcEarned: np.wallet.gc - prog.wallet.gc, rpEarned: np.wallet.rp - prog.wallet.rp, wallet: np.wallet,
       track: sess.track, mode: sess.mode, papers: row.papers, secs: row.secs, gameEvents: derived.events, leveledUp: jumped.includes(sess.track), jumped, // secs: the run's time, "· m:ss min" on the summary (port plan S3)
       newLevel: trk(np, sess.track).level, newLevelId: LEVELS[trk(np, sess.track).level].id,
       bossNext: passed && !['boss', 'scan'].includes(sess.mode) && bossDue(np, sess.track), trackNowDone: passed && !jumped.includes(sess.track) && trackDone(np, sess.track) && !trackDone(prog, sess.track) };

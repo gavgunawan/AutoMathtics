@@ -782,6 +782,8 @@ function deletionScreen(family) {
 // Mission Control as v2's admin panel (2614-2856): one card, a block per concern under its title in the block's colour, each
 // child's actions in the child's own row, and v2's footer with Hand over to kids where v2 had Done. Every label is v3's, and
 // every change is the server's to make.
+// 🪐 Olympia on the plan (19 Sep 2026): a separate pass, open on the free trial and a pilot grant, else to come with subscriptions
+const olympiaLine = (family) => { const o = family.olympia; return el('p', o?.open ? `🪐 Olympia: ${o.why === 'trial' ? 'included in the free trial' : o.why === 'pass' ? `Olympia pass until ${new Date(o.until).toLocaleDateString()}` : 'included in pilot access'}.` : '🪐 Olympia needs the Olympia pass — a separate subscription, coming with payments.', 'plan-line'); };
 async function parentScreen() {
   const family = model.family, e = family.entitlement || { status: 'inactive', seatLimit: 0, accessUntil: 0 };
   const billing = await api('/billing'); // plans, trial eligibility and the payment reference come from the server, never guessed from /me
@@ -863,7 +865,7 @@ async function parentScreen() {
       plan.append(el('p', `${messages[billing?.trial?.reason] || 'The free trial is not available for this family.'} Ask the pilot operator to activate child slots.`, 'notice'));
     }
   } else plan.append(el('p', `Pilot access: ${e.seatLimit} child slot${e.seatLimit === 1 ? '' : 's'} until ${new Date(e.accessUntil).toLocaleDateString()}.`, 'plan-line')); // an operator's grant: no plan to change
-  box.append(plan);
+  plan.append(olympiaLine(family)); box.append(plan); // Olympia's own line under whatever the plan is (19 Sep 2026)
   // 🎮 Game & progress: pace and scan focus, approvals, the Reward Store, the Family Rocket, coins and the logs, on their own screen
   if (family.children.length) {
     const game = adminSection('🎮 Game & progress', 'c-gold'), go = el('div', null, 'row');
@@ -1175,7 +1177,7 @@ const CRATE_KINDS = new Set(['outfit', 'shout', 'timer', 'title', 'namefx', 'map
 const RING_CLASS = { ring_pulse: 'ringpulse', ring_halo: 'ringhalo', ring_prestige: 'ringprestige' };
 const NAMEFX_CLASS = { nfx_rainbow: 'namefx-rainbow', nfx_glitch: 'namefx-glitch', nfx_gold: 'namefx-gold' };
 const TBAR_CLASS = { tbar_bolt: 'tbar-tbar_bolt', tbar_lava: 'tbar-tbar_lava', tbar_rainbow: 'tbar-tbar_rainbow', tbar_pixel: 'tbar-tbar_pixel' };
-const BGCARD_CLASS = { bg_symbols: 'bgcard-bg_symbols', bg_city: 'bgcard-bg_city', bg_space: 'bgcard-bg_space' };
+const BGCARD_CLASS = { bg_symbols: 'bgcard-bg_symbols', bg_city: 'bgcard-bg_city', bg_space: 'bgcard-bg_space', bg_moon: 'bgcard-bg_moon', bg_nebula: 'bgcard-bg_nebula' };
 // own keys only: an id is the server's, and 'constructor' must not find Object's
 const lookup = (map, id, fallback = '') => (typeof id === 'string' && Object.hasOwn(map, id) ? map[id] : fallback);
 // ---- the cosmetics layer: how each equipped item is drawn (port plan section 3; styles.css draws them) ----
@@ -1202,6 +1204,12 @@ const DECOR = {
     line.append(...Array.from({ length: 14 }, () => decorPiece('bld', { '--w': `${Math.round(rnd(34, 86))}px`, '--h': `${Math.round(rnd(60, 190))}px` })));
     return [line, ...Array.from({ length: 5 }, () => decorPiece('citysign', { '--x': `${rnd(4, 94).toFixed(1)}%`, '--y': `${rnd(55, 85).toFixed(1)}%`, '--col': anyOf(['#FF2DA8', '#35E0FF', '#FFB020']), '--delay': `${rnd(0, 3).toFixed(1)}s` }))];
   },
+  // the Olympia skies (19 Sep 2026, Olyminerals only): a risen moon over a scatter of stars, and three drifting nebula clouds behind more
+  bg_moon: () => [decorPiece('moonrise', { '--x': `${rnd(70, 84).toFixed(1)}%`, '--y': `${rnd(8, 16).toFixed(1)}%` }),
+    ...Array.from({ length: 34 }, () => decorPiece('star', { '--x': `${rnd(0, 100).toFixed(1)}%`, '--y': `${rnd(0, 100).toFixed(1)}%`, '--s': `${rnd(1, 2.6).toFixed(1)}px`, '--dur': `${rnd(1.8, 5).toFixed(2)}s`, '--delay': `${rnd(0, 4).toFixed(2)}s` }))],
+  bg_nebula: () => [
+    ...Array.from({ length: 3 }, (_, i) => decorPiece('nebula', { '--x': `${[8, 48, 64][i]}%`, '--y': `${[10, 50, 5][i]}%`, '--col': ['#8A5CFF', '#FF2DA8', '#35E0FF'][i], '--delay': `${(i * -7).toFixed(1)}s` })),
+    ...Array.from({ length: 40 }, () => decorPiece('star', { '--x': `${rnd(0, 100).toFixed(1)}%`, '--y': `${rnd(0, 100).toFixed(1)}%`, '--s': `${rnd(1, 3).toFixed(1)}px`, '--dur': `${rnd(1.6, 4.6).toFixed(2)}s`, '--delay': `${rnd(0, 4).toFixed(2)}s` }))],
 };
 // Runs after panel() on every child screen (panel's setMode takes the look off everywhere else). Only a background the
 // cosmetics layer knows becomes data-bg.
@@ -1337,9 +1345,10 @@ function homeIntro(e, n) {
   return el('p', '🏆 All sectors complete — both tracks! Incredible work. Tap a track below to practice any papers again.', 'intro');
 }
 // the two balances (2903-2912), side by side above everything: what this child has, in the two currencies
-function walletRow(w) {
-  const tiles = el('div', null, 'wallet-row');
-  for (const [big, sub, c] of [[`⚡ ${w.gc.toLocaleString()}`, 'grid coins', 'c-cyan'], [`🏆 ${w.rp.toLocaleString()}`, 'reward points', 'c-gold']]) {
+// …and, once Olympia is open to the family or the child holds any, the Olyminerals beside them (19 Sep 2026)
+function walletRow(w, oly = null) {
+  const three = Boolean(oly && (oly.open || (w.om || 0) > 0)), tiles = el('div', null, three ? 'wallet-row three' : 'wallet-row');
+  for (const [big, sub, c] of [[`⚡ ${w.gc.toLocaleString()}`, 'grid coins', 'c-cyan'], [`🏆 ${w.rp.toLocaleString()}`, 'reward points', 'c-gold'], ...(three ? [[`💎 ${(w.om || 0).toLocaleString()}`, 'olyminerals', 'c-violet']] : [])]) {
     const tile = el('div', null, `wallet-tile ${c}`); tile.append(el('span', big, 'yen'), el('span', sub, 'wallet-sub')); tiles.append(tile);
   }
   return tiles;
@@ -1471,7 +1480,7 @@ function homeLog(child, history) {
     td(whenOf(h)); td(`${h.levelId} · ${h.track === 'nav' ? '🧭 ' : ''}${h.papers}`);
     if (h.quit) td(leftText(h), 'log-quit').setAttribute('colspan', '6');
     else {
-      const [word, tone] = h.mode === 'placement' ? ['🎯 PLACED', 'placed'] : !h.passed ? ['retry', 'retry'] : h.mode === 'boss' ? ['👑 CP', 'cp'] : h.mode === 'scan' ? ['🧠 SCAN', 'scan'] : ['PASS', 'pass'];
+      const [word, tone] = h.tutored ? ['💡 TUTOR', 'placed'] : h.mode === 'placement' ? ['🎯 PLACED', 'placed'] : !h.passed ? ['retry', 'retry'] : h.mode === 'boss' ? ['👑 CP', 'cp'] : h.mode === 'scan' ? ['🧠 SCAN', 'scan'] : ['PASS', 'pass']; // a tutored paper counted for nothing (19 Sep 2026)
       td(`${h.correct}/${h.total}`, 'log-score'); td(String(h.correct), 'log-ok'); td(String(h.incorrect), 'log-bad'); td(String(h.timeout), 'log-late'); td(mmss(h.secs)); td(word, `log-result ${tone}`);
     }
     body.append(row);
@@ -1491,13 +1500,15 @@ async function childScreen(after = {}) {
     ticker.append(el('b', '◉'), ` COMMAND DECK ONLINE · ${child.nickname.toUpperCase()} · ⚙️ ${e.levelId} · 🧭 ${n.levelId} · ALL SYSTEMS GO`); box.append(radar, ticker);
   }
   if (veh) { const v = el('span', veh.emoji, 'vehicle'); v.setAttribute('aria-hidden', 'true'); box.append(v); }
-  const intro = homeIntro(e, n); box.append(walletRow(w), ...(intro ? [intro] : []));
+  const intro = homeIntro(e, n); box.append(walletRow(w, g.olympia), ...(intro ? [intro] : []));
   if (st.active) { const s = st.active.session; box.append(el('p', `A ${s.mode === 'placement' ? 'placement test' : `${TRACK[s.track].name} session`} is open at question ${s.index + 1} of ${s.count}.`, 'notice'), actionRow(button('Continue', () => playView(s, st.active.question), 'primary'))); }
   box.append(streakCard(g.liveRun || 0, w.shields || 0));
   const rocket = rocketPanel(g); if (rocket) { if (after.boom === true) rocket.append(moneySplash('big')); box.append(rocket); }
   const tracks = el('div', null, 'track-grid');
   if (pending) tracks.append(placementCard(st)); else for (const t of ['engine', 'nav']) tracks.append(trackCard(t, st[t], st.active ? null : () => beginRun(t, st)));
   box.append(tracks); if (!pending) box.append(jumpBanner(e, n));
+  // the Gateway jump (19 Sep 2026): under the two tracks, to Olympia's moons — open on the free trial or the pass, and it says so when not
+  if (!pending) { const gate = button('🪐 Gateway jump', olympiaScreen, 'gateway-tile'); gate.setAttribute('data-sub', g.olympia?.open ? `to the Olympia moons${g.olympia.medals ? ` · ${g.olympia.medals} medal${g.olympia.medals === 1 ? '' : 's'}` : ''}` : 'olympia · ask a parent'); box.append(gate); }
   // v2's four ways out of the home (3016-3021) as the mockup's tiles: the name is the button's own words, so a child, a screen
   // reader and a test all read the same label; what it is for rides along in data-sub, which styles.css draws under the name.
   const nav = el('div', null, 'hub-grid'); // How to opens on Engine, with a tab for Navigator
@@ -1594,7 +1605,7 @@ function buyRow(emoji, name, status, cost, date, points = false) {
 }
 function purchaseLog(w) {
   const wrap = el('section', null, 'shop-log'), rows = el('div', null, 'buy-log');
-  for (const p of w.purchases || []) rows.append(buyRow(p.emoji, p.name, null, `−⚡${p.cost}`, p.date));
+  for (const p of w.purchases || []) rows.append(buyRow(p.emoji, p.name, null, p.currency === 'om' ? `−💎${p.cost}` : `−⚡${p.cost}`, p.date));
   for (const x of (w.redemptions || []).filter((x) => x.status !== 'rejected')) rows.append(buyRow(x.emoji, x.name, x.status === 'approved' ? ['✓ approved', 'approved'] : ['⏳ pending', 'pending'], `−🏆${x.cost}`, x.date, true));
   if (!rows.children.length) rows.append(el('p', 'nothing bought yet', 'subtle'));
   wrap.append(el('p', '🧾 Purchase log', 'log-title c-cyan'), rows); return wrap;
@@ -1612,7 +1623,7 @@ async function shopScreen(after = {}) {
     reveal.append(shut, item, el('span', `${got.name}!${CRATE_RARE.has(got.kind) ? ' ✨ rare' : ''}`, 'crate-name')); box.append(reveal);
   }
   for (const [kinds, label, c, words] of SHOP_SECTIONS) {
-    const items = g.catalog.filter((it) => kinds.includes(it.kind) && (!it.hatch || it.owned)); // an egg's pets stay a secret until one hatches (3232)
+    const items = g.catalog.filter((it) => kinds.includes(it.kind) && !it.om && (!it.hatch || it.owned)); // an egg's pets stay a secret until one hatches (3232); the moon wares are Olympia's shop's
     if (!items.length) continue;
     const section = el('section', null, `shop-section ${c}`), head = el('p', label, 'section-label shop-head'), grid = el('div', null, items.some((it) => it.big) ? 'shop-grid has-big' : 'shop-grid');
     if (words) head.append(el('span', words, 'shop-note'));
@@ -1620,6 +1631,7 @@ async function shopScreen(after = {}) {
     section.append(head, grid); box.append(section);
   }
   const row = el('div', null, 'row-buttons'); row.append(button('Back', childScreen, 'ghost'));
+  if ((w.om || 0) > 0 || g.catalog.some((it) => it.om && it.owned)) row.append(button('💎 Olympia shop', olympiaShopScreen, 'ghost c-violet')); // the moon wares, once there is anything to spend or wear
   box.append(rewardStore(g), purchaseLog(w), row);
 }
 // ---- the map (v2 3350-3515): the sector's route drawn as its letter, the check-point strip, the fluency heatmap, the trophy
@@ -1930,6 +1942,12 @@ function figTable(fig) {
   for (const r of Array.isArray(fig.rows) ? fig.rows : []) { const tr = el('tr'); for (const c of Array.isArray(r.cells) ? r.cells : []) tr.append(el('td', String(c))); body.append(tr); }
   table.append(thead, body); return table;
 }
+// a grid of cells (Olympia's count-the-squares, the paths from A to B, a stack's heights): every cell drawn, a marked one with its letter
+function figGrid(fig) {
+  const table = el('table', null, 'fig-grid'), body = el('tbody');
+  for (const r of Array.isArray(fig.rows) ? fig.rows : []) { const tr = el('tr'); for (const c of Array.isArray(r.cells) ? r.cells : []) tr.append(el('td', String(c))); body.append(tr); }
+  table.append(body); return table;
+}
 function figureView(fig) {
   if (!fig || typeof fig !== 'object') return null;
   const box = el('figure', null, `q-fig fig-${fig.kind}`);
@@ -1937,6 +1955,7 @@ function figureView(fig) {
   if (fig.kind === 'bars' || fig.kind === 'line') box.append(figPlot(Array.isArray(fig.bars) ? fig.bars : Array.isArray(fig.points) ? fig.points : [], fig.kind));
   else if (fig.kind === 'pie') box.append(figPie(Array.isArray(fig.slices) ? fig.slices : []));
   else if (fig.kind === 'table') box.append(figTable(fig));
+  else if (fig.kind === 'grid') box.append(figGrid(fig));
   else return null; // a kind this release does not know: the question's own words still carry it
   return box;
 }
@@ -1960,6 +1979,56 @@ function questionView(d) {
     const frac = el('span', null, 'frac'); frac.append(el('span', String(p.n)), el('span', null, 'frac-bar'), el('span', String(p.d))); box.append(frac);
   }
   box.append(el('span', '=', 'q-eq'), el('span', '?', 'q-ask')); return box;
+}
+// ---- the sheet, the answer and v2's keypad (3145-3204), for a track paper and an Olympia visit alike: the caller supplies the
+// buttons beside Go! and where the answer goes. The browser only sends the answer: the server marks it. ----
+function answerForm(q, submit, { sheetClass = 'sheet', actions: extra = [], timeUp = () => false } = {}) {
+  const choice = q.answerType === 'choice';
+  const sheet = el('div', null, sheetClass), view = el('div', null, 'qin'); view.append(questionView(q.display)); sheet.append(view);
+  const form = el('form', null, 'answer-form'), rtl = q.display?.layout === 'stack'; let input = null;
+  if (choice) { const grid = el('div', null, 'choice-grid'); (q.display.choices || []).forEach((c, i) => grid.append(button(c, () => submit(String(i)), 'choicebtn'))); sheet.append(grid); }
+  else {
+    input = el('input', null, 'answer-box');
+    Object.assign(input, { type: 'text', inputMode: coarse() ? 'none' : q.answerType === 'dec' ? 'decimal' : 'numeric', maxLength: 12, autocomplete: 'off', placeholder: 'answer…' });
+    input.setAttribute('aria-label', 'Your answer'); sheet.append(input);
+    if (rtl) sheet.append(el('p', 'start with the ones digit — the answer fills right to left', 'subtle'));
+  }
+  // the keypad (3174-3199): 7 8 9 / 4 5 6 / 1 2 3 / 0, the fraction bar for a fraction and the point for a decimal, ⌫. A
+  // column sum is typed from the ones digit, as it is worked: each new digit goes in front (2353-2362).
+  const pad = el('div', null, 'pad'), actions = el('div', null, 'action-col'), padRow = el('div', null, 'pad-row');
+  if (choice) pad.append(el('p', 'tap your answer above 👆', 'pad-hint'));
+  else {
+    const put = (k) => { const v = input.value; if (v.length >= 12 || ((k === '/' || k === '.') && (!v || v.includes(k)))) return; input.value = rtl ? k + v : v + k; };
+    const back = () => { input.value = rtl ? input.value.slice(1) : input.value.slice(0, -1); };
+    for (const d of '7894561230') pad.append(padKey(d, () => put(d)));
+    if (q.answerType === 'frac') pad.append(padKey('∕', () => put('/'), 'slash', 'fraction bar'), padKey('⌫', back, 'back', 'Delete'));
+    else if (q.answerType === 'dec') pad.append(padKey('.', () => put('.'), 'slash', 'decimal point'), padKey('⌫', back, 'back', 'Delete'));
+    else pad.append(padKey('⌫', back, 'back wide', 'Delete'));
+  }
+  // the action column (3200-3204): Go! is the form's submit, then whatever the caller put beside it
+  const go = el('button', 'Go!', 'go-btn'); go.type = 'submit'; go.disabled = choice; actions.append(go, ...extra.filter(Boolean));
+  padRow.append(pad, actions); form.append(sheet, padRow);
+  form.onsubmit = (event) => {
+    event.preventDefault(); if (choice) return;
+    const v = input.value.trim(), [n, d = '1'] = v.split('/'); // a fraction goes as {n, d}; a whole number typed for one as n/1
+    if (!v || (q.answerType === 'frac' && (!n.trim() || !d.trim()))) {
+      input.className = 'answer-box'; void input.offsetWidth; input.className = 'answer-box shake';
+      if (timeUp()) note('Type an answer, then tap Go!'); return;
+    }
+    run(() => submit(q.answerType === 'frac' ? { n: n.trim(), d: d.trim() } : v));
+  };
+  return { form, input, choice };
+}
+// the clock is display only: at 0 it asks for the answer, and the server rules on the time when the answer arrives
+function startCountdown(q, { clock, fill, skin, onZero }) {
+  let left = q.seconds;
+  const paint = () => {
+    const hurry = left <= 8; clock.textContent = `⏱ ${left}s`; clock.className = hurry ? 'clock hurry' : 'clock';
+    fill.className = hurry ? 'timer-fill hurry' : `timer-fill${skin ? ` ${skin}` : ''}`; setVar(fill, '--w', `${Math.max(0, (left / q.seconds) * 100)}%`);
+  };
+  paint();
+  timer = setInterval(() => { left = Math.max(0, left - 1); paint(); if (!left) { stopTimer(); onZero(); } }, 1000);
+  return () => left === 0;
 }
 // after: what the last answer left for this screen — the flash (or combo) to show, and whether a paper just closed (a burst)
 function playView(session, q, after = {}) {
@@ -1997,54 +2066,15 @@ function playView(session, q, after = {}) {
   const slot = el('div', null, 'flash-slot'), f = after.flash; slot.setAttribute('role', 'status');
   if (f?.combo) { const pack = lookup(SHOUT_PACKS, w.activeShout, SHOUT_PACKS.default), t = streakTier(f.combo); slot.append(el('span', `🔥 ${f.combo} ${pack.labels[t - 1]}`, `combo streak-${t}${pack.cls ? ` ${pack.cls}` : ''}`)); }
   else if (f) slot.append(el('div', f.text, `flash ${f.kind} fade`));
-  // the sheet (3145-3172), warming with the streak; the answer box sits on it and is the one field on this screen
-  const sheet = el('div', null, tier ? `sheet sheet-hot-${tier}` : 'sheet'), view = el('div', null, 'qin'); view.append(questionView(q.display)); sheet.append(view);
-  const form = el('form', null, 'answer-form'), rtl = q.display?.layout === 'stack'; let input = null;
-  if (choice) { const grid = el('div', null, 'choice-grid'); (q.display.choices || []).forEach((c, i) => grid.append(button(c, () => submit(String(i)), 'choicebtn'))); sheet.append(grid); }
-  else {
-    input = el('input', null, 'answer-box');
-    Object.assign(input, { type: 'text', inputMode: coarse() ? 'none' : q.answerType === 'dec' ? 'decimal' : 'numeric', maxLength: 12, autocomplete: 'off', placeholder: 'answer…' });
-    input.setAttribute('aria-label', 'Your answer'); sheet.append(input);
-    if (rtl) sheet.append(el('p', 'start with the ones digit — the answer fills right to left', 'subtle'));
-  }
-  // the keypad (3174-3199): 7 8 9 / 4 5 6 / 1 2 3 / 0, the fraction bar for a fraction and the point for a decimal, ⌫. A
-  // column sum is typed from the ones digit, as it is worked: each new digit goes in front (2353-2362).
-  const pad = el('div', null, 'pad'), actions = el('div', null, 'action-col'), padRow = el('div', null, 'pad-row');
-  if (choice) pad.append(el('p', 'tap your answer above 👆', 'pad-hint'));
-  else {
-    const put = (k) => { const v = input.value; if (v.length >= 12 || ((k === '/' || k === '.') && (!v || v.includes(k)))) return; input.value = rtl ? k + v : v + k; };
-    const back = () => { input.value = rtl ? input.value.slice(1) : input.value.slice(0, -1); };
-    for (const d of '7894561230') pad.append(padKey(d, () => put(d)));
-    if (q.answerType === 'frac') pad.append(padKey('∕', () => put('/'), 'slash', 'fraction bar'), padKey('⌫', back, 'back', 'Delete'));
-    else if (q.answerType === 'dec') pad.append(padKey('.', () => put('.'), 'slash', 'decimal point'), padKey('⌫', back, 'back', 'Delete'));
-    else pad.append(padKey('⌫', back, 'back wide', 'Delete'));
-  }
-  // the action column (3200-3204): Go! is the form's submit; a placement test has no Restart (leaving it counts as a quit)
-  const go = el('button', 'Go!', 'go-btn'); go.type = 'submit'; go.disabled = choice; actions.append(go);
-  if (session.mode !== 'placement') actions.append(button('↺ Restart', restart, 'restart-btn'));
-  actions.append(button('✕ Quit', async () => { stopTimer(); await api('/learn/quit', { sessionId: session.id, how: 'quit' }); await refresh(); }, 'quit-btn'));
-  padRow.append(pad, actions); form.append(sheet, padRow);
-  let left = q.seconds;
-  form.onsubmit = (event) => {
-    event.preventDefault(); if (choice) return;
-    const v = input.value.trim(), [n, d = '1'] = v.split('/'); // a fraction goes as {n, d}; a whole number typed for one as n/1
-    if (!v || (q.answerType === 'frac' && (!n.trim() || !d.trim()))) {
-      input.className = 'answer-box'; void input.offsetWidth; input.className = 'answer-box shake';
-      if (!left) note('Type an answer, then tap Go!'); return;
-    }
-    run(() => submit(q.answerType === 'frac' ? { n: n.trim(), d: d.trim() } : v));
-  };
-  // the clock is display only: at 0 it asks for the answer, and the server rules on the time when the answer arrives
-  const paint = () => {
-    const hurry = left <= 8; clock.textContent = `⏱ ${left}s`; clock.className = hurry ? 'clock hurry' : 'clock';
-    fill.className = hurry ? 'timer-fill hurry' : `timer-fill${skin ? ` ${skin}` : ''}`; setVar(fill, '--w', `${Math.max(0, (left / q.seconds) * 100)}%`);
-  };
-  paint();
-  timer = setInterval(() => {
-    left = Math.max(0, left - 1); paint();
-    if (!left) { stopTimer(); slot.replaceChildren(el('div', choice ? '⏰ Time\'s up — tap your answer!' : '⏰ Time\'s up — tap Go!', 'flash late fade')); }
-  }, 1000);
-  box.append(row, bar, ...(after.burst ? [moneySplash('mini')] : []), slot, form, el('p', `${Math.floor((Date.now() - playStart.at) / 60000)} min elapsed · target: under 20`, 'subtle play-foot'));
+  // the tutor's box (19 Sep 2026): empty until 💡 Explain to me is tapped, which the server allows on any paper but a placement test
+  const tutorHost = el('div', null, 'tutor-host'), tutorable = Boolean(model?.tutor?.on) && session.mode !== 'placement';
+  // the sheet, the answer, the keypad and the action column; a placement test has no Restart (leaving it counts as a quit)
+  const { form, input } = answerForm(q, submit, { sheetClass: tier ? `sheet sheet-hot-${tier}` : 'sheet', timeUp: () => timeUp(), actions: [
+    session.mode !== 'placement' && button('↺ Restart', restart, 'restart-btn'),
+    button('✕ Quit', async () => { stopTimer(); await api('/learn/quit', { sessionId: session.id, how: 'quit' }); await refresh(); }, 'quit-btn'),
+    tutorable && button('💡 Explain to me', () => tutorPanel(tutorHost, { sessionId: session.id, index: q.index, tutored: session.tutored === true, onUsed: () => { session.tutored = true; } }), 'tutor-btn')] });
+  const timeUp = startCountdown(q, { clock, fill, skin, onZero: () => slot.replaceChildren(el('div', choice ? '⏰ Time\'s up — tap your answer!' : '⏰ Time\'s up — tap Go!', 'flash late fade')) });
+  box.append(row, bar, ...(after.burst ? [moneySplash('mini')] : []), slot, tutorHost, form, el('p', `${Math.floor((Date.now() - playStart.at) / 60000)} min elapsed · target: under 20`, 'subtle play-foot'));
   if (input && !coarse()) input.focus();
 }
 // ---- the result (v2 3564-3640): a headline for what happened, the score and the tally, the time (S3), and on a pass the
@@ -2066,7 +2096,8 @@ async function summaryView(session, s) {
     try { const st = await api('/learn/state'); finishedAll = st.engine.done && st.nav.done && st.engine.level === LAST_LEVEL && st.nav.level === LAST_LEVEL; } catch { /* the headline below says the rest */ }
   }
   // the headline, first match wins (3566-3586); gold, not v2's off-palette purple, for the last one of all
-  const [head, tone] = finishedAll ? ['🏆 ALL LEVELS COMPLETE!', 'c-gold']
+  const [head, tone] = s.tutored ? ['💡 Explain to me was used — this paper was practice', 'c-violet'] // it counted for nothing (19 Sep 2026)
+    : finishedAll ? ['🏆 ALL LEVELS COMPLETE!', 'c-gold']
     : s.leveledUp ? [`⬆ JUMP! ${T.emoji} ${T.label} moves on — welcome to Sector ${s.newLevelId}${(s.jumped || []).length === 2 ? ' · both tracks!' : ''}`, 'c-gold']
     : s.trackNowDone ? [`✓ ${T.emoji} ${T.name} SECTOR ${s.newLevelId} COMPLETE — it jumps once ${other} has finished Sector ${s.newLevelId} too`, 'c-mint']
     : s.mode === 'practice' ? [`🔁 Practice run ${s.passed ? '— perfect!' : '— keep at it'}`, s.passed ? 'c-mint' : 'c-cyan']
@@ -2083,7 +2114,8 @@ async function summaryView(session, s) {
     const earn = el('div', null, 'earn-box pop2'); earn.append(`+⚡${s.gcEarned} `, el('span', `+🏆${s.rpEarned}`));
     if (s.gcEarned > 100) earn.append(el('span', ' DOUBLE LOOT!', 'earn-note')); else if (s.gcEarned > 50) earn.append(el('span', ' (incl. 🔥 streak block!)', 'earn-note'));
     box.append(moneySplash(s.gcEarned > 50 ? 'big' : 'pass'), earn); setTimeout(() => sound('kaching'), 350); // the till rings with the coins (v2 2184)
-  } else if (s.passed) box.append(el('p', 'Practice runs keep you sharp but pay nothing — coins come back when the other track finishes the sector.', 'subtle'));
+  } else if (s.tutored) box.append(el('p', 'The tutor helped, so this paper counts for nothing: no coins, no points, no progress. Run the same papers again on your own — you know the method now!', 'subtle'));
+  else if (s.passed) box.append(el('p', 'Practice runs keep you sharp but pay nothing — coins come back when the other track finishes the sector.', 'subtle'));
   if (s.passed) { // the pet pops up and the vehicle lifts off (3604-3609)
     const pet = petBadge(w, 44, 'pop'), veh = gameItem(w.activeVehicle);
     if (pet) box.append(pet);
@@ -2096,11 +2128,175 @@ async function summaryView(session, s) {
   }
   if (s.bossNext) box.append(el('p', '👑 CHECK POINT unlocked — clear it to enter the next tier!', 'warn'));
   const mini = el('p', null, 'mini-wallet'); mini.append('⚡ ', el('b', String(s.wallet?.gc ?? 0)), ' · 🏆 ', el('b', String(s.wallet?.rp ?? 0))); box.append(mini);
-  if (!s.passed) { const rule = el('p', null, 'intro'); rule.append('The 100% rule: ', el('b', 'perfect score unlocks the next papers'), '. Same papers again next session — you\'ve got this! 💪'); box.append(rule); }
+  if (!s.passed && !s.tutored) { const rule = el('p', null, 'intro'); rule.append('The 100% rule: ', el('b', 'perfect score unlocks the next papers'), '. Same papers again next session — you\'ve got this! 💪'); box.append(rule); }
   const row = el('div', null, 'row-buttons');
   row.append(button(s.passed ? 'Next session ▶' : 'Try again ▶', () => beginRun(session.track), 'primary'), button('Home', refresh, 'ghost')); // after a jump, the new sector's How to first (v2 2031-2039)
   box.append(row);
 }
+// ---- 💡 Explain to me (19 Sep 2026): the tutor's box on a question. First the warning — the paper then counts for nothing — then
+// the server's explanation, then the child's own questions, typed or spoken where the browser can listen, until "I get it". The
+// server holds every cap and every rule (server/tutor.mjs); this shows what it answered and stops the clock, which no longer
+// matters on a practice paper. ----
+const TUTOR_WORDS = { TUTOR_DAILY_LIMIT: 'The tutor is resting for today — ask again tomorrow.', TUTOR_BUDGET: 'The tutor is off for now.', TUTOR_THREAD_DONE: 'That is all the tutor can say on this one — try it now!',
+  TUTOR_UNAVAILABLE: 'The tutor could not answer. Try again in a moment.', TUTOR_OFF: 'The tutor is switched off for your family.', TUTOR_MESSAGE_INVALID: 'Ask in a few words — up to 240 letters.', TUTOR_ALREADY_EXPLAINED: 'Ask the tutor a question in the box.' };
+const listens = () => Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
+// the device's own speech recognition, in its own language: what it hears lands in the box, and Send is the child's
+function listen(input) {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition; if (!SR) return;
+  const rec = new SR(); rec.lang = globalThis.navigator?.language || 'en-US'; rec.interimResults = false; rec.maxAlternatives = 1;
+  rec.onresult = (e) => { const t = e.results?.[0]?.[0]?.transcript; if (t) input.value = String(t).slice(0, 240); };
+  rec.onerror = () => note('The microphone did not catch that. Try again, or type.');
+  try { rec.start(); } catch { /* already listening */ }
+}
+const TUTOR_WARNING = '💡 Explain to me teaches the method on a different example — never this answer. Using it makes this paper practice: no coins, no points, no progress, no medal. Ask?';
+function tutorPanel(host, { sessionId, index, tutored = false, onUsed = () => {} }) {
+  const box = el('div', null, 'tutor-box c-violet'), thread = el('div', null, 'tutor-thread'), tail = el('div'); thread.setAttribute('aria-live', 'polite');
+  host.replaceChildren(box);
+  const say = (text, who = 'tutor') => { const p = el('p', text, who === 'me' ? 'tutor-line me' : who === 'wait' ? 'tutor-line wait' : 'tutor-line'); thread.append(p); return p; };
+  const talk = (text) => { try { if (window.speechSynthesis && window.SpeechSynthesisUtterance) speak(text); } catch { /* no speech */ } };
+  const close = () => { try { window.speechSynthesis?.cancel(); } catch { /* no speech */ } host.replaceChildren(); };
+  let left = null;
+  const draw = () => {
+    const row = el('div', null, 'tutor-ask');
+    if (left === 0) row.append(el('p', 'That is all for this question — now try it yourself! 💪', 'tutor-note'));
+    else if (left !== null) {
+      const input = el('input', null, 'tutor-input'); Object.assign(input, { type: 'text', maxLength: 240, placeholder: 'Ask the tutor…', autocomplete: 'off' }); input.setAttribute('aria-label', 'Ask the tutor');
+      const send = async () => { const v = input.value.trim(); if (!v) return; say(v, 'me'); input.value = ''; await ask(v); };
+      row.append(input, ...(listens() ? [button('🎤', () => listen(input), 'tiny mic')] : []), button('Send', send, 'tiny c-violet'), el('span', `${left} more`, 'tutor-left'));
+    }
+    row.append(button('I get it 👍', close, 'tiny c-mint')); tail.replaceChildren(row);
+  };
+  const ask = async (message) => {
+    stopTimer(); // the clock is off from the first explanation: this paper is practice now, and the server has already noted it
+    const waiting = say('…', 'wait');
+    let r;
+    try { r = await api('/tutor/explain', { sessionId, index, message }); }
+    catch (error) { waiting.textContent = TUTOR_WORDS[error.code] || 'The tutor could not answer.'; waiting.className = 'tutor-line warn'; if (error.code === 'TUTOR_THREAD_DONE' || error.code === 'TUTOR_DAILY_LIMIT') left = 0; draw(); return; }
+    waiting.textContent = r.reply; waiting.className = 'tutor-line'; onUsed(); left = r.turnsLeft; talk(r.reply); draw();
+  };
+  const begin = () => { box.replaceChildren(el('p', '💡 Explain to me', 'tutor-title'), thread, tail); draw(); return ask(null); };
+  if (tutored) return begin(); // this session is practice already: straight to the explanation
+  const warn = el('div', null, 'row-buttons'); warn.append(button('Yes, explain', begin, 'tiny c-violet'), button('Not now', close, 'tiny c-dim'));
+  box.append(el('p', TUTOR_WARNING, 'tutor-warn'), warn);
+}
+// ---- 🪐 OLYMPIA (19 Sep 2026): the hub, a visit, the reveal and the shop. The server holds the moons, the papers, the marks and the
+// medals (server/olympia.mjs); this draws what it sends and asks for the next thing. Unlike a paper there is no flash and no
+// streak: nothing is said about an answer until the whole heat is in. ----
+const MEDAL = { gold: ['🥇', 'GOLD'], silver: ['🥈', 'SILVER'], bronze: ['🥉', 'BRONZE'], merit: ['🎖️', 'MERIT'] };
+const MOON_NAMES = { sea: 'SEA-Moon', us: 'US-Moon', sg: 'SG-Moon', t: 'T-Moon', hk: 'HK-Moon', bkk: 'BKK-Moon', phi: 'PHI-Moon' };
+const SECTION_WORDS = { A: 'Logic', B: 'Applications', MC: 'Multiple choice', SA: 'Short answer' };
+function medalChips(m) { const row = el('span', null, 'medal-row'); for (const id of ['gold', 'silver', 'bronze', 'merit']) if (m?.[id]) row.append(el('span', `${MEDAL[id][0]} ${m[id]}`, 'medal-chip')); return row; }
+async function olympiaScreen() {
+  transientView = true; const st = await api('/olympia/state');
+  const box = panel('🪐 OLYMPIA · PLANETARY SYSTEM', `${model.child.nickname} · Year ${st.year}`, '', 'olympia');
+  onBack = childScreen; applyLook(gameModel?.wallet); root.setAttribute('aria-live', 'off');
+  const pills = el('div', null, 'balance-row'); pills.append(el('span', `💎 ${st.minerals}`, 'balance c-violet'), el('span', `🏅 ${st.medalCount} medal${st.medalCount === 1 ? '' : 's'}`, 'balance c-gold')); box.append(pills);
+  const merit = st.medals.find((m) => m.id === 'merit');
+  if (!st.access.open) box.append(el('p', 'Olympia is not open for your family yet. Ask a parent — it comes with the Olympia pass.', 'notice'));
+  else box.append(el('p', `Seven moons, each one practice in the style of a real maths olympiad — not affiliated with any of them. A visit is ${st.heat} questions; the score is revealed at the end, with a medal from ${merit?.min ?? 2}/${st.heat}. Olyminerals 💎 buy the moon wares.${st.access.why === 'trial' ? ' Included in your free trial.' : st.access.why === 'pass' ? ' Olympia pass.' : ''}`, 'intro'));
+  if (st.active) { const v = st.active.visit; box.append(el('p', `A visit to ${v.moonName} is open at question ${v.index + 1} of ${v.count}.`, 'notice'), actionRow(button('Continue the visit', () => olympiaPlay(v, st.active.question), 'primary'))); }
+  const grid = el('div', null, 'moon-grid');
+  for (const m of st.moons) {
+    const card = el('div', null, `moon-card ${m.c}${m.available ? '' : ' locked'}`), head = el('div', null, 'moon-head');
+    head.append(el('span', m.emoji, 'moon-face'), el('span', m.name, 'moon-name'), el('span', m.band, 'moon-band'));
+    card.append(head, el('p', `modelled on ${m.modelled} · ${m.long} · not affiliated`, 'moon-modelled'), el('p', m.blurb, 'moon-blurb'), el('p', m.shape, 'moon-shape'));
+    const tally = el('p', null, 'moon-tally');
+    if (m.visits) tally.append(medalChips(m.medals), `best ${m.bestScore}/${st.heat} · ${m.visits} visit${m.visits === 1 ? '' : 's'}`); else tally.append('no visits yet');
+    card.append(tally);
+    if (m.available && st.access.open && !st.active) {
+      const spent = m.rewardedToday >= m.rewardedPerDay, leftToday = m.rewardedPerDay - m.rewardedToday;
+      card.append(button(`${m.emoji} Visit ${m.name} ▶`, () => olympiaStart(m.id), `primary track-go${spent ? ' done' : ''}`),
+        el('p', spent ? 'training runs for the rest of today — the medal still counts' : `${leftToday} rewarded visit${leftToday === 1 ? '' : 's'} left today`, 'moon-note'));
+    } else if (!m.available) card.append(el('p', m.why === 'soon' ? '🔒 opens later' : `🔒 ${m.why}`, 'moon-note'));
+    if (m.topics) { // what the moon asks, band by band, under a tap
+      const topics = el('div', null, 'moon-topics'); for (const t of m.topics) { topics.append(el('b', t.band)); for (const l of t.lines) topics.append(el('p', `• ${l}`)); }
+      const more = el('div'); card.append(button('What does it ask?', () => more.replaceChildren(more.children.length ? '' : topics), 'text-button'), more);
+    }
+    grid.append(card);
+  }
+  box.append(grid);
+  if (st.history.length) { // the newest visits: when, where, the score, and what it earned
+    const log = el('div', null, 'olympia-log'); log.append(el('p', 'Your visits', 'log-title c-violet'));
+    for (const h of st.history) log.append(el('p', `${h.date} · ${MOON_NAMES[h.moon] || h.moon} · ${h.score}/${h.total}${h.quit ? ' · left early' : h.medal ? ` · ${MEDAL[h.medal][0]} ${MEDAL[h.medal][1]}${h.rewarded ? '' : ' (training)'}` : h.tutored ? ' · 💡 practice' : ' · no medal'}`, 'olympia-row'));
+    box.append(log);
+  }
+  const foot = el('div', null, 'row-buttons'); foot.append(button('💎 Olympia shop', olympiaShopScreen, 'ghost c-violet'), button('Back', childScreen, 'ghost')); box.append(foot);
+}
+async function olympiaStart(moon) { const r = await api('/olympia/visit', { moon }); olympiaPlay(r.visit, r.question); }
+function olympiaPlay(visit, q) {
+  transientView = true;
+  const w = gameModel?.wallet || {}, choice = q.answerType === 'choice';
+  const box = panel('', '', '', 'play olympia-play', { play: true }); box.replaceChildren();
+  onBack = olympiaScreen; applyLook(w); root.setAttribute('aria-live', 'off');
+  const attemptId = crypto.randomUUID();
+  const submit = async (answer) => {
+    stopTimer(); try { window.speechSynthesis?.cancel(); } catch { /* no speech */ }
+    const r = await api('/olympia/answer', { visitId: visit.id, index: q.index, attemptId, answer });
+    if (r.done) { await olympiaResult(r.result); return; }
+    olympiaPlay({ ...visit, index: r.question.index }, r.question);
+  };
+  const row = el('div', null, 'status-row'), where = el('span', null, 'q-count'), clock = el('span', null, 'clock');
+  where.append(avatarBadge(model.child, w, 22), el('span', visit.emoji, 'q-track'), ` ${visit.moonName} · ${SECTION_WORDS[q.section] || q.section} · ${q.index + 1}/${visit.count}`);
+  if (q.read && window.speechSynthesis && window.SpeechSynthesisUtterance) { const tts = el('button', '🔊', 'tts'); tts.type = 'button'; tts.append(el('span', ' Read aloud', 'sr-only')); tts.onclick = () => speak(q.read); where.append(tts); }
+  row.append(where, clock);
+  const bar = el('div', null, 'timer-track'), fill = el('div', null, 'timer-fill'), skin = lookup(TBAR_CLASS, w.activeTimer); bar.append(fill);
+  const slot = el('div', null, 'flash-slot'); slot.setAttribute('role', 'status');
+  slot.append(el('p', visit.tutored ? '💡 a practice visit — no medal, no minerals' : `🤫 no marks until the end — every right and wrong is revealed after question ${visit.count}`, 'olympia-hint'));
+  const tutorHost = el('div', null, 'tutor-host'), tutorable = Boolean(model?.tutor?.on);
+  const { form, input } = answerForm(q, submit, { timeUp: () => timeUp(), actions: [
+    button('✕ Quit', async () => { stopTimer(); await api('/olympia/quit', { visitId: visit.id }); await olympiaScreen(); }, 'quit-btn'),
+    tutorable && button('💡 Explain to me', () => tutorPanel(tutorHost, { sessionId: visit.id, index: q.index, tutored: visit.tutored === true, onUsed: () => { visit.tutored = true; } }), 'tutor-btn')] });
+  const timeUp = startCountdown(q, { clock, fill, skin, onZero: () => slot.replaceChildren(el('div', choice ? '⏰ Time\'s up — tap your answer!' : '⏰ Time\'s up — tap Go!', 'flash late fade')) });
+  box.append(row, bar, slot, tutorHost, form, el('p', `${q.cat}`, 'subtle play-foot'));
+  if (input && !coarse()) input.focus();
+}
+// the reveal: the score, the medal and what it paid, then every question with the answer it wanted
+async function olympiaResult(r) {
+  transientView = true; if (gameModel && r.wallet) gameModel.wallet = r.wallet;
+  const w = gameModel?.wallet || r.wallet || {}, medal = r.medal ? MEDAL[r.medal] : null;
+  const box = panel('', '', '', 'summary olympia-summary'); box.replaceChildren(); onBack = olympiaScreen; applyLook(w);
+  const head = r.tutored ? `💡 A practice visit to ${r.moonName} — the tutor helped, so no medal this time` : medal ? `${medal[0]} ${medal[1]} MEDAL — ${r.moonName}` : `${r.emoji} ${r.moonName} — no medal this time`;
+  box.append(el('h2', head, `summary-head ${medal && !r.tutored ? 'c-gold' : 'c-cyan'}`), el('div', `${r.score}/${r.total}`, 'big-score'), el('p', `${r.band} · ${mmss(r.secs)} min`, 'subtle'));
+  if (r.rewarded) { const earn = el('div', null, 'earn-box pop2'); earn.append(`+💎${r.omEarned}`, ...(r.gcEarned ? [el('span', ` +⚡${r.gcEarned} +🏆${r.rpEarned}`)] : [])); box.append(moneySplash('pass'), earn); setTimeout(() => sound('kaching'), 350); }
+  else if (r.trainingRun) box.append(el('p', 'A training run: two visits a moon a day are rewarded, and today\'s are done. The medal still counts!', 'subtle'));
+  else if (!r.tutored) box.append(el('p', `A medal starts at 2/${r.total}. Every visit is a fresh paper — try again!`, 'subtle'));
+  const list = el('div', null, 'reveal');
+  for (const q of r.questions) {
+    const tone = q.r === 'correct' ? 'ok' : q.r === 'timeout' ? 'late' : 'bad', line = el('div', null, `reveal-row ${tone}`);
+    line.append(el('span', q.r === 'correct' ? '✓' : q.r === 'timeout' ? '⏰' : '✗', 'reveal-mark'), el('span', `Q${q.index + 1} · ${q.cat}`, 'reveal-cat'), el('span', q.r === 'correct' ? String(q.expected) : `${q.given ?? '—'} → ${q.expected}`, 'reveal-ans')); list.append(line);
+  }
+  box.append(el('p', 'The reveal', 'log-title c-violet'), list);
+  const mini = el('p', null, 'mini-wallet'); mini.append('💎 ', el('b', String(w.om ?? 0)), ' · ⚡ ', el('b', String(w.gc ?? 0)), ' · 🏆 ', el('b', String(w.rp ?? 0))); box.append(mini);
+  const row = el('div', null, 'row-buttons'); row.append(button('Visit again ▶', () => olympiaStart(r.moon), 'primary'), button('🪐 Olympia', olympiaScreen, 'ghost'), button('Home', refresh, 'ghost')); box.append(row);
+}
+// the Olympia shop: the moon wares, Olyminerals only, bought and worn through the same shop routes as the Grid Shop's
+async function olympiaShopScreen() {
+  transientView = true; const g = await api('/game/state'); gameModel = g; const w = g.wallet;
+  const box = panel(`💎 OLYMPIA SHOP · ${model.child.nickname.toUpperCase()}`, '', 'Olyminerals only — a moon\'s medal pays them.', 'shop olympia-shop');
+  onBack = olympiaScreen; applyLook(w); root.setAttribute('aria-live', 'off');
+  const pills = el('div', null, 'balance-row'); pills.append(el('span', `💎 ${w.om ?? 0}`, 'balance c-violet')); box.append(pills);
+  const items = g.catalog.filter((it) => it.om), grid = el('div', null, items.some((it) => it.big) ? 'shop-grid has-big' : 'shop-grid');
+  for (const it of items) grid.append(olympiaCard(it, g));
+  const section = el('section', null, 'shop-section c-violet'); section.append(el('p', '🪐 MOON WARES', 'section-label shop-head'), grid); box.append(section);
+  const row = el('div', null, 'row-buttons'); row.append(button('Back', olympiaScreen, 'ghost')); box.append(row);
+}
+function olympiaCard(it, g) {
+  const w = g.wallet, own = it.owned === true, afford = (w.om || 0) >= it.om, slot = EQUIP_SLOT[it.kind], on = Boolean(slot) && w[slot] === it.id;
+  const tone = on ? 'equipped' : own ? 'owned' : it.big ? 'rare' : afford ? 'afford' : 'broke';
+  const card = el('div', null, ['shopitem', tone, it.big && 'super', !own && !afford && 'dim'].filter(Boolean).join(' '));
+  const face = el('span', it.emoji, `item-emoji${it.big ? ' big' : ''}`); face.setAttribute('aria-hidden', 'true');
+  card.append(face, el('span', it.name, 'item-name'));
+  if (it.moon) card.append(el('span', `${MOON_NAMES[it.moon] || it.moon}'s own`, 'item-blurb'));
+  card.append(own ? button(on ? '✓ EQUIPPED' : 'EQUIP', () => olympiaEquip(it, on), `tiny item-act ${on ? 'c-mint' : 'c-violet'}`) : button(`💎${it.om} BUY`, () => olympiaBuy(it, w.om || 0), `tiny item-act c-violet${afford ? '' : ' short'}`));
+  return card;
+}
+async function olympiaBuy(it, om) {
+  let r;
+  try { r = await api('/game/shop/buy', { itemId: it.id, operationId: crypto.randomUUID() }); }
+  catch (error) { if (error.code === 'INSUFFICIENT_OLYMINERALS') { note(`Need 💎${it.om - om} more for ${it.name} — win a medal!`); return; } throw error; }
+  if (gameModel) gameModel.wallet = r.wallet; sound('kaching'); note(`✓ ${it.emoji} ${it.name} — bought & equipped!`); await olympiaShopScreen();
+}
+async function olympiaEquip(it, on) { const r = await api('/game/shop/equip', { kind: it.kind, itemId: on ? null : it.id }); if (gameModel) gameModel.wallet = r.wallet; note(on ? `${it.emoji} ${it.name} unequipped` : `✓ ${it.emoji} ${it.name} equipped`); await olympiaShopScreen(); }
 // Launch and Scrap cannot be taken back: a launched rocket owes its prize, a scrapped one refunds nobody. Like deleting
 // the family (deletionScreen), each opens its own screen first, and nothing is sent until the parent confirms there.
 function rocketConfirmScreen(rocket, action) {
@@ -2165,7 +2361,14 @@ async function parentGameScreen() {
     line.append(avatarBadge(row.kid, null, 22), el('span', `${row.child.nickname}: ${r.emoji} ${r.name}`, 'row-words'), el('span', `🏆${r.cost}`, 'row-cost'), acts); approvals.append(line);
   }
   if (!waiting) approvals.append(el('p', 'no pending redemptions', 'subtle'));
-  box.append(approvals, rewardEditor(g, kids, gameDraft()), rocketSection(g, kids, gameDraft()), coinsSection(kids));
+  // 💡 the Explain-to-me tutor (19 Sep 2026): one switch for the family; and 🪐 Olympia: whether it is open, and each child's medals
+  const tutorSec = adminSection('💡 Explain to me', 'c-violet');
+  tutorSec.append(el('p', g.tutorOff ? 'The tutor is switched off for your family: no child sees the button.' : 'On a question a child can tap 💡 Explain to me: an AI tutor explains the method on a different example, never the answer, and answers the child\'s own questions about it. A paper it helped on counts for nothing — no coins, no progress, no medal. What the child asks is sent to Anthropic with the question and the child\'s age; never a name.', 'admin-intro'),
+    actionRow(button(g.tutorOff ? 'Switch the tutor on' : 'Switch the tutor off', async () => { await parentGameMutation('/game/parent/settings', { tutorOff: !g.tutorOff }); }, g.tutorOff ? 'tiny c-mint' : 'tiny c-red')));
+  const olympiaSec = adminSection('🪐 Olympia', 'c-gold');
+  olympiaSec.append(el('p', g.olympia?.open ? `Open for your family: ${g.olympia.why === 'trial' ? 'included in the free trial' : g.olympia.why === 'pass' ? `the Olympia pass, until ${new Date(g.olympia.until).toLocaleDateString()}` : 'included in pilot access'}. Seven moons of olympiad-style practice (four open); a visit is ten questions with the score revealed at the end, and a medal pays Olyminerals for Olympia\'s own shop. No streaks.` : 'Olympia — olympiad-style practice on seven moons — is a separate pass. It opens with subscriptions; until then support can grant it.', 'admin-intro'),
+    ...kids.map((row) => el('p', `${row.child.nickname}: ${row.olympia?.medals ? `🏅 ${row.olympia.medals} medal${row.olympia.medals === 1 ? '' : 's'} · ` : ''}${Object.entries(row.olympia?.moons || {}).map(([id, m]) => `${MOON_NAMES[id] || id} ${m.gold ? `🥇${m.gold} ` : ''}${m.silver ? `🥈${m.silver} ` : ''}${m.bronze ? `🥉${m.bronze} ` : ''}(${m.visits} visit${m.visits === 1 ? '' : 's'})`).join(' · ') || 'no visits yet'}`, 'pace-meta')));
+  box.append(approvals, tutorSec, olympiaSec, rewardEditor(g, kids, gameDraft()), rocketSection(g, kids, gameDraft()), coinsSection(kids));
   // 📄 Logs: each child's last sessions, read-only, drawn as the child's own log (homeLog)
   const logs = adminSection('📄 Logs', 'c-cyan');
   for (const row of kids) logs.append(homeLog(row.child, row.history) || el('p', `${row.child.nickname}: no sessions yet.`, 'subtle'));

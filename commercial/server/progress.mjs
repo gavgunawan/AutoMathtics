@@ -29,24 +29,27 @@ export const EQUIP_SLOTS = Object.freeze({
 });
 
 export const freshWallet = () => ({
-  gc: 0, rp: 0, bonuses: 0, gcSpent: 0, rpSpent: 0, ledgerSeq: 0, ledgerLast: null, // gc/rp are the ledger's cached balance (server/ledger.mjs)
+  gc: 0, rp: 0, om: 0, bonuses: 0, gcSpent: 0, rpSpent: 0, omSpent: 0, ledgerSeq: 0, ledgerLast: null, // gc/rp/om are the ledger's cached balance (server/ledger.mjs); om is Olyminerals, Olympia's own currency
   inventory: [], activePet: null, activeFx: null, activeSnd: null, activeBg: null, ring: null,
   activeOutfit: null, activeShout: null, activeTimer: null, activeTitle: null,
   activeNameFx: null, activeMap: null, activeVehicle: null, activeBase: null,
   shields: 0, shieldDays: [], egg: null, purchases: [], redemptions: [], lastScanWeek: null,
 });
 
+// Olympia (server/olympia.mjs): the visit under way, each moon's medals, the newest visits, and how many rewarded visits a moon has
+// paid today. Kept apart from the two tracks' history: the home log draws that, and an Olympia row is not a paper.
+export const freshOlympia = () => ({ activeVisit: null, moons: {}, history: [], rewardDays: {} });
 export const freshProgress = () => ({
   engine: { level: 0, paper: 1, bossCleared: 0 }, nav: { level: 0, paper: 1, bossCleared: 0 },
   wallet: freshWallet(), passDays: [], pacePercent: DEFAULT_PACE_PERCENT,
-  stats: { sessions: 0, passes: 0 }, history: [], activeSession: null, placement: null,
+  stats: { sessions: 0, passes: 0 }, history: [], activeSession: null, placement: null, olympia: freshOlympia(),
 });
 
 const uniqStrings = (xs, max = 500) => [...new Set((Array.isArray(xs) ? xs : []).filter((x) => typeof x === 'string'))].slice(-max);
 export function normalizeWallet(value) {
   const base = freshWallet(), w = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   const out = { ...base, ...w };
-  for (const key of ['gc', 'rp', 'bonuses', 'gcSpent', 'rpSpent', 'shields']) {
+  for (const key of ['gc', 'rp', 'om', 'bonuses', 'gcSpent', 'rpSpent', 'omSpent', 'shields']) {
     if (!Number.isSafeInteger(out[key]) || out[key] < 0) out[key] = 0;
   }
   out.shields = Math.min(2, out.shields);
@@ -73,11 +76,15 @@ export function normalizeProgress(value) {
   };
   const pacePercent = Number.isInteger(p.pacePercent) ? Math.max(10, Math.min(200, p.pacePercent)) : DEFAULT_PACE_PERCENT;
   const stats = p.stats && typeof p.stats === 'object' ? p.stats : {};
+  const oly = p.olympia && typeof p.olympia === 'object' && !Array.isArray(p.olympia) ? p.olympia : {};
+  const olympia = { ...freshOlympia(), activeVisit: typeof oly.activeVisit === 'string' ? oly.activeVisit : null,
+    moons: oly.moons && typeof oly.moons === 'object' && !Array.isArray(oly.moons) ? oly.moons : {},
+    history: Array.isArray(oly.history) ? oly.history.slice(0, 30) : [], rewardDays: oly.rewardDays && typeof oly.rewardDays === 'object' && !Array.isArray(oly.rewardDays) ? oly.rewardDays : {} };
   return { ...base, ...p, engine: track('engine'), nav: track('nav'), wallet: normalizeWallet(p.wallet),
     passDays: uniqStrings(p.passDays, 400).sort(), pacePercent,
     stats: { sessions: Number.isSafeInteger(stats.sessions) && stats.sessions >= 0 ? stats.sessions : 0,
       passes: Number.isSafeInteger(stats.passes) && stats.passes >= 0 ? stats.passes : 0 },
-    history: Array.isArray(p.history) ? p.history.slice(0, 60) : [], activeSession: typeof p.activeSession === 'string' ? p.activeSession : null,
+    history: Array.isArray(p.history) ? p.history.slice(0, 60) : [], activeSession: typeof p.activeSession === 'string' ? p.activeSession : null, olympia,
     placement: p.placement && typeof p.placement === 'object' && !Array.isArray(p.placement) && ['pending', 'done'].includes(p.placement.status) ? p.placement : null };
 }
 

@@ -79,6 +79,13 @@ if [[ -n "${FEEDBACK_TO:-}" ]]; then
     *) echo 'EMAIL_PROVIDER must be fake or resend.' >&2; exit 1 ;;
   esac
 fi
+# The Explain-to-me tutor (server/tutor.mjs) runs only where the owner has put a Claude API key in Secret Manager as am-v3-anthropic-key
+# (DEPLOY_V3.md → The tutor). The binding is added when that secret exists and left out when it does not, so a project without the key
+# deploys as before, with the tutor hidden. TUTOR_MONTHLY_CALLS caps the whole service's calls a month (config.mjs; default 3000).
+TUTOR_BINDING=''
+if gcloud secrets versions describe 1 --secret am-v3-anthropic-key --project "$PROJECT_ID" >/dev/null 2>&1; then TUTOR_BINDING=',ANTHROPIC_API_KEY=am-v3-anthropic-key:1'; echo 'the tutor key is bound (am-v3-anthropic-key)'; else echo 'no am-v3-anthropic-key: the tutor stays hidden'; fi
+[[ -z "${TUTOR_MONTHLY_CALLS:-}" || "$TUTOR_MONTHLY_CALLS" =~ ^[0-9]{1,7}$ ]] || { echo 'TUTOR_MONTHLY_CALLS must be a whole number of calls a month.' >&2; exit 1; }
+[[ -z "${TUTOR_MONTHLY_USD:-}" || "$TUTOR_MONTHLY_USD" =~ ^[0-9]{1,6}(\.[0-9]{1,2})?$ ]] || { echo 'TUTOR_MONTHLY_USD must be a number of dollars a month.' >&2; exit 1; }
 # The commit being deployed travels with the service — RELEASE_SHA in the environment, a release-sha label on the revision — and
 # /api/health reports it, so "which commit runs on staging" is a fact anyone can read, not a line in somebody's terminal.
 # A dirty checkout would deploy code the commit does not describe: refused — and a git that cannot answer stops the helper too
@@ -102,11 +109,13 @@ npm run test:emulator
 DIRTY="$(git status --porcelain --untracked-files=no)"
 [[ "$(git rev-parse HEAD)" == "$RELEASE_SHA" && -z "$DIRTY" ]] || { echo 'The checkout changed while the tests ran: start again.' >&2; exit 1; }
 # Ephemeral config contains ONLY public identifiers. Secret values never enter it.
-export PROJECT_ID APP_MODE APP_ORIGIN APP_ALSO_ORIGINS FIREBASE_WEB_API_KEY FIREBASE_WEB_APP_ID FIREBASE_AUTH_DOMAIN TRUSTED_PROXY_HOPS PAYMENT_PROVIDER STRIPE_PRICE_STARTER STRIPE_PRICE_FAMILY STRIPE_PRICE_BIG RELEASE_SHA FEEDBACK_TO EMAIL_PROVIDER EMAIL_FROM WAITLIST_FROM WAITLIST_REPLY_TO WAITLIST_SHEET_ID
+export PROJECT_ID APP_MODE APP_ORIGIN APP_ALSO_ORIGINS FIREBASE_WEB_API_KEY FIREBASE_WEB_APP_ID FIREBASE_AUTH_DOMAIN TRUSTED_PROXY_HOPS PAYMENT_PROVIDER STRIPE_PRICE_STARTER STRIPE_PRICE_FAMILY STRIPE_PRICE_BIG RELEASE_SHA FEEDBACK_TO EMAIL_PROVIDER EMAIL_FROM WAITLIST_FROM WAITLIST_REPLY_TO WAITLIST_SHEET_ID TUTOR_MONTHLY_CALLS TUTOR_MONTHLY_USD
 node --input-type=module - "$ENV_FILE" <<'NODE'
 import { writeFileSync } from 'node:fs';
 const p = process.env;
 writeFileSync(process.argv[2], JSON.stringify({ APP_MODE: p.APP_MODE || 'staging',
+  // the tutor's monthly ceiling, in dollars or calls; the key itself is bound below, never written here
+  ...(p.TUTOR_MONTHLY_USD ? { TUTOR_MONTHLY_USD: p.TUTOR_MONTHLY_USD } : {}), ...(p.TUTOR_MONTHLY_CALLS ? { TUTOR_MONTHLY_CALLS: p.TUTOR_MONTHLY_CALLS } : {}),
   APP_ORIGIN: p.APP_ORIGIN, ...(p.APP_ALSO_ORIGINS ? { APP_ALSO_ORIGINS: p.APP_ALSO_ORIGINS } : {}), FIREBASE_PROJECT_ID: p.PROJECT_ID,
   FIREBASE_WEB_API_KEY: p.FIREBASE_WEB_API_KEY, FIREBASE_WEB_APP_ID: p.FIREBASE_WEB_APP_ID, ...(p.FIREBASE_AUTH_DOMAIN ? { FIREBASE_AUTH_DOMAIN: p.FIREBASE_AUTH_DOMAIN } : {}),
   // the provider: Stripe names its prices, the fake provider is acknowledged as moving no money, none (payments not open) is told nothing more
@@ -119,7 +128,7 @@ writeFileSync(process.argv[2], JSON.stringify({ APP_MODE: p.APP_MODE || 'staging
 NODE
 # Deny browser database access BEFORE publishing the new service.
 ./node_modules/.bin/firebase deploy --config firebase.staging.json --project "$PROJECT_ID" --only firestore:rules
-gcloud run deploy "$SERVICE" --project "$PROJECT_ID" --region "$REGION"   --source "$SRC" --service-account "$RUNTIME_SA" --allow-unauthenticated   --port 8080 --memory 512Mi --cpu 1 --concurrency 4 --min-instances 0 --max-instances 3   --timeout 60 --labels "release-sha=$RELEASE_SHA" --env-vars-file "$ENV_FILE"   --set-secrets "SESSION_SECRET=am-v3-session:1,PIN_PEPPER=am-v3-pin-pepper:1${PROVIDER_BINDINGS}$([ -n "${FEEDBACK_TO:-}" ] && [ "${EMAIL_PROVIDER:-fake}" = resend ] && echo ',EMAIL_API_KEY=am-v3-email-key:1')"
+gcloud run deploy "$SERVICE" --project "$PROJECT_ID" --region "$REGION"   --source "$SRC" --service-account "$RUNTIME_SA" --allow-unauthenticated   --port 8080 --memory 512Mi --cpu 1 --concurrency 4 --min-instances 0 --max-instances 3   --timeout 60 --labels "release-sha=$RELEASE_SHA" --env-vars-file "$ENV_FILE"   --set-secrets "SESSION_SECRET=am-v3-session:1,PIN_PEPPER=am-v3-pin-pepper:1${PROVIDER_BINDINGS}${TUTOR_BINDING}$([ -n "${FEEDBACK_TO:-}" ] && [ "${EMAIL_PROVIDER:-fake}" = resend ] && echo ',EMAIL_API_KEY=am-v3-email-key:1')"
 mkdir -p .hosting  # deliberately empty; git keeps no empty directory, so make sure it exists
 ./node_modules/.bin/firebase deploy --config firebase.staging.json --project "$PROJECT_ID" --only hosting
 # The revision this run created must be the one serving — traffic pinned to an earlier revision (a rollback per DEPLOY_V3.md §7)

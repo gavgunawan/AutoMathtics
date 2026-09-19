@@ -720,6 +720,38 @@ Resend), and no payment provider secret.
 **Checking it.** `curl https://LIVE_PROJECT_ID.web.app/api/health` reports the commit; a signed-in parent's `GET /api/billing` answers
 `"payments":{"open":false}` with `"plans":[]`; `POST /api/webhooks/stripe` answers 404.
 
+## 5d. The Explain-to-me tutor (19 Sep 2026)
+
+The tutor (`server/tutor.mjs`) answers a child's "Explain to me" on a question through the Claude API (model `claude-haiku-4-5-20251001`).
+It runs only where a key is bound, and `deploy-staging.sh` binds one only when the secret exists — a project without it deploys as
+before, with the button hidden.
+
+1. Create an API key at console.anthropic.com (Settings → API keys).
+2. In Cloud Shell put it in Secret Manager **without writing it on a command line**: the command reads the key from the terminal, so
+   run it, paste the key as the input, press Enter, then Ctrl-D. Nothing is echoed and nothing lands in the shell history.
+   ```bash
+   gcloud secrets create am-v3-anthropic-key --data-file=- --project "$PROJECT_ID"
+   ```
+   Then let the runtime account read it:
+   ```bash
+   gcloud secrets add-iam-policy-binding am-v3-anthropic-key --project "$PROJECT_ID" --member="serviceAccount:$RUNTIME_SA" --role=roles/secretmanager.secretAccessor --quiet
+   ```
+3. Deploy (block C, or the release workflow). The helper prints `the tutor key is bound (am-v3-anthropic-key)`, and the button
+   appears on every question for every family whose parent has not switched the tutor off in Game & progress.
+
+**Caps** (the owner's condition: the tutor must never run away with the usage). Per child a day: 12 explanations and 40 follow-up
+messages (`TUTOR_DAILY_PER_CHILD` sets the first); per question: 6 turns, 240 characters a message, about 350 tokens a reply; and
+for the whole service, a month's ceiling: `TUTOR_MONTHLY_USD` in dollars (the owner's figure; a call is taken as $0.003, so $6 is
+2000 calls) or `TUTOR_MONTHLY_CALLS` in calls (default 3000, about $7.50) — export one before deploying; at the ceiling the button
+hides for everyone until the month turns. The key's own workspace spend limit in the Anthropic console (Settings → Limits) is the
+hard stop behind this one: give the tutor its own workspace and set that limit to the same figure. Usage is readable in Firestore:
+`tutor/usage-YYYY-MM` (the month's calls) and `families/{f}/learning/{c}/tutor/{date}` (a child's day).
+
+**Scope.** The prompt lets the tutor talk only about the live question and the idea it needs, on a parallel example, never the
+answer; anything else gets one sentence back. The paper a child used it on counts for nothing (no progress, no coins, no medal).
+
+**Privacy.** The policy names Anthropic and the device's own speech recognition (`/privacy`, both languages); `PRIVACY.md` has the rows.
+
 ## 6. Activate your test family
 
 Sign up with your adult email, verify it, enrol the mobile MFA factor, then sign in

@@ -7,6 +7,8 @@ const ADDRESS = /^[^\s@<>"]{1,64}@[^\s@<>"]{1,190}\.[^\s@<>"]{2,}$/;
 const FROM = /^(?:[^<>]{1,64}<)?[^\s@<>"]{1,64}@[^\s@<>"]{1,190}\.[^\s@<>"]{2,}>?$/;
 // A bare host name (FIREBASE_AUTH_DOMAIN): dot-separated labels of lower-case letters, digits and inner hyphens. No scheme, path or port.
 const HOST = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/;
+// what one tutor call costs, generously: how TUTOR_MONTHLY_USD becomes a number of calls (server/tutor.mjs counts calls)
+export const USD_PER_CALL = 0.003;
 
 export function config(env = process.env) {
   const mode = env.APP_MODE;
@@ -108,8 +110,27 @@ export function config(env = process.env) {
   if (listSheet !== null && !/^[A-Za-z0-9_-]{25,100}$/.test(listSheet)) throw Error('WAITLIST_SHEET_ID must be a Google Sheet id: the part of its address between /d/ and /edit.');
   // Only when something will actually send: mailerConfig demands the Resend key, and a service that copies nothing needs none.
   const waitlist = { replyTo: listReply, sheetId: listSheet, mail: feedbackTo ? { ...feedback.mail, ...(listFrom ? { from: listFrom } : {}) } : null };
+  // The Explain-to-me tutor (server/tutor.mjs): on only with a Claude API key (ANTHROPIC_API_KEY, bound from Secret Manager by
+  // deploy-staging.sh when am-v3-anthropic-key exists). TUTOR_MONTHLY_CALLS caps the whole service's calls a month and
+  // TUTOR_DAILY_PER_CHILD each child's explanations a day (the owner's condition, 19 Sep 2026: the tutor must never run away with
+  // the usage); TUTOR_MODEL names the model. The key is checked for shape only and goes nowhere but the model client.
+  const tutorKey = env.ANTHROPIC_API_KEY || null;
+  if (tutorKey !== null && !/^sk-ant-[A-Za-z0-9_-]{20,}$/.test(tutorKey)) throw Error('ANTHROPIC_API_KEY does not look like a Claude API key.');
+  // The month's ceiling is set in dollars (TUTOR_MONTHLY_USD, the owner's figure) or in calls (TUTOR_MONTHLY_CALLS); dollars win
+  // when both are set. A call is about 900 tokens in (the prompt, the question, the thread so far) and 300 out, about a quarter of a
+  // cent at Haiku 4.5's list prices ($1 and $5 a million tokens); USD_PER_CALL allows for longer threads. The key's own workspace
+  // limit in the Anthropic console is the hard stop behind this one.
+  const usd = env.TUTOR_MONTHLY_USD === undefined || env.TUTOR_MONTHLY_USD === '' ? null : Number(env.TUTOR_MONTHLY_USD);
+  if (usd !== null && !(Number.isFinite(usd) && usd >= 0 && usd <= 100_000)) throw Error('TUTOR_MONTHLY_USD must be a number of dollars a month.');
+  const monthlyCalls = usd !== null ? Math.floor(usd / USD_PER_CALL) : env.TUTOR_MONTHLY_CALLS === undefined || env.TUTOR_MONTHLY_CALLS === '' ? 3000 : Number(env.TUTOR_MONTHLY_CALLS);
+  if (!Number.isInteger(monthlyCalls) || monthlyCalls < 0 || monthlyCalls > 10_000_000) throw Error('TUTOR_MONTHLY_CALLS must be a whole number of calls a month.');
+  const dailyPerChild = env.TUTOR_DAILY_PER_CHILD === undefined || env.TUTOR_DAILY_PER_CHILD === '' ? 12 : Number(env.TUTOR_DAILY_PER_CHILD);
+  if (!Number.isInteger(dailyPerChild) || dailyPerChild < 0 || dailyPerChild > 1000) throw Error('TUTOR_DAILY_PER_CHILD must be a whole number of explanations a day.');
+  const tutorModel = env.TUTOR_MODEL || 'claude-haiku-4-5-20251001';
+  if (!/^[a-z0-9.-]{6,64}$/.test(tutorModel)) throw Error('TUTOR_MODEL must be a model id.');
+  const tutor = { apiKey: tutorKey, model: tutorModel, monthlyCalls, monthlyUsd: usd, dailyPerChild };
   const port = Number(env.PORT || 8787);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw Error('Invalid PORT.');
-  return { mode, emulator, projectId, origin, origins, secret, pepper, previousPeppers, proxyHops, port, releaseSha, feedback, waitlist, payments: { provider, webhookSecrets: { fake: webhookSecret }, stripe },
+  return { mode, emulator, projectId, origin, origins, secret, pepper, previousPeppers, proxyHops, port, releaseSha, feedback, waitlist, tutor, payments: { provider, webhookSecrets: { fake: webhookSecret }, stripe },
     web: { apiKey: env.FIREBASE_WEB_API_KEY, appId: env.FIREBASE_WEB_APP_ID, projectId, authDomain } };
 }

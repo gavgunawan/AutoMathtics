@@ -2,6 +2,7 @@ import { randomInt, randomUUID } from 'node:crypto';
 import { fail, object, text, uuid } from './security.mjs';
 import { GC_PASS, RP_PASS, EQUIP_SLOTS, LEVELS, bonusesFor, dayISO, normalizeProgress, normalizeWallet, liveDayRun, scanState, trk, trackDone, bossDue, TIME_ZONE_CHOICES } from './progress.mjs';
 import { entry, post } from './ledger.mjs';
+import { olympiaAccess, medalTally } from './olympia.mjs';
 
 const MINUTE = 60_000, DAY = 24 * 60 * MINUTE;
 const OP_LIFE = DAY;
@@ -67,17 +68,31 @@ export const SHOP_ITEMS = Object.freeze([
   { id: 'shield', kind: 'shield', emoji: '🛡️', name: 'Streak shield', cost: 400, consumable: true },
   { id: 'crate', kind: 'crate', emoji: '🎁', name: 'Surprise Box', cost: 300, consumable: true },
   { id: 'egg', kind: 'egg', emoji: '🥚', name: 'Mystery Egg', cost: 900, consumable: true },
+  // Olympia's own shop (19 Sep 2026): priced in Olyminerals (`om`), the currency only a moon's medal pays; never in coins, never
+  // in a Surprise Box. A pet for each open moon, two skies, a rover, titles and a name — worn through the same slots as the rest.
+  { id: 'pet_dolphin', kind: 'pet', emoji: '🐬', name: 'Reef dolphin', cost: 0, om: 60, moon: 'sea' },
+  { id: 'pet_eagle', kind: 'pet', emoji: '🦅', name: 'Star eagle', cost: 0, om: 60, moon: 'us' },
+  { id: 'pet_merlion', kind: 'pet', emoji: '🦁', name: 'Merlion cub', cost: 0, om: 60, moon: 'sg' },
+  { id: 'pet_bear', kind: 'pet', emoji: '🐻', name: 'Formosan bear', cost: 0, om: 60, moon: 't' },
+  { id: 'bg_moon', kind: 'bg', emoji: '🌕', name: 'Moonrise sky', cost: 0, om: 50 },
+  { id: 'bg_nebula', kind: 'bg', emoji: '🪐', name: 'Olympia nebula', cost: 0, om: 80 },
+  { id: 'veh_rover', kind: 'vehicle', emoji: '🛸', name: 'Lunar rover', cost: 0, om: 150, big: true },
+  { id: 'title_moonwalker', kind: 'title', emoji: '🌙', name: 'MOONWALKER', cost: 0, om: 25 },
+  { id: 'title_olympian', kind: 'title', emoji: '🏅', name: 'OLYMPIAN', cost: 0, om: 40 },
+  { id: 'title_medallist', kind: 'title', emoji: '🥇', name: 'MEDALLIST', cost: 0, om: 60 },
+  { id: 'nfx_moon', kind: 'namefx', emoji: '🌙', name: 'Moonlight name', cost: 0, om: 70 },
 ]);
 const BY_ID = new Map(SHOP_ITEMS.map((x) => [x.id, x]));
+export const OLYMPIA_ITEMS = SHOP_ITEMS.filter((x) => x.om);
 const CRATE_KINDS = new Set(['outfit', 'shout', 'timer', 'title', 'namefx', 'map']);
 const CRATE_RARE = new Set(['namefx', 'map']);
 const HATCH_POOL = ['pet_fox', 'pet_octo', 'pet_unicorn', 'pet_turtle'];
 const EARNED = SHOP_ITEMS.filter((x) => x.unlock);
 const SAFE_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const previousDay = (date, n = 1) => new Date(Date.parse(date) - n * DAY).toISOString().slice(0, 10);
-const itemPublic = (x) => ({ id: x.id, kind: x.kind, emoji: x.emoji, name: x.name, cost: x.cost, ...(x.big ? { big: true } : {}), ...(x.hatch ? { hatch: true } : {}), ...(x.unlock ? { unlock: x.unlock } : {}) });
+const itemPublic = (x) => ({ id: x.id, kind: x.kind, emoji: x.emoji, name: x.name, cost: x.cost, ...(x.om ? { om: x.om, moon: x.moon || null } : {}), ...(x.big ? { big: true } : {}), ...(x.hatch ? { hatch: true } : {}), ...(x.unlock ? { unlock: x.unlock } : {}) });
 const item = (id) => { const x = typeof id === 'string' ? BY_ID.get(id) : null; if (!x) fail(400, 'INVALID_ITEM'); return x; };
-const nowRow = (it, cost, now, timeZone, how = null) => ({ id: it.id, emoji: it.emoji, name: how ? `${it.name} (${how})` : it.name, cost, date: dayISO(now, timeZone), at: now });
+const nowRow = (it, cost, now, timeZone, how = null) => ({ id: it.id, emoji: it.emoji, name: how ? `${it.name} (${how})` : it.name, cost, date: dayISO(now, timeZone), at: now, ...(it.om ? { currency: 'om' } : {}) });
 // What each child's card shows the launch pad and the parent (v2's player cards; port plan S1): the worn look as catalogue ids
 // and display text, never a balance or the inventory. A slot holding anything but an item of its own kind is worn as nothing.
 // The legendary tags are display text the frozen catalogue does not carry.
@@ -241,6 +256,8 @@ export class Game {
       const timeZone = family.timeZone || 'Asia/Singapore', crew = cfg.rocket ? await rocketCrew(tx, s.familyId, cfg.rocket) : null;
       return { wallet: this.publicWallet(prog.wallet), catalog: this.catalogFor(prog, timeZone), rewards, rocket: childRocket(cfg.rocket, s.childId, crew), heatmap: heatmap(prog), pacePercent: prog.pacePercent,
         scan: scanState(prog, this.now(), timeZone),
+        // the home's Gateway tile and its third wallet tile (server/olympia.mjs): whether the family may enter, and what the child holds
+        olympia: { ...olympiaAccess(family, this.now()), minerals: prog.wallet.om, medals: medalTally(prog) },
         // the home's streak note (port plan S2): today's run of pass days, shield days bridging, as the Thunder Hawk's unlock counts it
         liveRun: liveLocalRun([...(prog.passDays || []), ...prog.wallet.shieldDays], this.now(), timeZone) };
     }, { readOnly: true });
@@ -252,16 +269,17 @@ export class Game {
   }
   async buy(ctx, body) {
     object(body, ['itemId', 'operationId']); const it = item(body.itemId), operationId = uuid(body.operationId);
-    if (it.hatch || it.unlock || it.cost < 1) fail(400, 'ITEM_NOT_FOR_SALE');
+    if (it.hatch || it.unlock || (it.cost < 1 && !it.om)) fail(400, 'ITEM_NOT_FOR_SALE');
     return this.store.transaction(async (tx) => {
       const { p, prog, family, s } = await this.child(tx, ctx); const op = await this.operation(tx, p, operationId, 'buy', it.id);
       if (op.old) return op.old.response;
       let w = { ...prog.wallet, inventory: [...prog.wallet.inventory], purchases: [...prog.wallet.purchases] };
-      if (w.gc < it.cost) fail(409, 'INSUFFICIENT_GRID_COINS');
+      if (it.om) { if (!olympiaAccess(family, this.now()).open) fail(403, 'OLYMPIA_LOCKED'); if (w.om < it.om) fail(409, 'INSUFFICIENT_OLYMINERALS'); } // Olympia's shop: the pass, and the minerals
+      else if (w.gc < it.cost) fail(409, 'INSUFFICIENT_GRID_COINS');
       let awarded = null;
       if (it.kind === 'shield') { if (w.shields >= 2) fail(409, 'SHIELD_LIMIT'); w.shields++; }
       else if (it.kind === 'crate') {
-        const pool = SHOP_ITEMS.filter((x) => CRATE_KINDS.has(x.kind) && !w.inventory.includes(x.id) && !x.unlock && !x.hatch);
+        const pool = SHOP_ITEMS.filter((x) => CRATE_KINDS.has(x.kind) && !w.inventory.includes(x.id) && !x.unlock && !x.hatch && !x.om);
         if (!pool.length) fail(409, 'CRATE_EMPTY');
         const weighted = pool.flatMap((x) => Array(CRATE_RARE.has(x.kind) ? 1 : 3).fill(x)); awarded = weighted[this.pickIndex(weighted.length)];
         w.inventory.push(awarded.id); w[EQUIP_SLOTS[awarded.kind]] = awarded.id;
@@ -272,11 +290,12 @@ export class Game {
       } else {
         if (w.inventory.includes(it.id)) fail(409, 'ITEM_ALREADY_OWNED'); w.inventory.push(it.id); w[EQUIP_SLOTS[it.kind]] = it.id;
       }
-      w.gcSpent += it.cost; w.inventory = [...new Set(w.inventory)];
-      w.purchases.unshift(nowRow(it.kind === 'crate' && awarded ? { ...it, name: `${it.name} -> ${awarded.emoji} ${awarded.name}` } : it, it.cost, this.now(), family.timeZone || 'Asia/Singapore'));
+      if (it.om) w.omSpent += it.om; else w.gcSpent += it.cost; w.inventory = [...new Set(w.inventory)];
+      w.purchases.unshift(nowRow(it.kind === 'crate' && awarded ? { ...it, name: `${it.name} -> ${awarded.emoji} ${awarded.name}` } : it, it.om || it.cost, this.now(), family.timeZone || 'Asia/Singapore'));
       w.purchases = w.purchases.slice(0, PURCHASE_MAX);
-      // The price leaves the wallet only through the ledger (server/ledger.mjs).
-      const next = await post(tx, p.doc, { ...prog, wallet: w }, entry({ id: operationId, type: 'shop.buy', gc: -it.cost, ref: it.id, note: awarded ? awarded.id : null, at: this.now() }));
+      // The price leaves the wallet only through the ledger (server/ledger.mjs): coins, or Olyminerals for an Olympia item.
+      const next = await post(tx, p.doc, { ...prog, wallet: w }, it.om ? entry({ id: operationId, type: 'olympia.buy', om: -it.om, ref: it.id, at: this.now() })
+        : entry({ id: operationId, type: 'shop.buy', gc: -it.cost, ref: it.id, note: awarded ? awarded.id : null, at: this.now() }));
       const response = { wallet: this.publicWallet(next.wallet), item: itemPublic(it), awarded: awarded ? itemPublic(awarded) : null };
       tx.set(p.doc, next);
       tx.set(op.path, { action: 'buy', fingerprint: it.id, response, at: this.now(), expireAt: this.now() + OP_LIFE });
@@ -339,8 +358,10 @@ export class Game {
       for (const id of family.childIds || []) { const child = await tx.get(`families/${s.familyId}/children/${id}`); const prog = normalizeProgress(await tx.get(`families/${s.familyId}/learning/${id}`));
         if (child) children.push({ child: { id, nickname: child.nickname, icon: child.icon, status: child.status }, pacePercent: prog.pacePercent, scanFocus: prog.scanFocus === true,
           engine: { ...trk(prog, 'engine'), levelId: LEVELS[trk(prog, 'engine').level].id, done: trackDone(prog, 'engine'), bossDue: bossDue(prog, 'engine') },
-          nav: { ...trk(prog, 'nav'), levelId: LEVELS[trk(prog, 'nav').level].id, done: trackDone(prog, 'nav'), bossDue: bossDue(prog, 'nav') }, wallet: this.publicWallet(prog.wallet), stats: prog.stats, history: prog.history.slice(0, 12), heatmap: heatmap(prog) }); }
-      return { timeZone: family.timeZone || 'Asia/Singapore', timeZones: TIME_ZONE_CHOICES, rewards: cfg.rewards.map(rewardPublic), rocket: publicRocket(cfg.rocket), rocketHistory: cfg.rocketHistory, children };
+          nav: { ...trk(prog, 'nav'), levelId: LEVELS[trk(prog, 'nav').level].id, done: trackDone(prog, 'nav'), bossDue: bossDue(prog, 'nav') }, wallet: this.publicWallet(prog.wallet), stats: prog.stats, history: prog.history.slice(0, 12), heatmap: heatmap(prog),
+          olympia: { moons: prog.olympia.moons, history: prog.olympia.history.slice(0, 8), medals: medalTally(prog) } }); }
+      return { timeZone: family.timeZone || 'Asia/Singapore', timeZones: TIME_ZONE_CHOICES, rewards: cfg.rewards.map(rewardPublic), rocket: publicRocket(cfg.rocket), rocketHistory: cfg.rocketHistory, children,
+        tutorOff: family.tutorOff === true, olympia: olympiaAccess(family, this.now()) }; // the tutor switch and the Olympia pass, as Game & progress shows them
     }, { readOnly: true });
   }
   async setRewards(ctx, body) {
@@ -391,15 +412,18 @@ export class Game {
       tx.set(opPath, { action: 'adjust', fingerprint: fp, response, at: this.now(), expireAt: this.now() + OP_LIFE }); this.foundation.audit(tx, 'game.parent_adjust', s.uid, s.familyId, body.childId); return response; });
   }
   // A child's pace and, since email-v1, whether the System Scan focuses on the child's weak styles (progress.mjs buildScanQuestions): either or both.
+  // …and, since Olympia (19 Sep 2026), the family's Explain-to-me switch (tutorOff: the tutor's button goes for every child of the family).
   async settings(ctx, body) {
-    object(body, ['timeZone', 'childId', 'pacePercent', 'scanFocus']);
+    object(body, ['timeZone', 'childId', 'pacePercent', 'scanFocus', 'tutorOff']);
     if (body.scanFocus !== undefined && typeof body.scanFocus !== 'boolean') fail(400, 'INVALID_REQUEST');
+    if (body.tutorOff !== undefined && typeof body.tutorOff !== 'boolean') fail(400, 'INVALID_REQUEST');
     const hasPace = body.pacePercent !== undefined, hasFocus = body.scanFocus !== undefined;
     return this.store.transaction(async (tx) => { const { s, family } = await this.parent(tx, ctx, true); let nextFamily = family, childPath = null, prog = null;
       if (body.timeZone !== undefined && body.timeZone !== null) { const tz = text(body.timeZone, 1, 64); try { new Intl.DateTimeFormat('en', { timeZone: tz }).format(new Date()); } catch { fail(400, 'INVALID_TIME_ZONE'); } nextFamily = { ...family, timeZone: tz }; }
+      if (body.tutorOff !== undefined) nextFamily = { ...nextFamily, tutorOff: body.tutorOff };
       if (body.childId !== undefined && body.childId !== null) { uuid(body.childId); if (!family.childIds.includes(body.childId) || (!hasPace && !hasFocus) || (hasPace && (!Number.isInteger(body.pacePercent) || body.pacePercent < 10 || body.pacePercent > 200))) fail(400, 'INVALID_PACE'); childPath = `families/${s.familyId}/learning/${body.childId}`; prog = normalizeProgress(await tx.get(childPath)); }
       const next = childPath ? { ...prog, ...(hasPace ? { pacePercent: body.pacePercent } : {}), ...(hasFocus ? { scanFocus: body.scanFocus } : {}) } : null;
       if (nextFamily !== family) tx.set(`families/${s.familyId}`, nextFamily); if (next) tx.set(childPath, next); this.foundation.audit(tx, 'game.settings', s.uid, s.familyId, body.childId || null);
-      return { timeZone: nextFamily.timeZone, childId: body.childId || null, pacePercent: next ? next.pacePercent : null, scanFocus: next ? next.scanFocus === true : null }; });
+      return { timeZone: nextFamily.timeZone, childId: body.childId || null, pacePercent: next ? next.pacePercent : null, scanFocus: next ? next.scanFocus === true : null, tutorOff: nextFamily.tutorOff === true }; });
   }
 }
