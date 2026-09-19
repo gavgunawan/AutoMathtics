@@ -81,9 +81,11 @@ if [[ -n "${FEEDBACK_TO:-}" ]]; then
 fi
 # The Explain-to-me tutor (server/tutor.mjs) runs only where the owner has put a Claude API key in Secret Manager as am-v3-anthropic-key
 # (DEPLOY_V3.md → The tutor). The binding is added when that secret exists and left out when it does not, so a project without the key
-# deploys as before, with the tutor hidden. TUTOR_MONTHLY_CALLS caps the whole service's calls a month (config.mjs; default 3000).
+# deploys as before, with the tutor hidden. The newest enabled version is bound (`latest`), so a re-pasted key needs only a new version
+# and a deploy: on 19 Sep 2026 version 1 held an 18-character value that is not a Claude key (main.mjs's start-up log said so), and a
+# binding pinned to :1 would have kept serving it. TUTOR_MONTHLY_CALLS caps the whole service's calls a month (config.mjs; default 3000).
 TUTOR_BINDING=''
-if gcloud secrets versions describe 1 --secret am-v3-anthropic-key --project "$PROJECT_ID" >/dev/null 2>&1; then TUTOR_BINDING=',ANTHROPIC_API_KEY=am-v3-anthropic-key:1'; echo 'the tutor key is bound (am-v3-anthropic-key)'; else echo 'no am-v3-anthropic-key: the tutor stays hidden'; fi
+if [[ -n "$(gcloud secrets versions list am-v3-anthropic-key --project "$PROJECT_ID" --filter='state:enabled' --format='value(name)' 2>/dev/null)" ]]; then TUTOR_BINDING=',ANTHROPIC_API_KEY=am-v3-anthropic-key:latest'; echo 'the tutor key is bound (am-v3-anthropic-key, newest enabled version)'; else echo 'no am-v3-anthropic-key: the tutor stays hidden'; fi
 [[ -z "${TUTOR_MONTHLY_CALLS:-}" || "$TUTOR_MONTHLY_CALLS" =~ ^[0-9]{1,7}$ ]] || { echo 'TUTOR_MONTHLY_CALLS must be a whole number of calls a month.' >&2; exit 1; }
 [[ -z "${TUTOR_MONTHLY_USD:-}" || "$TUTOR_MONTHLY_USD" =~ ^[0-9]{1,6}(\.[0-9]{1,2})?$ ]] || { echo 'TUTOR_MONTHLY_USD must be a number of dollars a month.' >&2; exit 1; }
 # The commit being deployed travels with the service — RELEASE_SHA in the environment, a release-sha label on the revision — and
