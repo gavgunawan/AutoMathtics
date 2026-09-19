@@ -10,6 +10,14 @@ sources below, hand-checking 60–130 generated questions and recomputing every 
 independent script. The faults they found were fixed in v3.85. What they could not fix — every moon sits a notch or two
 below the real paper's difficulty, and is text-led where the papers are figure-led — is recorded per moon for the next stage.
 
+## What changed after the check (20 Sep 2026, v3.86–v3.92)
+
+Every "still short" list below became a build list the same night, in the owner's order (SEAMO, AMO, then the rest). Each moon
+now carries its paper's marks tiers as section codes the play header names (SEA M3/M4/M6, US M3/M5/M6, SG M2/M3/M4, T A6/A8/B,
+PHI P1/P2/P3, DC E/M/H; the OCEC papers have no tiers) and the staple families the check found missing. What still cannot be
+asked is what needs a drawing the client does not make: nets and folded cubes, views of stacked cubes, shaded regions between
+circles, magic figures and figure-counting on marked cells. The client draws bars, pies, tables, line graphs and grids of cells.
+
 ## SEA-Moon · SEAMO (Southeast Asian Mathematical Olympiad, Terry Chew Institute / SEAMO official)
 - Sources: seamo-official.org/page/guidelines (rules: Papers A–F, 90 min, 20 MC + 5 free response, 3/4/6 marks); the official
   sample papers A, B, C, K with worked solutions and the syllabus PDFs linked from seamo-official.org/resources (answers: yes);
