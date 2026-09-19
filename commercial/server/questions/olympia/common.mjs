@@ -92,7 +92,7 @@ export function buildHeat(shape, pool, year, opts = {}) {
     for (let t = 0; t < 120 && !q; t++) { // a slot whose kinds mostly answer in the other style needs many draws before it is a hole
       const fresh = fits.filter((c) => !used.has(c.cat)), c = pick(fresh.length ? fresh : fits);
       const s = c.gen(year); if (!s) continue;
-      if (seen.has(s.cat) && t < 60) continue; // the same family twice in a heat only when nothing else fits the slot
+      if (seen.has(s.cat) && !c.repeatable && t < 60) continue; // the same family twice in a heat only when nothing else fits the slot, unless the entry says it may repeat (SG-Moon's syllabus pool)
       if (slot.kind === 'sa' && (s.mcOnly || !s.answer)) continue;
       q = finish(s, slot.kind, { ...opts, section: slot.section }); if (q) { used.add(c.cat); seen.add(s.cat); }
     }

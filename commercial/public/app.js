@@ -2184,7 +2184,7 @@ function tutorPanel(host, { sessionId, index, tutored = false, onUsed = () => {}
 // streak: nothing is said about an answer until the whole heat is in. ----
 const MEDAL = { gold: ['🥇', 'GOLD'], silver: ['🥈', 'SILVER'], bronze: ['🥉', 'BRONZE'], merit: ['🎖️', 'MERIT'] };
 const MOON_NAMES = { sea: 'SEA-Moon', us: 'US-Moon', sg: 'SG-Moon', t: 'T-Moon', hk: 'HK-Moon', bkk: 'BKK-Moon', phi: 'PHI-Moon', dc: 'DC-Moon' };
-const SECTION_WORDS = { A: 'Logic', B: 'Applications', MC: 'Multiple choice', SA: 'Short answer', LT: 'Logical thinking', AR: 'Arithmetic', NT: 'Number theory', GE: 'Geometry', CO: 'Combinatorics', NS: 'Number sense', PA: 'Patterns & algebra', ME: 'Measurement', SP: 'Statistics & probability', E: 'Warm-up', M: 'Middle', H: 'Closing', M3: '3 marks', M4: '4 marks', M5: '5 marks', M6: '6 marks' };
+const SECTION_WORDS = { A: 'Logic', B: 'Applications', MC: 'Multiple choice', SA: 'Short answer', LT: 'Logical thinking', AR: 'Arithmetic', NT: 'Number theory', GE: 'Geometry', CO: 'Combinatorics', NS: 'Number sense', PA: 'Patterns & algebra', ME: 'Measurement', SP: 'Statistics & probability', E: 'Warm-up', M: 'Middle', H: 'Closing', M2: '2 marks', M3: '3 marks', M4: '4 marks', M5: '5 marks', M6: '6 marks' };
 function medalChips(m) { const row = el('span', null, 'medal-row'); for (const id of ['gold', 'silver', 'bronze', 'merit']) if (m?.[id]) row.append(el('span', `${MEDAL[id][0]} ${m[id]}`, 'medal-chip')); return row; }
 async function olympiaScreen() {
   transientView = true; const st = await api('/olympia/state');
