@@ -37,6 +37,8 @@ const game = new Game({ foundation: service, store });
 const olympia = new Olympia({ foundation: service, store });
 const tutor = new Tutor({ foundation: service, store, model: cfg.tutor.apiKey ? createModel({ apiKey: cfg.tutor.apiKey, model: cfg.tutor.model }) : null,
   limits: { monthlyCalls: cfg.tutor.monthlyCalls, dailyExplanations: cfg.tutor.dailyPerChild }, log: (event) => console.error(JSON.stringify(event)) });
+// what the log may say about the key: that there is one, its length, and whether it starts as a Claude key does — never a character of it
+console.log(JSON.stringify({ event: 'tutor', on: tutor.on, keyLength: cfg.tutor.apiKey ? cfg.tutor.apiKey.length : 0, keyPrefixOk: Boolean(cfg.tutor.apiKey && cfg.tutor.apiKey.startsWith('sk-ant-')), monthlyCalls: cfg.tutor.monthlyCalls }));
 // PAYMENT_PROVIDER=none: payments are not open. config.mjs reads no provider settings, so no gateway is built below, and the billing
 // view, the payment routes and the leaving flow all say so (PAYMENTS.md → Payments not open).
 const billing = new Subscriptions({ foundation: service, store, paymentsOpen: cfg.payments.provider !== 'none' });
