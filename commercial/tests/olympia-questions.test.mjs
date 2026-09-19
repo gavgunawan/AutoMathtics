@@ -69,8 +69,9 @@ const FIXED = new Set(['spatial visualisation', 'shapes', 'odd and even numbers'
 test('no moon wording (a fact question aside) keeps the same right answer every time', () => {
   const seen = new Map();
   for (const { m, y, qs } of heats(40)) for (const q of qs) {
-    if (FIXED.has(q.cat)) continue;
-    const key = `${m.id}:${y <= 2 ? 'low' : y <= 4 ? 'mid' : 'high'} · ${q.display.text.replace(/\d+(?:[.,]\d+)?/g, '#').replace(/\b[A-Z][a-z]+\b/g, 'N')}`;
+    if (FIXED.has(q.cat) || /^Which of these (?:is about|weighs about|holds about)/.test(q.display.text)) continue; // a size question is answered by the number the key erases
+    // digits, names, and a wording's singular and plural fold into one key (the pizza question's "1 piece is" alone always answers 3/4)
+    const key = `${m.id}:${y <= 2 ? 'low' : y <= 4 ? 'mid' : 'high'} · ${q.display.text.replace(/\d+(?:[.,]\d+)?/g, '#').replace(/\b[A-Z][a-z]+\b/g, 'N').replace(/\bpieces? (?:is|are)\b/g, 'piece(s)').replace(/\b(\w+?)s\b/g, '$1')}`;
     const e = seen.get(key) || seen.set(key, { n: 0, right: new Set() }).get(key); e.n++; e.right.add(answerText(q));
   }
   const often = [...seen].filter(([, e]) => e.n >= 8);
