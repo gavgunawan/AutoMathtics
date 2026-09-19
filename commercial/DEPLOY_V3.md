@@ -736,8 +736,14 @@ before, with the button hidden.
    ```bash
    gcloud secrets add-iam-policy-binding am-v3-anthropic-key --project "$PROJECT_ID" --member="serviceAccount:$RUNTIME_SA" --role=roles/secretmanager.secretAccessor --quiet
    ```
-3. Deploy (block C, or the release workflow). The helper prints `the tutor key is bound (am-v3-anthropic-key)`, and the button
-   appears on every question for every family whose parent has not switched the tutor off in Game & progress.
+   If Cloud Shell answers `Secret Payload cannot be empty` (its paste did not reach the command on 19 Sep 2026), use the console
+   instead: Security → Secret Manager → am-v3-anthropic-key → **New version**, paste the key, Add. A wrong value is replaced the
+   same way, by a new version: the helper binds the newest enabled version, and the service's start-up log says `{"event":"tutor",
+   "keyLength":…,"keyPrefixOk":…}` — a Claude key is about 108 characters and begins `sk-ant-api03-`; anything else (version 1
+   held 18 characters) makes every Explain-to-me call fail with TUTOR_UNAVAILABLE while the button still shows.
+3. Deploy (block C, or the release workflow). The helper prints `the tutor key is bound (am-v3-anthropic-key, newest enabled
+   version)`, and the button appears on every question for every family whose parent has not switched the tutor off in Game &
+   progress.
 
 **Caps** (the owner's condition: the tutor must never run away with the usage). Per child a day: 12 explanations and 40 follow-up
 messages (`TUTOR_DAILY_PER_CHILD` sets the first); per question: 6 turns, 240 characters a message, about 350 tokens a reply; and
