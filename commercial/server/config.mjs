@@ -114,9 +114,10 @@ export function config(env = process.env) {
   // deploy-staging.sh when am-v3-anthropic-key exists). TUTOR_MONTHLY_CALLS caps the whole service's calls a month and
   // TUTOR_DAILY_PER_CHILD each child's explanations a day (the owner's condition, 19 Sep 2026: the tutor must never run away with
   // the usage); TUTOR_MODEL names the model. The key is checked for shape only and goes nowhere but the model client.
-  // trimmed: a key pasted into Secret Manager's box arrives with a newline on the end, and the service must not die of it (19 Sep 2026)
+  // Trimmed and otherwise taken as it comes: the service must never die of the secret's shape (19 Sep 2026: two live revisions did,
+  // refusing a key the owner had pasted). A wrong key fails at the first tutor call, which server/tutor.mjs answers with
+  // TUTOR_UNAVAILABLE and logs by status code; main.mjs logs whether the key has the sk-ant- prefix, never the key.
   const tutorKey = (env.ANTHROPIC_API_KEY || '').trim() || null;
-  if (tutorKey !== null && !/^sk-ant-\S{20,}$/.test(tutorKey)) throw Error('ANTHROPIC_API_KEY does not look like a Claude API key.');
   // The month's ceiling is set in dollars (TUTOR_MONTHLY_USD, the owner's figure) or in calls (TUTOR_MONTHLY_CALLS); dollars win
   // when both are set. A call is about 900 tokens in (the prompt, the question, the thread so far) and 300 out, about a quarter of a
   // cent at Haiku 4.5's list prices ($1 and $5 a million tokens); USD_PER_CALL allows for longer threads. The key's own workspace

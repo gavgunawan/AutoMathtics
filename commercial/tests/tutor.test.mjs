@@ -136,7 +136,7 @@ test('config: the month\'s ceiling in dollars becomes calls at USD_PER_CALL, cal
   assert.equal(config({ ...env, ANTHROPIC_API_KEY: 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz\n' }).tutor.apiKey, 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz', 'a newline on the end of the secret is trimmed, not fatal');
   assert.equal(config({ ...env, ANTHROPIC_API_KEY: 'sk-ant-api03-ab.cd+ef/ghijklmnopqrstuvwxyz' }).tutor.apiKey, 'sk-ant-api03-ab.cd+ef/ghijklmnopqrstuvwxyz', 'any character but a space after the prefix: the shape of a key is not ours to guess');
   assert.equal(config({ ...env, ANTHROPIC_API_KEY: '  \n' }).tutor.apiKey, null, 'a blank secret is no key');
-  assert.throws(() => config({ ...env, ANTHROPIC_API_KEY: 'not-a-key' }), /ANTHROPIC_API_KEY/);
+  assert.equal(config({ ...env, ANTHROPIC_API_KEY: 'not-a-key' }).tutor.apiKey, 'not-a-key', 'no shape check: a wrong key fails at the first call, never at start-up');
   assert.throws(() => config({ ...env, TUTOR_MONTHLY_USD: 'lots' }), /TUTOR_MONTHLY_USD/);
   assert.throws(() => config({ ...env, TUTOR_MONTHLY_CALLS: '1.5' }), /TUTOR_MONTHLY_CALLS/);
 });
