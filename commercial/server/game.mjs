@@ -77,6 +77,7 @@ export const SHOP_ITEMS = Object.freeze([
   { id: 'pet_jade', kind: 'pet', emoji: '🐉', name: 'Jade dragon', cost: 0, om: 60, moon: 'hk' },
   { id: 'pet_elephant', kind: 'pet', emoji: '🐘', name: 'Golden elephant', cost: 0, om: 60, moon: 'bkk' },
   { id: 'pet_parrot', kind: 'pet', emoji: '🦜', name: 'Rainbow parrot', cost: 0, om: 60, moon: 'phi' },
+  { id: 'pet_bison', kind: 'pet', emoji: '🦬', name: 'Prairie bison', cost: 0, om: 60, moon: 'dc' },
   { id: 'bg_moon', kind: 'bg', emoji: '🌕', name: 'Moonrise sky', cost: 0, om: 50 },
   { id: 'bg_nebula', kind: 'bg', emoji: '🪐', name: 'Olympia nebula', cost: 0, om: 80 },
   { id: 'veh_rover', kind: 'vehicle', emoji: '🛸', name: 'Lunar rover', cost: 0, om: 150, big: true },

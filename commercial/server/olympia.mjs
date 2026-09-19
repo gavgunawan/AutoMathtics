@@ -1,7 +1,9 @@
 // 🪐 OLYMPIA — the olympiad practice world behind the kids' page's "Gateway jump" (the owner's request of 19 Sep 2026).
 //
-// Seven moons named for places, each modelled on one olympiad and none affiliated with it (questions/olympia/moons.mjs). A
-// visit is a ten-question heat in that moon's real shape, the child's year from sign-up picking the band. Unlike the two
+// Eight moons named for places, each modelled on one olympiad and none affiliated with it (questions/olympia/moons.mjs). A
+// visit is a ten-question heat in that moon's real shape, the child's year picking the band: the year from sign-up, or the
+// sector reached on either track when that is further, since the app advances a child past school (the owner, 19 Sep 2026:
+// a child who has unlocked Sector B is a Year 2 wherever the school has them). Unlike the two
 // tracks there are no streaks and no feedback as the child goes: every right and wrong — the final score — is revealed only
 // at the end, as a competition does. Medals on the real-world thresholds pay Grid Coins, Reward Points and Olyminerals, the
 // currency only Olympia's shop takes; at most two visits a moon a day are rewarded, later ones are training runs. A visit on
@@ -10,7 +12,7 @@
 // family carries (`family.olympia`, set by scripts/olympia-pass.mjs until payments open).
 import { randomUUID } from 'node:crypto';
 import { Fault, fail, object, uuid, text, YEAR_LEVELS } from './security.mjs';
-import { normalizeProgress, grade, answerText, dayISO } from './progress.mjs';
+import { normalizeProgress, grade, answerText, dayISO, trk, TRACKS, LEVELS } from './progress.mjs';
 import { effectiveEntitlement } from './subscription.mjs';
 import { entry, post } from './ledger.mjs';
 import { MOONS, moonById, moonPublic, bandOf, buildVisit, HEAT_QUESTIONS } from './questions/olympia/moons.mjs';
@@ -37,11 +39,20 @@ export function olympiaAccess(family, now) {
   }
   return { open: false, why: 'none', until: null };
 }
-/** The year a child is asked at: the year from sign-up, else from the age (7 is Year 1), else Year 1. */
-export function yearOf(child) {
-  const y = child?.demographics?.yearLevel; if (YEAR_LEVELS.includes(y)) return y;
-  const a = child?.demographics?.age; return Number.isInteger(a) ? Math.max(1, Math.min(6, a - 6)) : 1;
+/** The highest sector (a LEVELS index) reached on either track: Sector B on the Engine is 1 whatever the Navigator says. */
+const sectorReached = (prog) => Math.max(0, ...TRACKS.map((t) => trk(prog, t).level));
+/**
+ * The year a child is asked at. From sign-up, else from the age (7 is Year 1), else Year 1 — lifted to the sector reached on
+ * either track when that is further (Sector B = Year 2 … F = Year 6): the app advances a child past school, so a child who has
+ * unlocked Sector B is a Year 2 wherever the school has them (the owner, 19 Sep 2026). Never lowered: a Year 3 at Sector A stays 3.
+ */
+export function yearOf(child, prog = null) {
+  const y = child?.demographics?.yearLevel, a = child?.demographics?.age;
+  const signedUp = YEAR_LEVELS.includes(y) ? y : Number.isInteger(a) ? Math.max(1, Math.min(6, a - 6)) : 1;
+  return prog ? Math.max(signedUp, Math.min(6, sectorReached(prog) + 1)) : signedUp;
 }
+/** For the hub: whether the sector lifted the year past sign-up, and which sector that is. */
+export const yearFrom = (child, prog) => ({ yearLifted: yearOf(child, prog) > yearOf(child), sector: LEVELS[sectorReached(prog)]?.id || 'A' });
 /** The operator's Olympia pass (scripts/olympia-pass.mjs): the family may enter until `until`; a past `until` closes it. Audited. */
 export async function grantOlympia(store, { familyId, until, actor, reason }, now = Date.now()) {
   uuid(familyId); text(reason, 5, 200); text(actor, 3, 200);
@@ -73,10 +84,10 @@ export class Olympia {
   }
   async state(ctx) {
     return this.store.transaction(async (tx) => {
-      const { p, prog, family, child } = await this.child(tx, ctx); const now = this.now(), tz = family.timeZone || DEFAULT_TIME_ZONE, year = yearOf(child);
+      const { p, prog, family, child } = await this.child(tx, ctx); const now = this.now(), tz = family.timeZone || DEFAULT_TIME_ZONE, year = yearOf(child, prog);
       const active = prog.olympia.activeVisit ? await tx.get(p.session(prog.olympia.activeVisit)) : null;
       const live = active && active.status === 'active' && now < active.createdAt + VISIT_LIFE;
-      return { access: olympiaAccess(family, now), year, minerals: prog.wallet.om, medals: MEDALS.map((m) => ({ id: m.id, min: m.min, gc: m.gc, rp: m.rp, om: m.om })), heat: HEAT_QUESTIONS,
+      return { access: olympiaAccess(family, now), year, ...yearFrom(child, prog), minerals: prog.wallet.om, medals: MEDALS.map((m) => ({ id: m.id, min: m.min, gc: m.gc, rp: m.rp, om: m.om })), heat: HEAT_QUESTIONS,
         moons: this.moonsFor(prog, year, dayISO(now, tz)), history: prog.olympia.history.slice(0, 12), medalCount: medalTally(prog),
         active: live ? { visit: this.publicVisit(active), question: this.publicQuestion(active, active.index) } : null };
     }, { readOnly: true });
@@ -89,7 +100,7 @@ export class Olympia {
       if (!olympiaAccess(family, now).open) fail(403, 'OLYMPIA_LOCKED');
       const active = prog.olympia.activeVisit ? await tx.get(p.session(prog.olympia.activeVisit)) : null;
       if (active && active.status === 'active' && now < active.createdAt + VISIT_LIFE) return { visit: this.publicVisit(active), question: this.publicQuestion(active, active.index), resumed: true };
-      const year = yearOf(child);
+      const year = yearOf(child, prog);
       if (!moon.open) fail(409, 'MOON_NOT_OPEN'); if (year < moon.years[0] || year > moon.years[1]) fail(409, 'MOON_NOT_FOR_YEAR');
       const commitRate = await this.foundation.rateIn(tx, `olympia-start:${s.familyId}:${s.childId}`, STARTS_PER_HOUR, HOUR)
         .catch((e) => { if (e instanceof Fault && e.code === 'TOO_MANY_ATTEMPTS') fail(429, 'TOO_MANY_PAPERS'); throw e; });

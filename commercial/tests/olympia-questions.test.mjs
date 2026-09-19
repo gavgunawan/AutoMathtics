@@ -1,4 +1,4 @@
-// Olympia's four open moons (server/questions/olympia): every heat has the moon's real shape, every question is well formed
+// Olympia's eight moons (server/questions/olympia): every heat has the moon's real shape, every question is well formed
 // and marked as it should be, every figure is one the client draws, and no wording always has the same answer.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,15 +10,15 @@ import { canonical, wrong } from './support.mjs';
 const OPEN = MOONS.filter((m) => m.open);
 const heats = (n) => { const out = []; for (const m of OPEN) for (let y = m.years[0]; y <= m.years[1]; y++) for (let i = 0; i < n; i++) out.push({ m, y, qs: buildVisit(m, y) }); return out; };
 
-test('the seven moons, all open, in the owner\'s order (SEAMO, AMO, SMC and WMI first, then HK, BKK and PHI), ids unique, and the public shape carries no generator', () => {
-  assert.deepEqual(OPEN.map((m) => m.id), ['sea', 'us', 'sg', 't', 'hk', 'bkk', 'phi']);
-  assert.equal(new Set(MOONS.map((m) => m.id)).size, 7);
+test('the eight moons, all open, in the owner\'s order (SEAMO, AMO, SMC and WMI first, then HK, BKK and PHI, then DC), ids unique, and the public shape carries no generator', () => {
+  assert.deepEqual(OPEN.map((m) => m.id), ['sea', 'us', 'sg', 't', 'hk', 'bkk', 'phi', 'dc']);
+  assert.equal(new Set(MOONS.map((m) => m.id)).size, 8);
   for (const m of MOONS) { const p = moonPublic(m); assert.equal(p.heat, undefined); assert.ok(/^[A-Z]+-Moon$/.test(p.name)); assert.ok(p.modelled && p.long && p.blurb && p.shape); assert.ok(Array.isArray(p.years) && p.years.length === 2); }
   assert.throws(() => buildVisit({ ...moonById('hk'), open: false }, 3), /not open/);
-  assert.equal(moonById('us').years[0], 2, 'AMO has no Year 1 paper');
+  assert.equal(moonById('us').years[0], 2, 'AMO has no Year 1 paper'); assert.equal(moonById('dc').years[0], 4, 'the AMC 8 is a Grade 8 paper: DC-Moon opens at Year 4');
   assert.equal(bandOf(moonById('sea'), 1), 'Paper A'); assert.equal(bandOf(moonById('sea'), 4), 'Paper B'); assert.equal(bandOf(moonById('sea'), 6), 'Paper C'); assert.equal(bandOf(moonById('t'), 5), 'Grade 5');
 });
-test('every heat is ten questions in the moon\'s real shape: SEAMO 8 MC + 2 SA with five options and "None of the above" on Paper C; AMO 6 MC of five + 4 SA; SMC 5 + 5; WMI five logic then five applications, all MC', () => {
+test('every heat is ten questions in the moon\'s real shape: SEAMO 8 MC + 2 SA with five options and "None of the above" on Paper C; AMO 6 MC of five + 4 SA; SMC 5 + 5; WMI five logic then five applications, all MC; AMC 8 ten MC of five options in three climbing bands', () => {
   for (const { m, y, qs } of heats(6)) {
     assert.equal(qs.length, HEAT_QUESTIONS, `${m.id} year ${y}`);
     const kinds = qs.map((q) => (q.answer.type === 'choice' ? 'mc' : 'sa')), sections = qs.map((q) => q.section);
@@ -29,6 +29,7 @@ test('every heat is ten questions in the moon\'s real shape: SEAMO 8 MC + 2 SA w
     // the OCEC twins: all short answer, two a category in the real order, every answer a whole number (frac chains are asked as a + b)
     if (m.id === 'hk' || m.id === 'bkk') { assert.deepEqual(kinds, Array(10).fill('sa')); assert.deepEqual(sections, ['LT', 'LT', 'AR', 'AR', 'NT', 'NT', 'GE', 'GE', 'CO', 'CO']); for (const q of qs) assert.equal(q.answer.type, 'int', JSON.stringify(q)); }
     if (m.id === 'phi') { assert.deepEqual(kinds, [...Array(5).fill('mc'), ...Array(5).fill('sa')]); assert.deepEqual(sections, ['NS', 'GE', 'PA', 'ME', 'SP', 'NS', 'GE', 'PA', 'ME', 'SP']); for (const q of qs.slice(0, 5)) assert.equal(q.display.choices.length, 4); }
+    if (m.id === 'dc') { assert.deepEqual(kinds, Array(10).fill('mc')); assert.deepEqual(sections, ['E', 'E', 'E', 'E', 'M', 'M', 'M', 'H', 'H', 'H']); for (const q of qs) { assert.equal(q.display.choices.length, 5); assert.ok(!q.display.choices.includes(NONE)); } }
     for (const q of qs) assert.ok(typeof q.cat === 'string' && q.cat.length > 2, `a category on every question: ${JSON.stringify(q)}`);
   }
 });
@@ -68,7 +69,7 @@ test('every figure a moon question carries is one the client can draw: bars, pie
 });
 // a fact question (edges of a cube, the next triangular number) has one answer by nature; every other wording must move
 const FIXED = new Set(['spatial visualisation', 'shapes', 'odd and even numbers', 'systematic listing', 'number patterns', 'counting figures', 'shortest path', 'probability',
-  'geometry · shapes and solids', 'geometry · counting figures', 'arithmetic · smart calculation', 'logical thinking · guessing a number', 'geometry · shapes', 'geometry · symmetry', 'pattern and algebra · shape patterns', 'pattern and algebra · number patterns', 'combinatorics · routing', 'combinatorics · forming numbers']);
+  'geometry · shapes and solids', 'geometry · counting figures', 'arithmetic · smart calculation', 'logical thinking · guessing a number', 'geometry · shapes', 'geometry · symmetry', 'pattern and algebra · shape patterns', 'pattern and algebra · number patterns', 'combinatorics · routing', 'combinatorics · forming numbers', 'geometry · angles']);
 test('no moon wording (a fact question aside) keeps the same right answer every time', () => {
   const seen = new Map();
   for (const { m, y, qs } of heats(40)) for (const q of qs) {

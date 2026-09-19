@@ -50,12 +50,12 @@ test('access: a pilot grant and the free trial open Olympia; a paid plan without
   assert.equal(olympiaAccess(await f.store.get(famPath(k)), now).open, false);
   await assert.rejects(grantOlympia(f.store, { familyId: randomUUID(), until: now + DAY, actor: 'test-operator', reason: 'nobody' }, now), rejected('FAMILY_NOT_FOUND'));
 });
-test('the hub: seven moons, four open, US-Moon locked for a Year 1 child and open for Year 2, the band named, the child\'s minerals and medals', async () => {
+test('the hub: eight moons, all open, US-Moon locked for a Year 1 child and open for Year 2, DC-Moon until Year 4, the band named, the child\'s minerals and medals', async () => {
   const f = fixture(), k1 = await f.childSession();
   const st = await f.olympia.state(k1.childCtx);
-  assert.equal(st.year, 1); assert.equal(st.moons.length, 7); assert.equal(st.heat, 10); assert.equal(st.minerals, 0); assert.equal(st.medalCount, 0); assert.equal(st.active, null);
+  assert.equal(st.year, 1); assert.equal(st.yearLifted, false); assert.equal(st.sector, 'A'); assert.equal(st.moons.length, 8); assert.equal(st.heat, 10); assert.equal(st.minerals, 0); assert.equal(st.medalCount, 0); assert.equal(st.active, null);
   assert.deepEqual(st.moons.filter((m) => m.available).map((m) => m.id), ['sea', 'sg', 't', 'hk', 'bkk', 'phi']);
-  assert.equal(st.moons.find((m) => m.id === 'us').why, 'opens at Year 2'); assert.equal(st.moons.find((m) => m.id === 'hk').why, null);
+  assert.equal(st.moons.find((m) => m.id === 'us').why, 'opens at Year 2'); assert.equal(st.moons.find((m) => m.id === 'dc').why, 'opens at Year 4'); assert.equal(st.moons.find((m) => m.id === 'hk').why, null);
   assert.equal(st.moons.find((m) => m.id === 'sea').band, 'Paper A');
   for (const m of st.moons) { assert.equal(m.heat, undefined, 'no generator leaves the server'); assert.ok(m.modelled && m.long); assert.deepEqual(m.medals, { gold: 0, silver: 0, bronze: 0, merit: 0 }); }
   await assert.rejects(f.olympia.start(k1.childCtx, { moon: 'us' }), rejected('MOON_NOT_FOR_YEAR'));
@@ -64,6 +64,16 @@ test('the hub: seven moons, four open, US-Moon locked for a Year 1 child and ope
   const k2 = await withChild(fixture(), 8, 2); // a second fixture: its own family
   const st2 = await k2.childCtx && (await (async () => { const g = fixture(); const kk = await withChild(g, 8, 2); return g.olympia.state(kk.childCtx); })());
   assert.equal(st2.year, 2); assert.ok(st2.moons.find((m) => m.id === 'us').available); assert.equal(st2.moons.find((m) => m.id === 'us').band, 'Grade 2');
+});
+test('the year a child is asked at follows the sector reached: a Year 1 child who has unlocked Sector B is asked as a Year 2 (US-Moon opens), one at Sector D on the Navigator as a Year 4 (DC-Moon too); a sign-up year beyond the sector stands', async () => {
+  const f = fixture(), k = await f.childSession();
+  const at = async (engine, nav) => { await f.store.put(progPath(k), { ...normalizeProgress(await f.store.get(progPath(k))), engine: { level: engine, paper: 1, bossCleared: 0 }, nav: { level: nav, paper: 1, bossCleared: 0 } }); return f.olympia.state(k.childCtx); };
+  let st = await at(1, 0); assert.equal(st.year, 2); assert.equal(st.yearLifted, true); assert.equal(st.sector, 'B'); assert.ok(st.moons.find((m) => m.id === 'us').available); assert.equal(st.moons.find((m) => m.id === 'us').band, 'Grade 2'); assert.ok(!st.moons.find((m) => m.id === 'dc').available);
+  const v = await f.olympia.start(k.childCtx, { moon: 'us' }); assert.equal(v.visit.year, 2); assert.equal(v.visit.band, 'Grade 2'); await f.olympia.quit(k.childCtx, { visitId: v.visit.id });
+  st = await at(0, 3); assert.equal(st.year, 4); assert.equal(st.sector, 'D'); assert.ok(st.moons.find((m) => m.id === 'dc').available, 'the Navigator lifts the year too'); assert.equal(st.moons.find((m) => m.id === 'dc').band, 'Grade 4');
+  st = await at(0, 0); assert.equal(st.year, 1); assert.equal(st.yearLifted, false); assert.equal(st.sector, 'A'); assert.ok(!st.moons.find((m) => m.id === 'us').available);
+  const g = fixture(), k3 = await withChild(g, 9, 3), s3 = await g.olympia.state(k3.childCtx); assert.equal(s3.year, 3); assert.equal(s3.yearLifted, false); assert.equal(s3.sector, 'A');
+  assert.equal(yearOf({ demographics: { yearLevel: 1 } }, { engine: { level: 5, paper: 1, bossCleared: 0 } }), 6); assert.equal(yearOf({ demographics: { yearLevel: 5 } }, { engine: { level: 1, paper: 1, bossCleared: 0 } }), 5, 'never lowered');
 });
 test('a visit: ten questions in the moon\'s shape, an answer marked in silence, the reveal at the end with every question, a medal paid in coins, points and Olyminerals through one ledger row', async () => {
   const f = fixture(), k = await f.childSession();
