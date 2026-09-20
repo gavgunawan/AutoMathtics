@@ -27,8 +27,12 @@ const qAnchor = "  const q = qs[qIdx];\n  const curPaper = q ? q.paper : startPa
 if (!src.includes(qAnchor)) throw new Error("question anchor not found — harness.mjs needs updating");
 src = src.replace(qAnchor, qAnchor + "\n  if (typeof document !== \"undefined\") document.documentElement.setAttribute(\"data-q\", q ? JSON.stringify({ t: q.answer.type, v: q.answer.v }) : \"\"); // HARNESS");
 fs.writeFileSync(path.join(tmp, "automathtics-src.jsx"), src, "utf8");
-fs.copyFileSync(r("src", "automathtics-entry.jsx"), path.join(tmp, "automathtics-entry.jsx"));
-fs.copyFileSync(r("src", "navigator.js"), path.join(tmp, "navigator.js"));
+// everything else in src/ comes across untouched — a named list here just goes stale the next time
+// the app grows a module, and the failure is a build error a long way from the cause
+for (const f of fs.readdirSync(r("src"))) {
+  if (f === "automathtics-src.jsx" || !/\.(js|jsx)$/.test(f)) continue;
+  fs.copyFileSync(r("src", f), path.join(tmp, f));
+}
 
 const out = await build({
   entryPoints: [path.join(tmp, "automathtics-entry.jsx")],

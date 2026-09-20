@@ -3,6 +3,7 @@ import { initializeApp } from "firebase/app";
 import { getDatabase, ref as dbRef, get as dbGet, set as dbSet, onValue, runTransaction } from "firebase/database";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 import { genNavigator, navSecondsFor, NAV_TOPICS } from "./navigator.js";
+import { spriteURL } from "./station-art.js";
 
 // ================= AUTOMATHTICS — THE MATH GRID =================
 // Papers 1–100 per level · session = 5 papers · one
@@ -1094,8 +1095,8 @@ function playWrong() {
 
 // ---------- shared settings (admin panel), synced via cloud ----------
 const ADMIN_PIN = "1590";
-const BUILD_TAG = "v2.5 · 20 Sep";
-const BUILD_ID = "am-build-250"; // ASCII-only twin of BUILD_TAG, searched for in the live index.html
+const BUILD_TAG = "v2.6 · 20 Sep";
+const BUILD_ID = "am-build-260"; // ASCII-only twin of BUILD_TAG, searched for in the live index.html
 
 // ---------- full screen ----------
 const fsSupported = () => typeof document !== "undefined" && !!(document.fullscreenEnabled || document.webkitFullscreenEnabled) && !(window.navigator && window.navigator.standalone);
@@ -1184,12 +1185,12 @@ const ROCKET_AMOUNTS = { gc: [50, 100, 250], rp: [100, 200, 500] };
 // build bigger is to practise. Power, adjacency and production are the next versions' job.
 const STATION_PLOTS = 12;
 const STATION_MODULES = [
-  { id: "sm_solar", emoji: "☀️", name: "Solar Array", color: "#FFB020", blurb: "catches the light" },
-  { id: "sm_reactor", emoji: "🔋", name: "Power Core", color: "#2DFFB3", blurb: "powers the hull" },
-  { id: "sm_garden", emoji: "🌱", name: "Hydroponics", color: "#2DFF6B", blurb: "grows the food" },
-  { id: "sm_scope", emoji: "🔭", name: "Observatory", color: "#35E0FF", blurb: "watches the sky" },
-  { id: "sm_dish", emoji: "📡", name: "Comms Dish", color: "#8A5CFF", blurb: "calls home" },
-  { id: "sm_quarters", emoji: "🛏️", name: "Crew Quarters", color: "#FF2DA8", blurb: "where the crew sleeps" },
+  { id: "sm_solar", name: "Solar Array", color: "#FFB020", blurb: "catches the light" },
+  { id: "sm_reactor", name: "Power Core", color: "#2DFFB3", blurb: "powers the hull" },
+  { id: "sm_garden", name: "Hydroponics", color: "#2DFF6B", blurb: "grows the food" },
+  { id: "sm_scope", name: "Observatory", color: "#35E0FF", blurb: "watches the sky" },
+  { id: "sm_dish", name: "Comms Dish", color: "#8A5CFF", blurb: "calls home" },
+  { id: "sm_quarters", name: "Crew Quarters", color: "#FF2DA8", blurb: "where the crew sleeps" },
 ];
 const stationPath = () => `families/${FAMILY_TOKEN}/kumon/station`;
 const localLoadStation = () => { try { const s = localStorage.getItem("kumon-station"); return s ? JSON.parse(s) : null; } catch (e) { return null; } };
@@ -1223,14 +1224,10 @@ const stationPlots = (s) => Math.max(3, Math.min(STATION_PLOTS, (s && s.plots) |
 const stationGrid = (s) => (s && s.grid) || {};
 const stationUsed = (s) => Object.keys(stationGrid(s)).length;
 const stationModule = (id) => STATION_MODULES.find((m) => m.id === id) || null;
-// Where each plot sits: three staggered rows of four, pointy-top hexes. Percentages of the board box,
-// which carries an aspect-ratio so the honeycomb keeps its shape at any width. A pointy-top hex is
-// 1.1547× as tall as it is wide and rows overlap by a quarter, which lands the row step on exactly 30%.
-const PLOT_W = 100 / 4.5; // four hexes across plus the half-hex stagger
-const HEX_SLOTS = Array.from({ length: STATION_PLOTS }, (_, i) => {
-  const r = Math.floor(i / 4), c = i % 4;
-  return { left: (c + (r % 2) * 0.5) * PLOT_W, top: r * 30 };
-});
+// Four across, three down — a square tile grid, because that is what a Game Boy draws. The plots are
+// laid out by CSS grid; this is just the order, and every index below is a slot in `grid`.
+const PLOT_COLS = 4;
+const PLOT_SLOTS = Array.from({ length: STATION_PLOTS }, (_, i) => i);
 // ---------- admin-gate watch ----------
 // Every wrong admin PIN is recorded at kumon/security for Dad to see. Three in a row (within ten
 // minutes) lock the gate for ten minutes and raise an alert that stays on the player-selection
@@ -2058,10 +2055,10 @@ export default function AutoMathtics() {
       return { ...(cur || {}), plots: Math.max(stationPlots(cur), stPlots), grid: g };
     });
     setStBusy(false);
-    if (!next || !stationGrid(next)[String(slot)]) { setStMsg("⚠ that plot was just taken — pick another"); return; }
+    if (!next || !stationGrid(next)[String(slot)]) { setStMsg("That plot was just taken — pick another."); return; }
     setStation(next);
     setStPick(null); setStSel(null);
-    setStMsg(`✓ ${mod.emoji} ${mod.name} online`);
+    setStMsg(`${mod.name.toUpperCase()} is online!`);
     playCorrect();
   }
   async function removeModule(slot) {
@@ -2079,7 +2076,7 @@ export default function AutoMathtics() {
     setStBusy(false);
     if (next) setStation(next);
     setStSel(null);
-    setStMsg("✓ plot cleared");
+    setStMsg("The plot is clear again.");
   }
 
   async function clearStation() {
@@ -3206,7 +3203,7 @@ export default function AutoMathtics() {
             })()}
             {stationOn && (() => {
               const used = stationUsed(station);
-              const built = HEX_SLOTS.map((_, i) => stGrid[String(i)]).filter(Boolean);
+              const built = PLOT_SLOTS.map((i) => stGrid[String(i)]).filter(Boolean);
               return (
                 <button
                   onClick={() => { setStMsg(null); setScreen("station"); }}
@@ -3218,7 +3215,7 @@ export default function AutoMathtics() {
                   </div>
                   <div style={{ marginTop: 6, minHeight: 26, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                     {built.length
-                      ? built.slice(0, 10).map((c, i) => <span key={i} style={{ fontSize: 20, lineHeight: 1 }} aria-hidden="true">{(stationModule(c.id) || {}).emoji}</span>)
+                      ? built.slice(0, 10).map((c, i) => <img key={i} className="stpeek" src={spriteURL(c.id)} alt="" draggable="false" />)
                       : <span style={{ fontSize: 12.5, color: "#8A93C9", fontWeight: 700 }}>nothing built yet — tap to put the first part down</span>}
                   </div>
                 </button>
@@ -3735,11 +3732,16 @@ export default function AutoMathtics() {
         const selBy = sel ? roster.find((u) => u.name.toLowerCase() === sel.by) : null;
         const used = stationUsed(station);
         const free = stPlots - used;
-        const hint = free === 0
-          ? "every plot is full — take one of yours down to rearrange"
-          : picked
-            ? `tap a glowing plot to set the ${picked.emoji} ${picked.name} down`
-            : "tap a part below, then tap a plot";
+        // the box under the screen always says something, the way a Game Boy's message box always does
+        const say = stMsg ? stMsg
+          : selMod ? (() => {
+            // a kid who taps someone else's module gets no take-down button — say why, or it reads as broken
+            const who = selBy ? selBy.name : sel.by;
+            return `${selMod.name.toUpperCase()} — ${selMod.blurb}. Put up by ${who}.` + (sel.by === mine ? "" : ` Only ${who} can take it down.`);
+          })()
+            : free === 0 ? "Every plot is full. Take one of yours down to move it."
+              : picked ? `Pick a plot for the ${picked.name.toUpperCase()}.`
+                : "Choose a part, then tap a plot.";
         return (
           <div style={st.card} className="screen">
             <div style={st.kicker}>🛰️ FAMILY STATION</div>
@@ -3748,75 +3750,59 @@ export default function AutoMathtics() {
               {used} of {stPlots} plots built
               {stPlots < STATION_PLOTS && <span style={{ color: "#8A93C9", fontWeight: 600 }}> · next plot at your next 👑 check point</span>}
             </div>
-            <div className="stboard" style={{ position: "relative", width: "100%", maxWidth: 340, margin: "14px auto 6px", aspectRatio: "4.5 / 2.8868" }}>
-              {HEX_SLOTS.map((pos, i) => {
+
+            <div className="stboard">
+              {PLOT_SLOTS.map((i) => {
                 const open = i < stPlots;
                 const cell = open ? stGrid[String(i)] : null;
                 const mod = cell ? stationModule(cell.id) : null;
                 const by = cell ? roster.find((u) => u.name.toLowerCase() === cell.by) : null;
                 const placeable = open && !cell && !!picked;
                 const chosen = stSel === i;
-                const col = chosen ? "#EAF2FF" : mod ? mod.color : placeable ? "#2DFFB3" : open ? "#3D4796" : "#161B3C";
                 const label = !open ? `locked plot ${i + 1}`
                   : mod ? `plot ${i + 1}: ${mod.name}, placed by ${by ? by.name : cell.by}`
                     : `empty plot ${i + 1}`;
                 return (
                   <button
                     key={i}
-                    className={"plot" + (placeable ? " plot-open" : "") + (open ? "" : " plot-locked")}
+                    className={"tile" + (placeable ? " tile-open" : "") + (chosen ? " tile-sel" : "")}
                     disabled={!open || stBusy || (!cell && !picked)}
                     onClick={() => {
                       setStMsg(null);
                       if (cell) { setStSel(chosen ? null : i); setStPick(null); }
                       else if (picked) placeModule(i, picked.id);
                     }}
-                    style={{ left: pos.left + "%", top: pos.top + "%", width: PLOT_W + "%", height: "40%", "--pc": col }}
                     aria-label={label}
                   >
-                    <span className="plot-in">
-                      <span className="plot-glyph" aria-hidden="true">{mod ? mod.emoji : open ? "" : "🔒"}</span>
-                      {by && <span className="plot-dot" style={{ background: by.color }} aria-hidden="true" />}
-                    </span>
+                    <img src={spriteURL(cell ? cell.id : open ? "floor" : "locked")} alt="" draggable="false" />
+                    {by && <span className="tile-dot" style={{ background: by.color }} aria-hidden="true" />}
                   </button>
                 );
               })}
             </div>
-            <div style={{ minHeight: 20, fontSize: 12.5, fontWeight: 700, color: stMsg && stMsg.startsWith("⚠") ? "#FF3B5C" : stMsg ? "#2DFFB3" : "#8A93C9" }} className={stMsg ? "pop2" : ""} key={stMsg || hint}>
-              {stMsg || hint}
-            </div>
 
-            {sel && selMod && (
-              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", textAlign: "left", margin: "10px 0 0", padding: "10px 12px", background: "#0B0E23", border: `1.5px solid ${selMod.color}`, borderRadius: 12 }}>
-                <span style={{ fontSize: 26 }} aria-hidden="true">{selMod.emoji}</span>
-                <span>
-                  <b style={{ color: selMod.color, fontFamily: "'Orbitron', sans-serif", fontSize: 13, letterSpacing: 1 }}>{selMod.name.toUpperCase()}</b>
-                  <div style={{ fontSize: 11.5, color: "#8A93C9" }}>{selMod.blurb} · put up by {selBy ? selBy.name : sel.by}</div>
-                </span>
-                {sel.by === mine
-                  ? <button style={{ ...st.tinyBtn, marginLeft: "auto", color: "#FF3B5C", borderColor: "#FF3B5C" }} disabled={stBusy} onClick={() => removeModule(stSel)}>✕ take down</button>
-                  : <span style={{ marginLeft: "auto", fontSize: 11, color: "#8A93C9" }}>only {selBy ? selBy.name : sel.by} can take this one down</span>}
-              </div>
+            <div className="gbbox gbsay" role="status">{say}</div>
+
+            {sel && selMod && sel.by === mine && (
+              <button className="gbbtn" disabled={stBusy} onClick={() => removeModule(stSel)}>✕ TAKE IT DOWN</button>
             )}
 
-            <div style={{ ...st.logTitle, margin: "16px 0 6px", textAlign: "left" }}>🧰 PARTS — free, and you never run out</div>
-            <div style={{ display: "flex", gap: 8, overflowX: "auto", padding: "2px 2px 8px", WebkitOverflowScrolling: "touch" }}>
+            <div className="gbbox gbmenu">
               {STATION_MODULES.map((m) => {
                 const on = stPick === m.id;
                 return (
                   <button
-                    key={m.id} className="shopitem"
+                    key={m.id} className={"gbitem" + (on ? " gbitem-on" : "")} aria-pressed={on}
                     onClick={() => { setStMsg(null); setStSel(null); setStPick(on ? null : m.id); }}
-                    style={{ flex: "0 0 auto", width: 94, padding: "8px 4px", cursor: "pointer",
-                      background: on ? `${m.color}1F` : "#0B0E23", border: `1.5px solid ${m.color}`, borderRadius: 12,
-                      boxShadow: on ? `0 0 16px ${m.color}66` : "none", color: "#EAF2FF" }}
-                    aria-pressed={on}
                   >
-                    <div style={{ fontSize: 26, lineHeight: 1.1 }} aria-hidden="true">{m.emoji}</div>
-                    <div style={{ fontSize: 10, marginTop: 4, color: m.color, fontFamily: "'Orbitron', sans-serif", letterSpacing: 0.5 }}>{m.name.toUpperCase()}</div>
+                    <span className="gbcur" aria-hidden="true">{on ? "▶" : "\u00a0"}</span>
+                    <img src={spriteURL(m.id)} alt="" draggable="false" />
+                    <span className="gbname">{m.name.toUpperCase()}</span>
                   </button>
                 );
               })}
             </div>
+
             <div style={{ ...st.subtle, textAlign: "left" }}>
               The station belongs to everyone — whatever you build shows up on every device. The dot on a
               plot is whoever put it there, and only they can take it down again.
@@ -4153,8 +4139,7 @@ body { min-height: 100vh; margin: 0; background: #07091A; overflow-x: hidden; }
 body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; text-rendering: optimizeLegibility; }
 button { -webkit-tap-highlight-color: transparent; transition: transform .22s cubic-bezier(.2,.8,.2,1), filter .22s ease, box-shadow .22s ease, background-color .22s ease, border-color .22s ease, opacity .22s ease; }
 @media (hover: hover) and (pointer: fine) {
-  button:not(.player-card):not(.plot):not(:disabled):hover { transform: translateY(-1px); filter: brightness(1.1) saturate(1.05); }
-  .plot:not(:disabled):hover { filter: drop-shadow(0 0 12px var(--pc)); }
+  button:not(.player-card):not(.tile):not(.gbitem):not(:disabled):hover { transform: translateY(-1px); filter: brightness(1.1) saturate(1.05); }
 }
 /* every screen glides in instead of snapping — the class is on each screen's root, and each root
    only mounts when its screen is shown, so a screen change is exactly one run of this */
@@ -4605,26 +4590,57 @@ body { background: #07091A; }
 @keyframes crateShake { 0%,100% { transform: rotate(0); } 20% { transform: rotate(-14deg); } 40% { transform: rotate(12deg); } 60% { transform: rotate(-10deg); } 80% { transform: rotate(8deg); } }
 @keyframes cratePop { from { transform: scale(.2); opacity: 0; } 70% { transform: scale(1.3); opacity: 1; } to { transform: scale(1); opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .crate-item, .crate-name { opacity: 1; } }
-/* the family station: a honeycomb of plots. Each plot is a clipped hexagon whose BACKGROUND is the
-   border — a real border would be clipped away with the corners — and .plot-in sits 2px inside it
-   with the fill. Rows are laid out in percentages by HEX_SLOTS, so the board scales with the card. */
-.plot { position: absolute; padding: 0; border: 0; background: var(--pc); cursor: pointer;
-  clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
-  filter: drop-shadow(0 0 5px var(--pc));
-  transition: background-color .25s ease, filter .25s ease, transform .16s ease; }
-.plot:disabled { cursor: default; }
-.plot-locked { filter: none; opacity: .5; }
-.plot-in { position: absolute; inset: 2px; background: #0B0E23; display: flex; align-items: center; justify-content: center;
-  clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%); }
-.plot-glyph { font-size: clamp(16px, 6.4vw, 26px); line-height: 1; }
-.plot-dot { position: absolute; bottom: 15%; width: 6px; height: 6px; border-radius: 50%; box-shadow: 0 0 4px currentColor; }
-.plot:not(:disabled):active { transform: scale(.93); }
-/* an empty plot you can drop the picked part into breathes until you do */
-.plot-open { animation: plotPulse 1.4s ease-in-out infinite; }
-@keyframes plotPulse { 0%, 100% { filter: drop-shadow(0 0 3px #2DFFB3); } 50% { filter: drop-shadow(0 0 13px #2DFFB3); } }
-@media (prefers-reduced-motion: reduce) { .plot-open { animation: none; } }
+/* ---------- the family station: a Game Boy screen inside the neon one ---------- */
+/* Sprites are 16×16 data-URL PNGs scaled up hard — no smoothing anywhere, or the pixels go soft. */
+.stboard {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px;
+  width: 100%; max-width: 304px; margin: 14px auto 10px;
+  background: #0B1020; padding: 3px; border: 3px solid #0B1020; box-shadow: 0 0 0 3px #3E4F82;
+}
+.tile { position: relative; padding: 0; border: 0; background: transparent; cursor: pointer; line-height: 0; transition: none; }
+.tile:disabled { cursor: default; }
+.tile img, .stpeek, .gbitem img {
+  display: block; width: 100%; height: auto;
+  image-rendering: pixelated; image-rendering: crisp-edges;
+}
+.tile-dot { position: absolute; right: 8%; bottom: 8%; width: 6px; height: 6px; border-radius: 50%; box-shadow: 0 0 0 1px #0B1020; }
+/* a plot you can build on blinks the way a Game Boy blinks: hard steps, never a fade */
+.tile-open { animation: tileBlink .8s steps(1) infinite; }
+@keyframes tileBlink { 50% { filter: brightness(1.8); } }
+.tile-sel img { outline: 2px solid #F7F7E8; outline-offset: -2px; }
+.tile:not(:disabled):active img { filter: brightness(1.45); }
+@media (prefers-reduced-motion: reduce) { .tile-open { animation: none; filter: brightness(1.4); } }
+@media (hover: hover) and (pointer: fine) { .tile:not(:disabled):hover img { filter: brightness(1.25); } }
 
-/* add-player + guide */
+/* the message box and the part menu are the Pokémon box: white fill, black rule, a grey inner line */
+.gbbox {
+  background: #F7F7E8; color: #0B1020; border: 3px solid #0B1020;
+  box-shadow: inset 0 0 0 2px #F7F7E8, inset 0 0 0 4px #7E8AA8;
+  padding: 10px 12px; margin: 0 auto 10px; max-width: 304px; text-align: left;
+  font: 700 12.5px 'JetBrains Mono', Consolas, monospace; line-height: 1.5;
+}
+.gbsay { min-height: 54px; }
+.gbmenu { display: grid; grid-template-columns: repeat(2, 1fr); gap: 2px 4px; padding: 8px; }
+.gbitem {
+  display: flex; align-items: center; gap: 4px; padding: 3px 2px; cursor: pointer;
+  background: transparent; border: 0; color: #0B1020; text-align: left;
+  font: 700 10px 'JetBrains Mono', Consolas, monospace; letter-spacing: .02em; transition: none;
+}
+.gbitem img { width: 18px; height: 18px; flex: 0 0 18px; }
+.gbcur { width: 9px; flex: 0 0 9px; font-size: 10px; line-height: 1; }
+.gbname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gbitem-on { background: #0B1020; color: #F7F7E8; }
+.gbitem:not(:disabled):active { background: #7E8AA8; }
+.gbbtn {
+  display: block; margin: 0 auto 10px; padding: 7px 14px; cursor: pointer;
+  background: #F7F7E8; color: #0B1020; border: 3px solid #0B1020;
+  box-shadow: inset 0 0 0 2px #F7F7E8, inset 0 0 0 4px #7E8AA8;
+  font: 700 11px 'JetBrains Mono', Consolas, monospace; letter-spacing: .06em; transition: none;
+}
+.gbbtn:active { background: #D64F8F; color: #F7F7E8; }
+.stpeek { width: 22px; height: 22px; }
+
+/* add-player + guide *//* add-player + guide */
 .add-player { position: relative; z-index: 2; margin: 6px auto 4px; padding: 10px 20px; border-radius: 999px; background: rgba(8,10,30,.62); border: 1.5px dashed rgba(138,147,201,.55); color: #EAF2FF; font: 700 13px 'Orbitron', sans-serif; letter-spacing: .08em; cursor: pointer; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
 .add-player:hover { border-style: solid; border-color: #2DFFB3; color: #2DFFB3; box-shadow: 0 0 18px rgba(45,255,179,.35); }
 .pick { cursor: pointer; padding: 0; display: inline-flex; align-items: center; justify-content: center; }

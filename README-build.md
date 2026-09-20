@@ -1,4 +1,4 @@
-# AutoMathtics — source & build notes (v1.16, 20 Sep 2026)
+# AutoMathtics — source & build notes (v1.17, 20 Sep 2026)
 
 The deployed page is `index.html` at the repo root — GitHub Pages serves that one file and nothing else.
 It is **generated**; never hand-edit it. Everything lives in `src/`:
@@ -7,6 +7,7 @@ It is **generated**; never hand-edit it. Everything lives in `src/`:
 | --- | --- |
 | `src/automathtics-src.jsx` | the whole app — React + Firebase, styles, all Stage 1 logic |
 | `src/automathtics-entry.jsx` | the mount |
+| `src/station-art.js` | the station's 16×16 pixel sprites and their palettes |
 | `src/shell-head.html` | HTML shell up to the bundle `<script>`, **including the Firebase config** |
 | `src/shell-tail.html` | closing tags |
 | `build.mjs` | bundles `src/` with esbuild and writes `index.html` |
@@ -27,7 +28,8 @@ and it lives in `src/shell-head.html`.
 
     node harness.mjs     # -> http://localhost:5174
 
-It builds the same app with the Firebase config stripped and the PIN gate off, so it runs local-only
+It copies everything in `src/` (rather than a named list that goes stale the next time the app grows
+a module) and builds the same app with the Firebase config stripped and the PIN gate off, so it runs local-only
 (the player-selection screen says so) and reads/writes nothing but `localStorage`. Seed a state from
 the browser console with
 `localStorage.setItem('kumon-progress:<name>', JSON.stringify({level, paper, bossCleared, history, wallet}))`
@@ -91,14 +93,27 @@ shrinks when a different kid opens it; an effect ratchets `plots` up (guarded by
 can't loop on itself). Power budgets, adjacency bonuses and production are the next versions' job —
 ship this, see whether it holds them for a week, then build the economy.
 
-The board is 12 pointy-top hexagons in three staggered rows of four. `HEX_SLOTS` holds each plot's
-`left`/`top` as percentages of a board box carrying `aspect-ratio: 4.5 / 2.8868`, so the honeycomb
-keeps its shape at any width — a pointy-top hex is 1.1547× as tall as it is wide and rows overlap by
-a quarter, which lands the row step on exactly 30%. A plot's `background` **is** its border (`.plot`,
-clipped to a hexagon, with `.plot-in` inset 2px carrying the fill) because a real border would be
-clipped away with the corners.
+### The look: Game Boy Colour (v2.6)
 
-Interaction is tap-select-then-tap-place, never drag: tap a part in the tray, legal plots pulse, tap
+The board is a 4×3 **square** tile grid — hexagons have no place in this style — drawn with 16×16
+pixel sprites in `src/station-art.js`. A sprite is 16 strings of 16 characters: `.` is transparent and
+`0`–`3` index that sprite's own four-colour palette, the way a GBC sprite gets one palette of four.
+`spriteURL(name)` paints it once onto a 16×16 canvas, caches the data URL, and the tile scales it up
+with `image-rendering: pixelated`. **No image files** — the single `index.html` stays the only thing
+the site serves — and no smoothing anywhere, or the pixels go soft. `checkSprites()` returns every
+row that isn't 16 characters; a typo there shows up as a torn tile, so run it after editing the tables.
+
+Each module tile fills its whole cell, plate included, so colour 1 is the module's rim and the six
+modules are told apart by silhouette *and* by rim colour. `floor` is an earned empty plot, `locked`
+one not yet earned.
+
+The surrounding chrome is the Pokémon message box: white fill, black rule, grey inner line (`.gbbox`).
+There is always a `.gbsay` box under the board saying something — what's selected, whose it is, what
+to do next — so the layout never jumps, and the parts tray is a `.gbmenu` with a `▶` cursor rather
+than a scrolling strip. An empty plot you can build on blinks with `steps(1)`, never a fade, because
+that is what a Game Boy does.
+
+Interaction is tap-select-then-tap-place, never drag: tap a part in the menu, legal plots blink, tap
 one to set it down. Tapping a placed module opens an info strip; only the player who put it up can
 take it down (Dad can clear the lot from the admin panel). `settings.station === false` hides the
 whole feature. No timers, no callbacks, no "your crops are ready" — collect-and-place is meant to take
