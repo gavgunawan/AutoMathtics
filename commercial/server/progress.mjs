@@ -36,9 +36,10 @@ export const freshWallet = () => ({
   shields: 0, shieldDays: [], egg: null, purchases: [], redemptions: [], lastScanWeek: null,
 });
 
-// Olympia (server/olympia.mjs): the visit under way, each moon's medals, the newest visits, and how many rewarded visits a moon has
-// paid today. Kept apart from the two tracks' history: the home log draws that, and an Olympia row is not a paper.
-export const freshOlympia = () => ({ activeVisit: null, moons: {}, history: [], rewardDays: {} });
+// Olympia (server/olympia.mjs): the visit under way, each moon's medals, each phase's last ten scores and durations (keyed
+// "moon:phase", 20 Sep 2026), the newest visits, and how many rewarded visits a phase has paid today. Kept apart from the two
+// tracks' history: the home log draws that, and an Olympia row is not a paper.
+export const freshOlympia = () => ({ activeVisit: null, moons: {}, phases: {}, history: [], rewardDays: {} });
 export const freshProgress = () => ({
   engine: { level: 0, paper: 1, bossCleared: 0 }, nav: { level: 0, paper: 1, bossCleared: 0 },
   wallet: freshWallet(), passDays: [], pacePercent: DEFAULT_PACE_PERCENT,
@@ -79,6 +80,7 @@ export function normalizeProgress(value) {
   const oly = p.olympia && typeof p.olympia === 'object' && !Array.isArray(p.olympia) ? p.olympia : {};
   const olympia = { ...freshOlympia(), activeVisit: typeof oly.activeVisit === 'string' ? oly.activeVisit : null,
     moons: oly.moons && typeof oly.moons === 'object' && !Array.isArray(oly.moons) ? oly.moons : {},
+    phases: oly.phases && typeof oly.phases === 'object' && !Array.isArray(oly.phases) ? oly.phases : {},
     history: Array.isArray(oly.history) ? oly.history.slice(0, 30) : [], rewardDays: oly.rewardDays && typeof oly.rewardDays === 'object' && !Array.isArray(oly.rewardDays) ? oly.rewardDays : {} };
   return { ...base, ...p, engine: track('engine'), nav: track('nav'), wallet: normalizeWallet(p.wallet),
     passDays: uniqStrings(p.passDays, 400).sort(), pacePercent,

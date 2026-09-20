@@ -115,6 +115,24 @@ circles, magic figures and figure-counting on marked cells. The client draws bar
   geometry, ordering logic, constrained optimisation, telescoping products, estimation with units, mode and range. E about
   right; M and H too easy for problems 9–25.
 
+## The real paper, whole (20 Sep 2026, evening)
+
+The owner's second instruction of the day: "the format AND number of questions should follow actual paper … total time across
+them 90 minutes too … divide it into 3 separate selectable sections". Every moon is now the full paper — 25 questions for
+SEAMO, AMO, HKIMO, TIMO, PhIMO and the AMC 8; 40/45/32 for SMC's grade bands; 25 for WMI — sat as three phases (α Alpha,
+β Beta, γ Gamma), each one of the paper's own sections on one clock, the paper's total time split between them by us
+(moons.mjs and each module's PHASES): SEAMO 25 + 35 + 30, AMO 40 + 25 + 25, SMC 30 + 30 + 30, WMI 25 + 15 + 40 (its two
+40-minute sittings), the OCEC twins 36 + 36 + 18, PhIMO 25 + 35 + 30, the AMC 8 12 + 14 + 14 (its real 40 minutes). A
+medal is a share of the section right (80/60/40/20%), so the bar is the same whatever the section's length; each phase keeps
+its own log of the last ten scores and clock readings; two rewarded sittings a phase a day.
+
+The same evening every generator gained its worked solution — `steps` and a `tip` on the seed, in the simplest child's
+method (STEPS.md; the owner's model was the SEAMO Paper B "Simplest Solutions for an 8-Year-Old" sheets: bar models and
+working backwards before any algebra). Explain to me on a moon question now shows that working from our own server, with no
+call to the AI tutor, which stays for the child's follow-up questions; the reveal shows it under every question. The
+pools were widened where a full section outran its families (SMC's 2/3/4-mark sections at Grades 1–4, WMI's Section B at
+Grades 1–2, the OCEC twins at Grades 1–3, AMO's fifteen 3-mark slots).
+
 ## What the check did not settle
 - SMC, PhIMO and the 2025 HKIMO papers publish no answer key; those answers are the checkers' own, worked twice.
 - TIMO heat papers are paywalled; its style is inferred from the shared OCEC template.
