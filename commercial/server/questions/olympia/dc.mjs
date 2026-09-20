@@ -390,7 +390,8 @@ const lineGraphQ = () => {
   if (kind === 1) {
     let best = 1; for (let i = 2; i < 5; i++) if (Math.abs(vals[i] - vals[i - 1]) > Math.abs(vals[best] - vals[best - 1])) best = i;
     const ties = [1, 2, 3, 4].filter((i) => Math.abs(vals[i] - vals[i - 1]) === Math.abs(vals[best] - vals[best - 1])); if (ties.length > 1) return null;
-    return explain(withFigure(mcOnly('statistics · line graphs', 'The line graph shows the noon temperature on five days. Between which two days did it change the most?', `${labels[best - 1]} and ${labels[best]}`, [1, 2, 3, 4].filter((i) => i !== best).map((i) => `${labels[i - 1]} and ${labels[i]}`)), f), [
+    // four decoys for the paper's five options: the three other neighbouring pairs, and the week's ends (a real AMC 8 distractor: the whole-week change)
+    return explain(withFigure(mcOnly('statistics · line graphs', 'The line graph shows the noon temperature on five days. Between which two days did it change the most?', `${labels[best - 1]} and ${labels[best]}`, [...[1, 2, 3, 4].filter((i) => i !== best).map((i) => `${labels[i - 1]} and ${labels[i]}`), `${labels[0]} and ${labels[4]}`]), f), [
       readOff,
       `Change from each day to the next: ${[1, 2, 3, 4].map((i) => `${labels[i - 1]} to ${labels[i]} ${Math.abs(vals[i] - vals[i - 1])}`).join(', ')}.`,
       `The biggest change is ${Math.abs(vals[best] - vals[best - 1])}°C, between ${labels[best - 1]} and ${labels[best]}.`,
