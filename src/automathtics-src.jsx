@@ -3,7 +3,7 @@ import { initializeApp } from "firebase/app";
 import { getDatabase, ref as dbRef, get as dbGet, set as dbSet, onValue, runTransaction } from "firebase/database";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 import { genNavigator, navSecondsFor, NAV_TOPICS } from "./navigator.js";
-import { spriteURL } from "./station-art.js";
+import { spriteURL, crewURL } from "./station-art.js";
 
 // ================= AUTOMATHTICS — THE MATH GRID =================
 // Papers 1–100 per level · session = 5 papers · one
@@ -143,10 +143,10 @@ const GUIDE_SLIDES = [
     "🚀 Family Rocket — when Dad builds one, fuel it with ⚡ together. Full tank = a prize you all share.",
   ] },
   { emoji: "🛰️", title: "The family station", lines: [
-    "Tap 🛰️ Station on your home screen — one station the whole family builds together.",
-    "Pick a part, tap a plot, done. Parts are free and you never run out.",
-    "Plots are what you earn: 3 to start, then one more for every 👑 check point and every sector you leave behind.",
-    "Whatever you put up shows on everyone's screen. The little dot says who built it.",
+    "Tap 🛰️ Station on your home screen — one station the whole family builds, floor by floor.",
+    "Everyone who plays is crew and walks about inside. Get a friend to join and they're aboard too.",
+    "Tap + to build a room (⚡250). RECRUIT hires a new crew member (⚡800).",
+    "Every two crew open another floor. Tap anyone to hear what they're saying.",
   ] },
   { emoji: "🎁", title: "Cashing in 🏆 Reward Points", lines: [
     "The 🎁 Reward Store is at the bottom of the Shop — real prizes set up by Dad.",
@@ -1095,8 +1095,8 @@ function playWrong() {
 
 // ---------- shared settings (admin panel), synced via cloud ----------
 const ADMIN_PIN = "1590";
-const BUILD_TAG = "v2.6 · 20 Sep";
-const BUILD_ID = "am-build-260"; // ASCII-only twin of BUILD_TAG, searched for in the live index.html
+const BUILD_TAG = "v2.7 · 20 Sep";
+const BUILD_ID = "am-build-270"; // ASCII-only twin of BUILD_TAG, searched for in the live index.html
 
 // ---------- full screen ----------
 const fsSupported = () => typeof document !== "undefined" && !!(document.fullscreenEnabled || document.webkitFullscreenEnabled) && !(window.navigator && window.navigator.standalone);
@@ -1176,14 +1176,25 @@ const rocketReady = (r) => {
 const rocketSym = (r) => (r && r.currency === "rp" ? "🏆" : "⚡");
 const ROCKET_AMOUNTS = { gc: [50, 100, 250], rp: [100, 200, 500] };
 
-// ---------- the family station (v2.5) ----------
-// Lives at kumon/station: { plots, grid: { "<slot>": { id, by, at } } }. Shared by the whole family
-// like the rocket, so every device sees the same station, and every write goes through a transaction
-// so two kids placing at the same moment can't overwrite each other.
-// v2.5 has no economy on purpose: parts are free and unlimited, and PLOTS are the only scarce thing.
-// They come from the map — crowns cleared and sectors left behind, both tracks — so the only way to
-// build bigger is to practise. Power, adjacency and production are the next versions' job.
-const STATION_PLOTS = 12;
+// ---------- the family station (v2.7) ----------
+// A cross-section, Fallout Shelter style: floors stacked down from the dock, three rooms to a floor, a
+// lift shaft on the left, and the crew walking about inside. Lives at kumon/station:
+//   { grid: { "<slot>": { id, by, at } }, recruits: [{ id, name, color, by, at }] }
+// slot = floor × 3 + position; slot 0 is the dock, built into every station and never stored.
+// Shared by the whole family like the rocket — every write is a transaction so two kids building at
+// the same moment can't overwrite each other — and live on every device.
+//
+// The crew is who makes the station grow. Everyone on the roster is crew for free, so "get a friend
+// to join" (the add-player wizard) is literally how the family gets more hands; recruits are hired
+// with ⚡ grid coins. Floors unlock by head-count, the way a vault opens up as dwellers arrive.
+// Rooms cost coins too, and both go through the kid's own ledger like a shop buy or rocket fuel —
+// spent is spent, never refunded, which is why nothing here can be sold back.
+const STATION_FLOORS = 4;
+const ROOMS_PER_FLOOR = 3;
+const STATION_PLOTS = STATION_FLOORS * ROOMS_PER_FLOOR;
+const ROOM_COST = 250;      // five passes
+const RECRUIT_COST = 800;   // sixteen — a saving goal, like a pet
+const MAX_RECRUITS = 10;
 const STATION_MODULES = [
   { id: "sm_solar", name: "Solar Array", color: "#FFB020", blurb: "catches the light" },
   { id: "sm_reactor", name: "Power Core", color: "#2DFFB3", blurb: "powers the hull" },
@@ -1192,6 +1203,17 @@ const STATION_MODULES = [
   { id: "sm_dish", name: "Comms Dish", color: "#8A5CFF", blurb: "calls home" },
   { id: "sm_quarters", name: "Crew Quarters", color: "#FF2DA8", blurb: "where the crew sleeps" },
 ];
+const DOCK = { id: "dock", name: "Dock", color: "#7E8AA8", blurb: "where new crew come aboard" };
+const RECRUIT_NAMES = ["Pip", "Nova", "Bolt", "Zed", "Luna", "Cosmo", "Rex", "Ivy", "Dot", "Kai", "Mo", "Juno", "Ash", "Ori"];
+const CREW_LINES = ["Nice station!", "All systems go.", "Is it lunch yet?", "I love the view from here.", "Who left the airlock open?", "Beep boop.", "Did you pass today?", "Gravity's on, right?", "Best crew in the sector."];
+// one floor to start; another every two crew. Two kids = one floor, recruit or add a friend = two.
+const floorsFor = (crewCount) => Math.max(1, Math.min(STATION_FLOORS, 1 + Math.floor((Math.max(1, crewCount) - 1) / 2)));
+const crewNeededFor = (floorIdx) => floorIdx * 2 + 1;
+// a stable stroll per crew member from their id, so a re-render never restarts anyone's walk
+const crewMotion = (id) => {
+  let h = 7; for (const ch of String(id)) h = ((h * 31) + ch.charCodeAt(0)) >>> 0;
+  return { dur: 5 + (h % 5), delay: -((h >> 3) % 7), from: 12 + ((h >> 6) % 8), to: 46 + ((h >> 9) % 10) };
+};
 const stationPath = () => `families/${FAMILY_TOKEN}/kumon/station`;
 const localLoadStation = () => { try { const s = localStorage.getItem("kumon-station"); return s ? JSON.parse(s) : null; } catch (e) { return null; } };
 const localSaveStation = (v) => { try { localStorage.setItem("kumon-station", JSON.stringify(v)); } catch (e) {} };
@@ -1212,21 +1234,10 @@ async function updateStation(fn) {
     const v = res.snapshot.val(); localSaveStation(v); return v;
   } catch (e) { return null; }
 }
-// 3 plots to start — a brand-new player has something to build on day one — then one per 👑 check
-// point and one per sector left behind, on both tracks. The station keeps the highest figure any
-// player has reached (`plots`), so the hull never shrinks when a different kid opens it.
-const stationPlotsFor = (p) => {
-  if (!p) return 3;
-  const e = trk(p, "engine"), n = trk(p, "nav");
-  return Math.max(3, Math.min(STATION_PLOTS, 3 + (e.bossCleared || 0) + (n.bossCleared || 0) + (e.level || 0) + (n.level || 0)));
-};
-const stationPlots = (s) => Math.max(3, Math.min(STATION_PLOTS, (s && s.plots) || 3));
 const stationGrid = (s) => (s && s.grid) || {};
 const stationUsed = (s) => Object.keys(stationGrid(s)).length;
-const stationModule = (id) => STATION_MODULES.find((m) => m.id === id) || null;
-// Four across, three down — a square tile grid, because that is what a Game Boy draws. The plots are
-// laid out by CSS grid; this is just the order, and every index below is a slot in `grid`.
-const PLOT_COLS = 4;
+const stationRecruits = (s) => (s && Array.isArray(s.recruits) ? s.recruits : []);
+const stationModule = (id) => (id === "dock" ? DOCK : STATION_MODULES.find((m) => m.id === id) || null);
 const PLOT_SLOTS = Array.from({ length: STATION_PLOTS }, (_, i) => i);
 // ---------- admin-gate watch ----------
 // Every wrong admin PIN is recorded at kumon/security for Dad to see. Three in a row (within ten
@@ -1662,11 +1673,10 @@ export default function AutoMathtics() {
   const [rk, setRk] = useState({ emoji: "🎬", name: "", currency: "gc", goal: "2000", minEach: "300", crew: [] }); // admin build form
   // family station
   const [station, setStation] = useState(null);
-  const [stPick, setStPick] = useState(null);  // module id picked up from the tray
-  const [stSel, setStSel] = useState(null);    // slot of the placed module being inspected
+  const [stSel, setStSel] = useState(null);    // the slot being built into, or the built room being looked at
+  const [stTalk, setStTalk] = useState(null);  // { name, line } — the crew member last tapped
   const [stMsg, setStMsg] = useState(null);
   const [stBusy, setStBusy] = useState(false);
-  const stBumpRef = useRef(0);                 // highest plot count this device has already written
   const [security, setSecurity] = useState(null); // admin-gate watch: fails, lock, alert
   const [creditMsg, setCreditMsg] = useState(null);
   useEffect(() => {
@@ -1770,24 +1780,6 @@ export default function AutoMathtics() {
     const l = localLoadSec(); if (l) setSecurity(l);
     return subscribeSecurity((v) => { setSecurity(v); localSaveSec(v); });
   }, []);
-  // Declared here rather than beside placeModule: the ratchet effect below names stationOn in its
-  // dependency array, and a dep array is read as the component body runs, not when the effect fires.
-  const stationOn = !settings || settings.station !== false;
-  const stPlots = stationPlots(station);
-  const stGrid = stationGrid(station);
-  // The hull keeps the highest plot count anyone has earned. Whoever opens the app with more crowns
-  // than the station has seen bumps it — once per figure per device, so this can't loop on itself.
-  useEffect(() => {
-    if (!prog || !user || !stationOn) return;
-    const want = stationPlotsFor(prog);
-    if (want <= stationPlots(station) || want <= stBumpRef.current) return;
-    stBumpRef.current = want;
-    (async () => {
-      const next = await updateStation((cur) => ({ ...(cur || {}), plots: Math.max(stationPlots(cur), want) }));
-      if (next) setStation(next);
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prog, user, station, stationOn]);
   // lift-off moment: the tank filled while this screen was watching
   useEffect(() => {
     const was = rocketPrev.current; rocketPrev.current = rocket ? rocket.status : null;
@@ -1821,6 +1813,15 @@ export default function AutoMathtics() {
     });
     return d;
   };
+  // the station's derived state sits after `roster`, which the crew list is built from
+  const stationOn = !settings || settings.station !== false;
+  const stGrid = stationGrid(station);
+  // everyone on the roster is crew for free — a friend joining is how the family grows — plus the hires
+  const crew = [
+    ...roster.filter((u) => !u.test).map((u) => ({ id: u.name.toLowerCase(), name: u.name, color: u.color, player: true })),
+    ...stationRecruits(station).map((r) => ({ ...r, player: false })),
+  ];
+  const stFloors = floorsFor(crew.length);
   const qSecs = (q) => scaledSecsT(q && typeof q.qLevel === "number" ? q.qLevel : levelIdx, tierOf(q ? q.paper : startPaper), user, q && q.track === "nav" ? "nav" : "engine");
   const petEmoji = prog && prog.wallet && prog.wallet.activePet
     ? (SHOP_ITEMS.find((it) => it.id === prog.wallet.activePet) || {}).emoji : null;
@@ -2040,52 +2041,73 @@ export default function AutoMathtics() {
   }
   // ----- family rocket -----
   // ----- the family station -----
-  // Placing and removing both go through the same transaction the rocket uses, because the station
-  // is shared. Nothing here touches a wallet — v2.5 has no economy.
-  async function placeModule(slot, modId) {
-    if (!user || stBusy || slot >= stPlots || stGrid[String(slot)]) return;
+  // Building and recruiting both write the shared station through the rocket's transaction, and both
+  // are paid from the kid's own ledger exactly like a shop buy: gcSpent up, a purchases row, saved.
+  async function buildRoom(slot, modId) {
+    if (!user || !prog || stBusy) return;
+    if (slot <= 0 || slot >= stFloors * ROOMS_PER_FLOOR || stGrid[String(slot)]) return;
     const mod = stationModule(modId);
-    if (!mod) return;
+    if (!mod || mod === DOCK) return;
+    const bal = balances(prog);
+    if (bal.gcBal < ROOM_COST) { setStMsg(`Need ⚡${ROOM_COST - bal.gcBal} more for a ${mod.name.toUpperCase()}.`); return; }
     setStBusy(true);
     const key = user.name.toLowerCase();
     const next = await updateStation((cur) => {
       const g = { ...stationGrid(cur) };
-      if (g[String(slot)]) return cur;                      // another device got the plot first
+      if (g[String(slot)]) return cur;                      // another device got there first
       g[String(slot)] = { id: modId, by: key, at: Date.now() };
-      return { ...(cur || {}), plots: Math.max(stationPlots(cur), stPlots), grid: g };
-    });
-    setStBusy(false);
-    if (!next || !stationGrid(next)[String(slot)]) { setStMsg("That plot was just taken — pick another."); return; }
-    setStation(next);
-    setStPick(null); setStSel(null);
-    setStMsg(`${mod.name.toUpperCase()} is online!`);
-    playCorrect();
-  }
-  async function removeModule(slot) {
-    if (!user || stBusy) return;
-    const key = user.name.toLowerCase();
-    const cell = stGrid[String(slot)];
-    if (!cell || cell.by !== key) return;                   // you can only take down what you put up
-    setStBusy(true);
-    const next = await updateStation((cur) => {
-      const g = { ...stationGrid(cur) };
-      if (!g[String(slot)] || g[String(slot)].by !== key) return cur;
-      delete g[String(slot)];
       return { ...(cur || {}), grid: g };
     });
     setStBusy(false);
-    if (next) setStation(next);
-    setStSel(null);
-    setStMsg("The plot is clear again.");
+    const got = next && stationGrid(next)[String(slot)];
+    if (!got || got.by !== key) { setStMsg("That spot was just taken — pick another."); return; }
+    const w = { ...prog.wallet, gcSpent: (prog.wallet.gcSpent || 0) + ROOM_COST,
+      purchases: [ledgerRow({ id: "station_room", emoji: "🛰️", name: `Station · ${mod.name}` }, ROOM_COST), ...(prog.wallet.purchases || [])].slice(0, 120) };
+    const np = { ...prog, wallet: w };
+    setProg(np); saveProgress(user.name, np);
+    setStation(next); setStSel(null); setStTalk(null);
+    setStMsg(`${mod.name.toUpperCase()} built on floor ${Math.floor(slot / ROOMS_PER_FLOOR) + 1}!`);
+    playCorrect();
   }
-
+  async function recruitCrew() {
+    if (!user || !prog || stBusy) return;
+    const bal = balances(prog);
+    if (bal.gcBal < RECRUIT_COST) { setStMsg(`Need ⚡${RECRUIT_COST - bal.gcBal} more to recruit someone.`); return; }
+    setStBusy(true);
+    const key = user.name.toLowerCase();
+    const id = "r" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const rosterNames = roster.map((u) => u.name.toLowerCase());
+    const next = await updateStation((cur) => {
+      const list = stationRecruits(cur);
+      if (list.length >= MAX_RECRUITS) return cur;
+      const taken = new Set([...list.map((r) => String(r.name).toLowerCase()), ...rosterNames]);
+      const pool = RECRUIT_NAMES.filter((n) => !taken.has(n.toLowerCase()));
+      const name = pool.length ? pool[Math.floor(Math.random() * pool.length)] : "Crew " + (list.length + 1);
+      // the colour the fewest people aboard already wear
+      const worn = {}; [...roster.filter((u) => !u.test).map((u) => u.color), ...list.map((r) => r.color)].forEach((c) => { worn[c] = (worn[c] || 0) + 1; });
+      const color = PLAYER_COLORS.slice().sort((x, y) => (worn[x] || 0) - (worn[y] || 0))[0];
+      return { ...(cur || {}), recruits: [...list, { id, name, color, by: key, at: Date.now() }] };
+    });
+    setStBusy(false);
+    const mine = next && stationRecruits(next).find((r) => r.id === id);
+    if (!mine) { setStMsg("The dock is full — no bunks for anyone else right now."); return; }
+    const w = { ...prog.wallet, gcSpent: (prog.wallet.gcSpent || 0) + RECRUIT_COST,
+      purchases: [ledgerRow({ id: "station_recruit", emoji: "👩‍🚀", name: `Recruit · ${mine.name}` }, RECRUIT_COST), ...(prog.wallet.purchases || [])].slice(0, 120) };
+    const np = { ...prog, wallet: w };
+    setProg(np); saveProgress(user.name, np);
+    setStation(next); setStSel(null); setStTalk(null);
+    const before = floorsFor(crew.length), after = floorsFor(crew.length + 1);
+    setStMsg(`${mine.name.toUpperCase()} has come aboard!` + (after > before ? ` Floor ${after} is open.` : ""));
+    playKaching();
+  }
+  // Dad's reset: the rooms go, the crew stay — recruits cost real coins
   async function clearStation() {
     setStBusy(true);
     const next = await updateStation((cur) => ({ ...(cur || {}), grid: {} }));
     setStBusy(false);
     if (next) setStation(next);
-    setStSel(null); setStPick(null);
-    setStMsg("✓ every plot cleared");
+    setStSel(null); setStTalk(null);
+    setStMsg("Every room is cleared. The crew are still aboard.");
   }
 
   async function fuelRocket(amt) {
@@ -3008,12 +3030,13 @@ export default function AutoMathtics() {
               show the station on the home screen
             </label>
             <div style={{ ...st.subtle, textAlign: "left" }}>
-              One station for the whole family, built from parts that cost nothing — plots are what has to be
-              earned: 3 to start, then one more for every 👑 check point and every sector left behind, either
-              track, whoever gets there first. It holds {stationUsed(station)} of {stPlots}.
+              One station for the whole family. Everyone on the roster is crew for free; a recruit costs ⚡{RECRUIT_COST}{" "}
+              and a room ⚡{ROOM_COST}, both from that kid's own coins. Every two crew open another floor. Right now:
+              {" "}{crew.length} crew, {stationUsed(station)} room{stationUsed(station) === 1 ? "" : "s"} built,
+              {" "}{stationRecruits(station).length} hired.
             </div>
             <button style={{ ...st.tinyBtn, marginTop: 8, color: "#FF3B5C", borderColor: "#FF3B5C" }} disabled={stBusy || stationUsed(station) === 0}
-              onClick={() => { if (window.confirm("Take every part off the station? The plots stay earned — only what's been built is cleared.")) clearStation(); }}>🧹 clear every plot</button>
+              onClick={() => { if (window.confirm("Clear every room off the station? The crew stay aboard. Coins already spent on rooms stay spent.")) clearStation(); }}>🧹 clear every room</button>
             {stMsg && <span style={{ fontSize: 12.5, fontWeight: 700, color: "#2DFFB3", marginLeft: 8 }} className="pop2">{stMsg}</span>}
           </div>
 
@@ -3201,26 +3224,25 @@ export default function AutoMathtics() {
                 </div>
               );
             })()}
-            {stationOn && (() => {
-              const used = stationUsed(station);
-              const built = PLOT_SLOTS.map((i) => stGrid[String(i)]).filter(Boolean);
-              return (
-                <button
-                  onClick={() => { setStMsg(null); setScreen("station"); }}
-                  style={{ display: "block", width: "100%", textAlign: "left", cursor: "pointer", margin: "14px 0 0", padding: "10px 12px", borderRadius: 12, background: "#0B0E23", border: "1.5px solid #35E0FF", boxShadow: "0 0 14px rgba(53,224,255,.22)" }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontSize: 11, letterSpacing: 2, color: "#35E0FF", fontFamily: "'Orbitron', sans-serif" }}>🛰️ FAMILY STATION</span>
-                    <span style={{ marginLeft: "auto", fontSize: 10.5, color: "#8A93C9", fontFamily: "Consolas, monospace", fontWeight: 700 }}>{used} / {stPlots} plots</span>
-                  </div>
-                  <div style={{ marginTop: 6, minHeight: 26, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                    {built.length
-                      ? built.slice(0, 10).map((c, i) => <img key={i} className="stpeek" src={spriteURL(c.id)} alt="" draggable="false" />)
-                      : <span style={{ fontSize: 12.5, color: "#8A93C9", fontWeight: 700 }}>nothing built yet — tap to put the first part down</span>}
-                  </div>
-                </button>
-              );
-            })()}
+            {stationOn && (
+              <button
+                onClick={() => { setStMsg(null); setScreen("station"); }}
+                style={{ display: "block", width: "100%", textAlign: "left", cursor: "pointer", margin: "14px 0 0", padding: "10px 12px", borderRadius: 12, background: "#0B0E23", border: "1.5px solid #35E0FF", boxShadow: "0 0 14px rgba(53,224,255,.22)" }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 11, letterSpacing: 2, color: "#35E0FF", fontFamily: "'Orbitron', sans-serif" }}>🛰️ FAMILY STATION</span>
+                  <span style={{ marginLeft: "auto", fontSize: 10.5, color: "#8A93C9", fontFamily: "Consolas, monospace", fontWeight: 700 }}>{crew.length} crew · {1 + stationUsed(station)} rooms</span>
+                </div>
+                <div className="peek" aria-hidden="true">
+                  {crew.slice(0, 8).map((c) => {
+                    const m = crewMotion(c.id);
+                    return <span key={c.id} className="crew peek-crew" style={{ "--dur": m.dur + "s", "--delay": m.delay + "s", "--from": Math.round(m.from * 1.2) + "%", "--to": Math.min(84, Math.round(m.to * 1.5)) + "%" }}>
+                      <span className="crew-sprite" style={{ backgroundImage: `url(${crewURL(c.color)})`, "--dur": m.dur + "s", "--delay": m.delay + "s" }} />
+                    </span>;
+                  })}
+                </div>
+              </button>
+            )}
             <div style={{ marginTop: 14, display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
               <button style={st.ghostBtn} onClick={() => setScreen("shop")}>🛒 Shop</button>
               <button style={st.ghostBtn} onClick={() => { setMapTrack(track); setScreen("map"); }}>🗺 Map</button>
@@ -3725,90 +3747,101 @@ export default function AutoMathtics() {
 
       {/* ---------- the family station ---------- */}
       {screen === "station" && user && prog && (() => {
-        const mine = user.name.toLowerCase();
-        const picked = stPick ? stationModule(stPick) : null;
-        const sel = stSel != null ? stGrid[String(stSel)] : null;
-        const selMod = sel ? stationModule(sel.id) : null;
-        const selBy = sel ? roster.find((u) => u.name.toLowerCase() === sel.by) : null;
-        const used = stationUsed(station);
-        const free = stPlots - used;
-        // the box under the screen always says something, the way a Game Boy's message box always does
+        const bal = balances(prog);
+        const openSlots = stFloors * ROOMS_PER_FLOOR;
+        // built rooms in slot order, the dock first; the crew spread themselves across them
+        const rooms = [0, ...PLOT_SLOTS.filter((i) => i > 0 && stGrid[String(i)])];
+        const crewIn = {};
+        crew.forEach((c, k) => { const r = rooms[k % rooms.length]; (crewIn[r] = crewIn[r] || []).push(c); });
+        const selCell = stSel != null ? (stSel === 0 ? { id: "dock" } : stGrid[String(stSel)]) : null;
+        const selMod = selCell ? stationModule(selCell.id) : null;
+        const building = stSel != null && stSel > 0 && stSel < openSlots && !stGrid[String(stSel)];
+        const nextFloor = stFloors < STATION_FLOORS ? crewNeededFor(stFloors) : 0;
         const say = stMsg ? stMsg
-          : selMod ? (() => {
-            // a kid who taps someone else's module gets no take-down button — say why, or it reads as broken
-            const who = selBy ? selBy.name : sel.by;
-            return `${selMod.name.toUpperCase()} — ${selMod.blurb}. Put up by ${who}.` + (sel.by === mine ? "" : ` Only ${who} can take it down.`);
-          })()
-            : free === 0 ? "Every plot is full. Take one of yours down to move it."
-              : picked ? `Pick a plot for the ${picked.name.toUpperCase()}.`
-                : "Choose a part, then tap a plot.";
+          : stTalk ? `${stTalk.name.toUpperCase()}: "${stTalk.line}"`
+            : building ? `Choose a room for floor ${Math.floor(stSel / ROOMS_PER_FLOOR) + 1}. Rooms cost ⚡${ROOM_COST}.`
+              : selMod ? `${selMod.name.toUpperCase()} — ${selMod.blurb}.` + (selCell.by ? ` Built by ${(roster.find((u) => u.name.toLowerCase() === selCell.by) || { name: selCell.by }).name}.` : "")
+                : `${crew.length} crew aboard, ${rooms.length} room${rooms.length === 1 ? "" : "s"}. Tap + to build.` + (nextFloor ? ` Floor ${stFloors + 1} opens at ${nextFloor} crew.` : "");
         return (
           <div style={st.card} className="screen">
             <div style={st.kicker}>🛰️ FAMILY STATION</div>
-            <h1 style={{ ...st.title, fontSize: 22 }}>BUILD THE STATION</h1>
-            <div style={{ fontSize: 13, color: "#EAF2FF", fontWeight: 700, marginTop: 6 }}>
-              {used} of {stPlots} plots built
-              {stPlots < STATION_PLOTS && <span style={{ color: "#8A93C9", fontWeight: 600 }}> · next plot at your next 👑 check point</span>}
+            <h1 style={{ ...st.title, fontSize: 22 }}>THE STATION</h1>
+            <div style={{ display: "flex", justifyContent: "center", gap: 14, fontSize: 12.5, color: "#EAF2FF", fontWeight: 700, marginTop: 6, fontFamily: "Consolas, monospace" }}>
+              <span>👩‍🚀 {crew.length} crew</span><span>🚪 {rooms.length} rooms</span><span style={{ color: "#FFB020" }}>⚡ {bal.gcBal}</span>
             </div>
 
-            <div className="stboard">
-              {PLOT_SLOTS.map((i) => {
-                const open = i < stPlots;
-                const cell = open ? stGrid[String(i)] : null;
-                const mod = cell ? stationModule(cell.id) : null;
-                const by = cell ? roster.find((u) => u.name.toLowerCase() === cell.by) : null;
-                const placeable = open && !cell && !!picked;
-                const chosen = stSel === i;
-                const label = !open ? `locked plot ${i + 1}`
-                  : mod ? `plot ${i + 1}: ${mod.name}, placed by ${by ? by.name : cell.by}`
-                    : `empty plot ${i + 1}`;
+            <div className="shelter" role="group" aria-label="the station, floor by floor">
+              {Array.from({ length: STATION_FLOORS }, (_, f) => {
+                const open = f < stFloors;
                 return (
-                  <button
-                    key={i}
-                    className={"tile" + (placeable ? " tile-open" : "") + (chosen ? " tile-sel" : "")}
-                    disabled={!open || stBusy || (!cell && !picked)}
-                    onClick={() => {
-                      setStMsg(null);
-                      if (cell) { setStSel(chosen ? null : i); setStPick(null); }
-                      else if (picked) placeModule(i, picked.id);
-                    }}
-                    aria-label={label}
-                  >
-                    <img src={spriteURL(cell ? cell.id : open ? "floor" : "locked")} alt="" draggable="false" />
-                    {by && <span className="tile-dot" style={{ background: by.color }} aria-hidden="true" />}
-                  </button>
+                  <div key={f} className={"floor" + (open ? "" : " floor-locked")}>
+                    <div className="lift" aria-hidden="true"><span className="lift-car" /></div>
+                    {Array.from({ length: ROOMS_PER_FLOOR }, (_, sl) => {
+                      const i = f * ROOMS_PER_FLOOR + sl;
+                      const cell = i === 0 ? { id: "dock" } : open ? stGrid[String(i)] : null;
+                      const mod = cell ? stationModule(cell.id) : null;
+                      const here = crewIn[i] || [];
+                      if (mod) return (
+                        <div key={i} className={"room room-built" + (stSel === i ? " room-sel" : "")} role="button" tabIndex={0}
+                          aria-label={`${mod.name}, floor ${f + 1}${here.length ? `, ${here.map((c) => c.name).join(" and ")} inside` : ""}`}
+                          onClick={() => { setStMsg(null); setStTalk(null); setStSel(stSel === i ? null : i); }}
+                          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setStMsg(null); setStTalk(null); setStSel(stSel === i ? null : i); } }}>
+                          <span className="room-name">{mod.name}</span>
+                          <img className="room-kit" src={spriteURL(mod.id)} alt="" draggable="false" />
+                          {here.slice(0, 4).map((c) => {
+                            const m = crewMotion(c.id);
+                            return (
+                              <button key={c.id} className="crew" type="button" title={c.name}
+                                style={{ "--dur": m.dur + "s", "--delay": m.delay + "s", "--from": m.from + "%", "--to": m.to + "%" }}
+                                onClick={(e) => { e.stopPropagation(); setStMsg(null); setStSel(null); setStTalk({ name: c.name, line: CREW_LINES[Math.floor(Math.random() * CREW_LINES.length)] }); }}>
+                                <i className="crew-name">{c.name}</i>
+                                <span className="crew-sprite" style={{ backgroundImage: `url(${crewURL(c.color)})`, "--dur": m.dur + "s", "--delay": m.delay + "s" }} />
+                              </button>
+                            );
+                          })}
+                        </div>
+                      );
+                      if (open) return (
+                        <button key={i} className={"room room-empty" + (stSel === i ? " room-sel" : "")} type="button" disabled={stBusy}
+                          aria-label={`empty spot, floor ${f + 1} — build here`}
+                          onClick={() => { setStMsg(null); setStTalk(null); setStSel(stSel === i ? null : i); }}>+</button>
+                      );
+                      return (
+                        <div key={i} className="room room-locked" aria-label={sl === 1 ? `floor ${f + 1} opens at ${crewNeededFor(f)} crew` : undefined}>
+                          {sl === 1 ? `NEEDS ${crewNeededFor(f)} CREW` : ""}
+                        </div>
+                      );
+                    })}
+                  </div>
                 );
               })}
             </div>
 
             <div className="gbbox gbsay" role="status">{say}</div>
 
-            {sel && selMod && sel.by === mine && (
-              <button className="gbbtn" disabled={stBusy} onClick={() => removeModule(stSel)}>✕ TAKE IT DOWN</button>
-            )}
-
-            <div className="gbbox gbmenu">
-              {STATION_MODULES.map((m) => {
-                const on = stPick === m.id;
-                return (
-                  <button
-                    key={m.id} className={"gbitem" + (on ? " gbitem-on" : "")} aria-pressed={on}
-                    onClick={() => { setStMsg(null); setStSel(null); setStPick(on ? null : m.id); }}
-                  >
-                    <span className="gbcur" aria-hidden="true">{on ? "▶" : "\u00a0"}</span>
+            {building && (
+              <div className="gbbox gbmenu">
+                {STATION_MODULES.map((m) => (
+                  <button key={m.id} className="gbitem" type="button" disabled={stBusy} onClick={() => buildRoom(stSel, m.id)}>
+                    <span className="gbcur" aria-hidden="true">{"\u00a0"}</span>
                     <img src={spriteURL(m.id)} alt="" draggable="false" />
                     <span className="gbname">{m.name.toUpperCase()}</span>
                   </button>
-                );
-              })}
-            </div>
+                ))}
+                <button className="gbitem" type="button" onClick={() => setStSel(null)}>
+                  <span className="gbcur" aria-hidden="true">{"\u00a0"}</span><span className="gbname">CANCEL</span>
+                </button>
+              </div>
+            )}
+
+            <button className="gbbtn" type="button" disabled={stBusy} onClick={recruitCrew}>RECRUIT CREW · ⚡{RECRUIT_COST}</button>
 
             <div style={{ ...st.subtle, textAlign: "left" }}>
-              The station belongs to everyone — whatever you build shows up on every device. The dot on a
-              plot is whoever put it there, and only they can take it down again.
+              One station for the whole family, live on every device. Everyone who plays is crew, so a friend
+              joining the game is a new pair of hands aboard — or hire one. Every two crew open another floor.
             </div>
             <div style={{ marginTop: 14 }}>
-              <button style={st.ghostBtn} onClick={() => { setStPick(null); setStSel(null); setStMsg(null); setScreen("home"); }}>Back</button>
+              <button style={st.ghostBtn} onClick={() => { setStSel(null); setStTalk(null); setStMsg(null); setScreen("home"); }}>Back</button>
             </div>
           </div>
         );
@@ -4139,7 +4172,7 @@ body { min-height: 100vh; margin: 0; background: #07091A; overflow-x: hidden; }
 body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; text-rendering: optimizeLegibility; }
 button { -webkit-tap-highlight-color: transparent; transition: transform .22s cubic-bezier(.2,.8,.2,1), filter .22s ease, box-shadow .22s ease, background-color .22s ease, border-color .22s ease, opacity .22s ease; }
 @media (hover: hover) and (pointer: fine) {
-  button:not(.player-card):not(.tile):not(.gbitem):not(:disabled):hover { transform: translateY(-1px); filter: brightness(1.1) saturate(1.05); }
+  button:not(.player-card):not(.room):not(.crew):not(.gbitem):not(.gbbtn):not(:disabled):hover { transform: translateY(-1px); filter: brightness(1.1) saturate(1.05); }
 }
 /* every screen glides in instead of snapping — the class is on each screen's root, and each root
    only mounts when its screen is shown, so a screen change is exactly one run of this */
@@ -4590,27 +4623,42 @@ body { background: #07091A; }
 @keyframes crateShake { 0%,100% { transform: rotate(0); } 20% { transform: rotate(-14deg); } 40% { transform: rotate(12deg); } 60% { transform: rotate(-10deg); } 80% { transform: rotate(8deg); } }
 @keyframes cratePop { from { transform: scale(.2); opacity: 0; } 70% { transform: scale(1.3); opacity: 1; } to { transform: scale(1); opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .crate-item, .crate-name { opacity: 1; } }
-/* ---------- the family station: a Game Boy screen inside the neon one ---------- */
-/* Sprites are 16×16 data-URL PNGs scaled up hard — no smoothing anywhere, or the pixels go soft. */
-.stboard {
-  display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px;
-  width: 100%; max-width: 304px; margin: 14px auto 10px;
-  background: #0B1020; padding: 3px; border: 3px solid #0B1020; box-shadow: 0 0 0 3px #3E4F82;
-}
-.tile { position: relative; padding: 0; border: 0; background: transparent; cursor: pointer; line-height: 0; transition: none; }
-.tile:disabled { cursor: default; }
-.tile img, .stpeek, .gbitem img {
-  display: block; width: 100%; height: auto;
-  image-rendering: pixelated; image-rendering: crisp-edges;
-}
-.tile-dot { position: absolute; right: 8%; bottom: 8%; width: 6px; height: 6px; border-radius: 50%; box-shadow: 0 0 0 1px #0B1020; }
-/* a plot you can build on blinks the way a Game Boy blinks: hard steps, never a fade */
-.tile-open { animation: tileBlink .8s steps(1) infinite; }
-@keyframes tileBlink { 50% { filter: brightness(1.8); } }
-.tile-sel img { outline: 2px solid #F7F7E8; outline-offset: -2px; }
-.tile:not(:disabled):active img { filter: brightness(1.45); }
-@media (prefers-reduced-motion: reduce) { .tile-open { animation: none; filter: brightness(1.4); } }
-@media (hover: hover) and (pointer: fine) { .tile:not(:disabled):hover img { filter: brightness(1.25); } }
+/* ---------- the family station: a cross-section, Fallout Shelter style, drawn in pixels ---------- */
+/* Floors stack down from the dock; a lift shaft runs down the left; every room is a lit box with its
+   kit sprite on the right and the crew pacing along the floor in front of it. Sprites are 16×16
+   data-URL PNGs scaled up hard — no smoothing anywhere, or the pixels go soft. */
+.shelter { width: 100%; max-width: 340px; margin: 12px auto 10px; padding: 3px; background: #0B1020; border: 3px solid #0B1020; box-shadow: 0 0 0 3px #3E4F82; }
+.floor { display: flex; gap: 3px; height: 64px; margin-bottom: 3px; }
+.floor:last-child { margin-bottom: 0; }
+.lift { flex: 0 0 18px; position: relative; background: #141B33; box-shadow: inset 0 0 0 1px #3E4F82; }
+.lift-car { position: absolute; left: 3px; right: 3px; bottom: 4px; height: 14px; background: #3E4F82; box-shadow: inset 0 0 0 1px #0B1020; }
+.floor-locked .lift { opacity: .35; }
+.room { flex: 1 1 0; min-width: 0; position: relative; overflow: hidden; border: 0; padding: 0; margin: 0; text-align: left; transition: none; color: #F7F7E8; font: 700 8px 'JetBrains Mono', Consolas, monospace; }
+.room-built { cursor: pointer; background: linear-gradient(#1B2340, #141B33 62%, #0F1426); box-shadow: inset 0 3px 0 #3E4F82, inset 0 -4px 0 #0B1020; }
+.room-built::before { content: ""; position: absolute; left: 22%; right: 22%; top: 4px; height: 2px; background: #F7F7E8; opacity: .55; } /* the ceiling strip light */
+.room-sel { box-shadow: inset 0 0 0 2px #F7F7E8 !important; }
+.room-name { position: absolute; left: 5px; top: 8px; text-transform: uppercase; letter-spacing: .04em; color: #9BE0F7; pointer-events: none; }
+.room-kit { position: absolute; right: 4px; bottom: 7px; width: 28px; height: 28px; image-rendering: pixelated; image-rendering: crisp-edges; pointer-events: none; }
+.room-empty { cursor: pointer; color: #9BE0F7; font-size: 24px; line-height: 1; text-align: center; background: repeating-linear-gradient(45deg, #101828 0 6px, #0D1322 6px 12px); box-shadow: inset 0 0 0 2px #3E4F82; }
+.room-empty:not(:disabled):active { background: #1B2340; }
+.room-locked { display: flex; align-items: center; justify-content: center; text-align: center; color: #3E4F82; font-size: 8px; letter-spacing: .06em; background: repeating-linear-gradient(45deg, #0B1020 0 6px, #0D1322 6px 12px); }
+/* a crew member is a positioned wrapper that paces (left) and a sprite inside that faces the way it
+   walks (a hard flip at each end) and strides (two frames, steps(2)). Two animations on the same
+   clock stay in step; the name rides the wrapper so it never mirrors. */
+.crew { position: absolute; bottom: 5px; left: var(--from, 6%); width: 32px; height: 32px; padding: 0; border: 0; background: transparent; cursor: pointer; transition: none;
+  animation: pace var(--dur, 6s) linear var(--delay, 0s) infinite; }
+.crew-sprite { display: block; width: 32px; height: 32px; background-size: 200% 100%; background-repeat: no-repeat; image-rendering: pixelated; image-rendering: crisp-edges;
+  animation: face var(--dur, 6s) steps(1) var(--delay, 0s) infinite, stride .55s steps(2) infinite; }
+.crew-name { position: absolute; left: 50%; top: -8px; transform: translateX(-50%); font: 700 7px 'JetBrains Mono', Consolas, monospace; font-style: normal; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; color: #F7F7E8; text-shadow: 0 0 2px #0B1020, 0 0 3px #0B1020; pointer-events: none; }
+@keyframes pace { 0%, 100% { left: var(--from, 6%); } 50% { left: var(--to, 60%); } }
+@keyframes face { 0% { transform: scaleX(1); } 50% { transform: scaleX(-1); } 100% { transform: scaleX(1); } }
+@keyframes stride { to { background-position-x: -64px; } }
+.crew:active .crew-sprite { filter: brightness(1.5); }
+@media (prefers-reduced-motion: reduce) { .crew, .crew-sprite { animation: none; } }
+/* the home-screen peek: the crew walking along a strip of dock */
+.peek { position: relative; height: 40px; margin-top: 8px; overflow: hidden; background: linear-gradient(#141B33, #0F1426); box-shadow: inset 0 -3px 0 #0B1020, inset 0 2px 0 #3E4F82; }
+.peek-crew { cursor: inherit; }
+.gbitem img, .stpeek { display: block; image-rendering: pixelated; image-rendering: crisp-edges; }
 
 /* the message box and the part menu are the Pokémon box: white fill, black rule, a grey inner line */
 .gbbox {

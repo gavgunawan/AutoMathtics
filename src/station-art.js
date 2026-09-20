@@ -12,6 +12,7 @@ const OUT = "#0B1020"; // the shared near-black outline every sprite is drawn ag
 export const SPRITE_PALETTES = {
   floor: [OUT, "#1B2340", "#141B33", "#3E4F82"],
   locked: [OUT, "#161B2E", "#0F1426", "#2A3358"],
+  dock: [OUT, "#3E4F82", "#7E8AA8", "#DDE3F5"],
   sm_solar: [OUT, "#7A4A00", "#E09A0C", "#FFDE7A"],
   sm_reactor: [OUT, "#0B5A3A", "#22A86B", "#7BE8A8"],
   sm_garden: [OUT, "#1E5E1E", "#4FB04F", "#B6F06B"],
@@ -56,6 +57,25 @@ export const STATION_SPRITES = {
     "0122033003302210",
     "0122033333302210",
     "0122000000002210",
+    "0111111111111110",
+    "0000000000000000",
+  ],
+  // the Dock — an airlock hatch, the one room every station starts with; crew arrive through it
+  dock: [
+    "0000000000000000",
+    "0111111111111110",
+    "0100000000000010",
+    "0102222002222010",
+    "0102333003332010",
+    "0102300003003010",
+    "0102303303303010",
+    "0102303303303010",
+    "0102300003003010",
+    "0102333003332010",
+    "0102222002222010",
+    "0100000000000010",
+    "0111100110011110",
+    "0111100000011110",
     "0111111111111110",
     "0000000000000000",
   ],
@@ -175,6 +195,82 @@ export const STATION_SPRITES = {
   ],
 };
 
+// The crew: one astronaut drawn twice — legs apart, legs together — which is the whole Game Boy walk
+// cycle. Colour 1 is the suit's shade and 2 the suit itself, so a crew member is this sprite in their
+// own colour, the way a GBC game recolours one sprite for every trainer. 3 is the helmet.
+export const CREW_FRAMES = [
+  [
+    "................",
+    "......0000......",
+    ".....033330.....",
+    "....03333330....",
+    "....03300030....",
+    "....03000030....",
+    "....03333330....",
+    ".....000000.....",
+    "....02222220....",
+    "...0122222210...",
+    "...0102222010...",
+    "....01222210....",
+    ".....011110.....",
+    ".....01..10.....",
+    ".....00..00.....",
+    "................",
+  ],
+  [
+    "................",
+    "......0000......",
+    ".....033330.....",
+    "....03333330....",
+    "....03300030....",
+    "....03000030....",
+    "....03333330....",
+    ".....000000.....",
+    "....02222220....",
+    "...0122222210...",
+    "...0102222010...",
+    "....01222210....",
+    ".....011110.....",
+    "......0110......",
+    "......0000......",
+    "................",
+  ],
+];
+
+// darken a hex colour by a factor — the suit's shadow side is the crew colour at 55%
+const shade = (hex, f) => {
+  const n = parseInt(String(hex).replace("#", ""), 16);
+  if (Number.isNaN(n)) return "#000000";
+  const c = (v) => Math.max(0, Math.min(255, Math.round(v * f))).toString(16).padStart(2, "0");
+  return "#" + c((n >> 16) & 255) + c((n >> 8) & 255) + c(n & 255);
+};
+
+// Both frames side by side on one 32×16 strip, so a CSS steps(2) animation on background-position
+// walks it. Cached per colour: a family of six is six canvases, not six per render.
+const crewCache = new Map();
+export function crewURL(color) {
+  const key = String(color || "#35E0FF").toLowerCase();
+  if (crewCache.has(key)) return crewCache.get(key);
+  if (typeof document === "undefined") return "";
+  const pal = [OUT, shade(key, 0.55), key, "#F7F7E8"];
+  const c = document.createElement("canvas");
+  c.width = 32; c.height = 16;
+  const g = c.getContext("2d");
+  if (!g) return "";
+  CREW_FRAMES.forEach((rows, f) => rows.forEach((row, y) => {
+    for (let x = 0; x < row.length; x++) {
+      const ch = row[x];
+      if (ch === ".") continue;
+      g.fillStyle = pal[Number(ch)] || pal[0];
+      g.fillRect(f * 16 + x, y, 1, 1);
+    }
+  }));
+  let url = "";
+  try { url = c.toDataURL("image/png"); } catch (e) { url = ""; }
+  crewCache.set(key, url);
+  return url;
+}
+
 // A sprite is painted once and kept as a data URL — six modules plus two plate states, so the whole
 // board is eight <img> sources however many plots are on screen.
 const spriteCache = new Map();
@@ -208,6 +304,10 @@ export function checkSprites() {
     if (rows.length !== 16) bad.push(`${k}: ${rows.length} rows`);
     rows.forEach((r, i) => { if (r.length !== 16) bad.push(`${k} row ${i}: ${r.length} chars`); });
     if (!SPRITE_PALETTES[k]) bad.push(`${k}: no palette`);
+  });
+  CREW_FRAMES.forEach((rows, f) => {
+    if (rows.length !== 16) bad.push(`crew frame ${f}: ${rows.length} rows`);
+    rows.forEach((r, i) => { if (r.length !== 16) bad.push(`crew frame ${f} row ${i}: ${r.length} chars`); });
   });
   return bad;
 }

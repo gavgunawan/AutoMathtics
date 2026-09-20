@@ -1,4 +1,4 @@
-# AutoMathtics — source & build notes (v1.17, 20 Sep 2026)
+# AutoMathtics — source & build notes (v1.18, 20 Sep 2026)
 
 The deployed page is `index.html` at the repo root — GitHub Pages serves that one file and nothing else.
 It is **generated**; never hand-edit it. Everything lives in `src/`:
@@ -79,45 +79,45 @@ the real-world comparisons. A question is `{ display: { layout: "word", text, ch
 and `read` is spoken aloud by the browser (`speak`, 🔊 in the status row). Fuzz the generators with
 `node node_modules/.harness/navfuzz.mjs`-style checks before changing templates.
 
-## The family station (v2.5)
+## The family station (v2.7)
 
-One station the whole family builds, at `kumon/station`: `{ plots, grid: { "<slot>": { id, by, at } } }`.
-Shared like the rocket, so `updateStation` wraps every write in a `runTransaction` and two kids placing
-at the same moment can't clobber each other; `subscribeStation` keeps every device live.
+A cross-section, Fallout Shelter style: floors stacked down from the dock, three rooms to a floor, a
+lift shaft down the left, and the crew walking about inside. One station the whole family builds, at
+`kumon/station`: `{ grid: { "<slot>": { id, by, at } }, recruits: [{ id, name, color, by, at }] }`,
+slot = floor × 3 + position; slot 0 is the dock, built into every station and never stored. Shared
+like the rocket — `updateStation` wraps every write in a `runTransaction`, so two kids building at the
+same moment can't clobber each other — and `subscribeStation` keeps every device live.
 
-**v2.5 deliberately has no economy.** Parts (`STATION_MODULES`, six of them) are free and unlimited —
-**plots** are the only scarce thing, and they come from the map: `stationPlotsFor(p)` is 3 to start,
-plus one per 👑 check point and one per sector left behind, across *both* tracks, capped at
-`STATION_PLOTS` (12). The station stores the highest figure any player has reached, so the hull never
-shrinks when a different kid opens it; an effect ratchets `plots` up (guarded by `stBumpRef` so it
-can't loop on itself). Power budgets, adjacency bonuses and production are the next versions' job —
-ship this, see whether it holds them for a week, then build the economy.
+**The crew is what makes it grow.** Everyone on the roster is crew for free, so "get a friend to join"
+(the add-player wizard) is literally how the family gets more hands aboard; `recruitCrew` hires an
+NPC (`RECRUIT_NAMES`, the colour fewest people are wearing) for `RECRUIT_COST` ⚡. Floors unlock by
+head-count — `floorsFor(n)` is one floor plus one for every two crew, so two kids start with one
+floor and the first recruit or friend opens the second. Rooms (`STATION_MODULES`, six kinds) cost
+`ROOM_COST` ⚡. Both are paid from that kid's own ledger exactly like a shop buy or rocket fuel:
+`gcSpent` up, a `purchases` row, saved — spent is spent, never refunded, which is why nothing can be
+sold back. Dad's "clear every room" in the admin panel drops the rooms and keeps the crew.
 
-### The look: Game Boy Colour (v2.6)
+The crew spread themselves across the built rooms in slot order (dock first); each is the one
+astronaut in `src/station-art.js` (`CREW_FRAMES`, legs apart / legs together — the whole Game Boy
+walk) recoloured through `crewURL(color)`, the way a GBC game recolours one sprite for every trainer.
+A crew member is a positioned wrapper that paces (`left`, from `crewMotion(id)`, hashed from the id
+so a re-render never restarts anyone's walk) with a sprite inside that faces the way it walks (a hard
+`steps(1)` flip at each end) and strides (`steps(2)` over a 32×16 two-frame strip). Tap anyone to
+hear a line from `CREW_LINES`.
 
-The board is a 4×3 **square** tile grid — hexagons have no place in this style — drawn with 16×16
-pixel sprites in `src/station-art.js`. A sprite is 16 strings of 16 characters: `.` is transparent and
-`0`–`3` index that sprite's own four-colour palette, the way a GBC sprite gets one palette of four.
-`spriteURL(name)` paints it once onto a 16×16 canvas, caches the data URL, and the tile scales it up
-with `image-rendering: pixelated`. **No image files** — the single `index.html` stays the only thing
-the site serves — and no smoothing anywhere, or the pixels go soft. `checkSprites()` returns every
-row that isn't 16 characters; a typo there shows up as a torn tile, so run it after editing the tables.
+Rooms and the kit inside them are the 16×16 sprites: 16 strings of 16 characters, `.` transparent,
+`0`–`3` indexing that sprite's own four-colour palette. `spriteURL(name)` paints one once onto a
+canvas and caches the data URL; **no image files** ship and `index.html` stays the only thing the
+site serves. `checkSprites()` returns every row that isn't 16 characters — a typo shows as a torn
+tile, so run it after editing the tables. The message box and menus are the Pokémon box (`.gbbox`):
+white fill, black rule, grey inner line, and the `.gbsay` box under the station always says something
+— who's aboard, what's selected, what to do next — so the layout never jumps.
 
-Each module tile fills its whole cell, plate included, so colour 1 is the module's rim and the six
-modules are told apart by silhouette *and* by rim colour. `floor` is an earned empty plot, `locked`
-one not yet earned.
-
-The surrounding chrome is the Pokémon message box: white fill, black rule, grey inner line (`.gbbox`).
-There is always a `.gbsay` box under the board saying something — what's selected, whose it is, what
-to do next — so the layout never jumps, and the parts tray is a `.gbmenu` with a `▶` cursor rather
-than a scrolling strip. An empty plot you can build on blinks with `steps(1)`, never a fade, because
-that is what a Game Boy does.
-
-Interaction is tap-select-then-tap-place, never drag: tap a part in the menu, legal plots blink, tap
-one to set it down. Tapping a placed module opens an info strip; only the player who put it up can
-take it down (Dad can clear the lot from the admin panel). `settings.station === false` hides the
-whole feature. No timers, no callbacks, no "your crops are ready" — collect-and-place is meant to take
-under a minute and send them back to the maths.
+Interaction is tap-to-build, never drag: `+` on an empty spot opens the room menu for that spot;
+tap a built room to read what it is and who built it; RECRUIT is always one tap away. No timers, no
+callbacks, no "your crops are ready" — a visit should take under a minute and send them back to the
+maths. `settings.station === false` hides the whole feature. Production and a power budget are the
+next version's job.
 
 ## Players
 
