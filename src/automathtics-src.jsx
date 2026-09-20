@@ -1088,8 +1088,8 @@ function playWrong() {
 
 // ---------- shared settings (admin panel), synced via cloud ----------
 const ADMIN_PIN = "1590";
-const BUILD_TAG = "v2.3.1 · 8 Sep";
-const BUILD_ID = "am-build-231"; // ASCII-only twin of BUILD_TAG, searched for in the live index.html
+const BUILD_TAG = "v2.4 · 20 Sep";
+const BUILD_ID = "am-build-240"; // ASCII-only twin of BUILD_TAG, searched for in the live index.html
 
 // ---------- full screen ----------
 const fsSupported = () => typeof document !== "undefined" && !!(document.fullscreenEnabled || document.webkitFullscreenEnabled) && !(window.navigator && window.navigator.standalone);
@@ -1705,16 +1705,32 @@ export default function AutoMathtics() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rocket]);
 
-  // per-kid admin time scale (percent): question time = base × kid pace × scale
-  const scaleFor = (name) => {
-    const key = name.toLowerCase() + "Scale";
-    const v = settings && typeof settings[key] === "number" ? settings[key] : 100;
+  // per-kid admin time scale (percent), one per track: question time = base × kid pace × scale.
+  // `<name>Scale` is the original key and stays Engine's. Navigator reads `<name>ScaleNav` and falls
+  // back to the Engine value, so a family that set one slider before the split keeps that time on both.
+  const scaleFor = (name, t) => {
+    const key = name.toLowerCase();
+    const eng = settings && typeof settings[key + "Scale"] === "number" ? settings[key + "Scale"] : 100;
+    const v = t === "nav"
+      ? (settings && typeof settings[key + "ScaleNav"] === "number" ? settings[key + "ScaleNav"] : eng)
+      : eng;
     return Math.min(100, Math.max(10, v)) / 100;
   };
-  const scaledSecs = (lvlIdx, tier, u) => Math.max(5, Math.round(secondsFor(lvlIdx, tier, u.mult) * scaleFor(u.name)));
-  const scaledSecsT = (lvlIdx, tier, u, t) => Math.max(5, Math.round((t === "nav" ? navSecondsFor(lvlIdx, tier, u.mult) : secondsFor(lvlIdx, tier, u.mult)) * scaleFor(u.name)));
+  const scaledSecs = (lvlIdx, tier, u) => Math.max(5, Math.round(secondsFor(lvlIdx, tier, u.mult) * scaleFor(u.name, "engine")));
+  const scaledSecsT = (lvlIdx, tier, u, t) => Math.max(5, Math.round((t === "nav" ? navSecondsFor(lvlIdx, tier, u.mult) : secondsFor(lvlIdx, tier, u.mult)) * scaleFor(u.name, t === "nav" ? "nav" : "engine")));
   // everyone who can play on this family's grid: the built-ins plus players added from the selection screen
   const roster = [...USERS, ...(((settings && settings.players) || []).map(playerToUser))];
+  // Opening the admin panel materialises each player's Navigator scale from their Engine one, so the
+  // two sliders move independently from the first drag. Before the split one slider drove both tracks;
+  // copying the value across on the way in keeps every existing player's Navigator time exactly as it was.
+  const draftWithNavScales = (s) => {
+    const d = { ...s };
+    roster.forEach((u) => {
+      const key = u.name.toLowerCase();
+      if (typeof d[key + "ScaleNav"] !== "number") d[key + "ScaleNav"] = typeof d[key + "Scale"] === "number" ? d[key + "Scale"] : 100;
+    });
+    return d;
+  };
   const qSecs = (q) => scaledSecsT(q && typeof q.qLevel === "number" ? q.qLevel : levelIdx, tierOf(q ? q.paper : startPaper), user, q && q.track === "nav" ? "nav" : "engine");
   const petEmoji = prog && prog.wallet && prog.wallet.activePet
     ? (SHOP_ITEMS.find((it) => it.id === prog.wallet.activePet) || {}).emoji : null;
@@ -2596,7 +2612,7 @@ export default function AutoMathtics() {
                 if (adminLocked(security)) { setPin(""); return; }
                 if (pin === ADMIN_PIN) {
                   adminUnlocked();
-                  setDraft({ ...settings }); setSettingsSaved(false); setScreen("admin");
+                  setDraft(draftWithNavScales(settings)); setSettingsSaved(false); setScreen("admin");
                   setRk((f) => ({ ...f, crew: f.crew.length ? f.crew : roster.filter((u) => !u.test).map((u) => u.name.toLowerCase()) }));
                   Promise.all(roster.map((u) => loadProgress(u.name))).then((ps) => {
                     const m = {}; roster.forEach((u, i) => { m[u.name.toLowerCase()] = ps[i]; }); setAdminKids(m);
@@ -2630,26 +2646,43 @@ export default function AutoMathtics() {
             Slide to shrink each player's per-question time. 100% = the built-in time,
             70% means a 50-second question becomes 35 seconds. Applies instantly on every device.
           </p>
+          <p style={{ ...st.subtle, textAlign: "left", margin: "-6px 0 14px" }}>
+            Each player has one slider per track: ⚙️ Engine sums and 🧭 Navigator word problems are
+            timed separately, so reading time can be generous while the drills stay tight.
+          </p>
           {roster.map((u) => {
-            const key = u.name.toLowerCase() + "Scale";
-            const val = Math.min(100, Math.max(10, draft[key] ?? 100));
-            const baseNow = secondsFor(0, 3, u.mult);
+            const engKey = u.name.toLowerCase() + "Scale";
+            const engVal = Math.min(100, Math.max(10, draft[engKey] ?? 100));
             return (
               <div key={u.name} style={{ textAlign: "left", margin: "0 0 18px", padding: "12px 14px", background: "#0B0E23", border: `1.5px solid ${u.color}`, borderRadius: 12 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
                   <img src={u.avatar} alt="" style={{ width: 34, height: 34, borderRadius: "50%", objectFit: "cover", border: `2px solid ${u.color}` }} />
                   <b style={{ color: u.color, fontFamily: "'Orbitron', sans-serif", letterSpacing: 1 }}>{u.name.toUpperCase()}</b>
-                  <span style={{ marginLeft: "auto", fontFamily: "Consolas, monospace", fontWeight: 800, fontSize: 20, color: u.color }}>{val}%</span>
                 </div>
-                <input
-                  type="range" min={10} max={100} step={5} value={val}
-                  onChange={(e) => setDraft({ ...draft, [key]: parseInt(e.target.value, 10) })}
-                  style={{ width: "100%", accentColor: u.color }}
-                  aria-label={`${u.name} time percentage`}
-                />
-                <div style={{ ...st.subtle, textAlign: "left", marginTop: 4 }}>
-                  example: a {baseNow}s question becomes <b style={{ color: u.color }}>{Math.max(5, Math.round(baseNow * val / 100))}s</b>
-                </div>
+                {["engine", "nav"].map((t) => {
+                  const T = TRACKS[t];
+                  // Navigator falls back to Engine for a player added since the panel was opened
+                  const key = t === "nav" ? u.name.toLowerCase() + "ScaleNav" : engKey;
+                  const val = t === "nav" ? Math.min(100, Math.max(10, draft[key] ?? engVal)) : engVal;
+                  const baseNow = t === "nav" ? navSecondsFor(0, 3, u.mult) : secondsFor(0, 3, u.mult);
+                  return (
+                    <div key={t} style={{ marginBottom: t === "nav" ? 0 : 12 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                        <span style={{ fontSize: 11, letterSpacing: 2, color: T.color, fontFamily: "'Orbitron', sans-serif" }}>{T.emoji} {T.name}</span>
+                        <span style={{ marginLeft: "auto", fontFamily: "Consolas, monospace", fontWeight: 800, fontSize: 18, color: T.color }}>{val}%</span>
+                      </div>
+                      <input
+                        type="range" min={10} max={100} step={5} value={val}
+                        onChange={(e) => setDraft({ ...draft, [key]: parseInt(e.target.value, 10) })}
+                        style={{ width: "100%", accentColor: T.color }}
+                        aria-label={`${u.name} ${T.label} time percentage`}
+                      />
+                      <div style={{ ...st.subtle, textAlign: "left", marginTop: 2 }}>
+                        example: a {baseNow}s {t === "nav" ? "word problem" : "sum"} becomes <b style={{ color: T.color }}>{Math.max(5, Math.round(baseNow * val / 100))}s</b>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             );
           })}
@@ -2666,7 +2699,7 @@ export default function AutoMathtics() {
               </div>
             ))}
             <div style={{ ...st.logTitle, margin: "10px 0 6px", color: "#FFB020" }}>➕ ADDED PLAYERS</div>
-            {((settings && settings.players) || []).length === 0 && <div style={{ ...st.subtle, textAlign: "left" }}>none yet — players added from the selection screen appear here, with their own time slider, log, PIN reset and manual update above</div>}
+            {((settings && settings.players) || []).length === 0 && <div style={{ ...st.subtle, textAlign: "left" }}>none yet — players added from the selection screen appear here, with their own pair of time sliders, log, PIN reset and manual update above</div>}
             {((settings && settings.players) || []).map((p) => (
               <div key={"ap" + p.name} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", background: "#0B0E23", border: `1px dashed ${p.color || "#2A3170"}`, borderRadius: 12, marginBottom: 8 }}>
                 <span style={{ fontSize: 22 }}>{p.emoji}</span>

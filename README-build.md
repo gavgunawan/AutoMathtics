@@ -1,4 +1,4 @@
-# AutoMathtics — source & build notes (v1.14, 2 Sep 2026)
+# AutoMathtics — source & build notes (v1.15, 20 Sep 2026)
 
 The deployed page is `index.html` at the repo root — GitHub Pages serves that one file and nothing else.
 It is **generated**; never hand-edit it. Everything lives in `src/`:
@@ -44,6 +44,18 @@ before the jump to the next sector (`trackDone`, `jumpTo`):
 | ⚙️ ENGINE — arithmetic drills | the original `paper` / `bossCleared` | 5 sums | 25 questions | 25 s per question |
 | 🧭 NAVIGATOR — word & logic | `prog.nav = { paper, bossCleared }` | 3 word problems | 15 questions, under ten minutes | 50 s per question |
 
+### One time slider per track (v2.4)
+
+The admin panel gives every player **two** sliders, not one: `<name>Scale` is Engine's (the original
+key, unchanged) and `<name>ScaleNav` is Navigator's. `scaleFor(name, track)` reads the pair and
+Navigator **falls back to the Engine value** whenever `<name>ScaleNav` is absent, so a family that set
+70% before the split still reads and drills at 70% until someone moves the new slider. Nothing seeds
+`<name>ScaleNav` into `DEFAULT_SETTINGS` — a default there would hand Navigator 100% and silently undo
+that setting. Opening the panel runs the draft through `draftWithNavScales`, which copies Engine's
+value into the missing Navigator key so the two sliders are independent from the first drag; the next
+Save writes both. Question time is still `base × kid pace × scale`, with Engine's base from
+`secondsFor` and Navigator's from `navSecondsFor` (50 s + 5 s per sector + 5 s per tier).
+
 Each track has its **own sector** (v2.1): Engine's is `p.level`, Navigator's is `p.nav.level`, which
 starts at A for everyone. `canJump(p, t)`: a track that has finished its sector jumps on once the other
 track has finished that sector too (or is already past it); `settleJumps` applies every due jump after a
@@ -73,8 +85,8 @@ screen and the admin panel iterate. "➕ Add player" on the selection screen run
 (`validPlayerName` — 2–12 alphanumerics, not a reserved name, not taken), icon, colour → PIN twice →
 `createPlayer` writes the roster entry to settings and a `newPlayerProgress` (paper 1, empty
 history, PIN) to the player's own node, enters them, and shows the quick guide (`GUIDE_SLIDES`; also
-"🎓 Guide" on the home screen). The name is the storage key exactly as for the built-ins, so time
-scale (`<name>Scale`), log, restore, PIN reset, manual credit and redemptions all just work. Admin
+"🎓 Guide" on the home screen). The name is the storage key exactly as for the built-ins, so both time
+scales (`<name>Scale`, `<name>ScaleNav`), log, restore, PIN reset, manual credit and redemptions all just work. Admin
 "✕ remove" drops the roster entry only — the progress node stays, and adding the same name again
 picks it back up. The admin Save writes `players` from live settings, never from the draft.
 
