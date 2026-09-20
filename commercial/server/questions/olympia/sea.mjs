@@ -603,6 +603,7 @@ const chart = (y) => {
     `${vals[hi]} − ${vals[lo]} = ${vals[hi] - vals[lo]}.`,
     `So there were ${vals[hi] - vals[lo]} more on ${labels[hi]} than on ${labels[lo]}.`,
   ], READ);
+  if (vals.filter((v) => v === vals[lo]).length > 1) return null; // two days tied for the fewest would have two right answers: draw again
   return explain(withFigure(mcOnly('charts', `The bar chart shows the ${what} on four days. On which day were there the fewest?`, labels[lo], labels.filter((_, i) => i !== lo)), f), [
     readBars,
     `The shortest bar is ${labels[lo]}, with ${vals[lo]}.`,
