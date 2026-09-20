@@ -141,6 +141,12 @@ const GUIDE_SLIDES = [
     "🎁 Surprise Box = a random new thing. 🥚 Mystery Egg = hatches after 5 passes.",
     "🚀 Family Rocket — when Dad builds one, fuel it with ⚡ together. Full tank = a prize you all share.",
   ] },
+  { emoji: "🛰️", title: "The family station", lines: [
+    "Tap 🛰️ Station on your home screen — one station the whole family builds together.",
+    "Pick a part, tap a plot, done. Parts are free and you never run out.",
+    "Plots are what you earn: 3 to start, then one more for every 👑 check point and every sector you leave behind.",
+    "Whatever you put up shows on everyone's screen. The little dot says who built it.",
+  ] },
   { emoji: "🎁", title: "Cashing in 🏆 Reward Points", lines: [
     "The 🎁 Reward Store is at the bottom of the Shop — real prizes set up by Dad.",
     "Tap REDEEM → it goes to Dad to approve. Points come off once he says yes.",
@@ -1088,8 +1094,8 @@ function playWrong() {
 
 // ---------- shared settings (admin panel), synced via cloud ----------
 const ADMIN_PIN = "1590";
-const BUILD_TAG = "v2.4 · 20 Sep";
-const BUILD_ID = "am-build-240"; // ASCII-only twin of BUILD_TAG, searched for in the live index.html
+const BUILD_TAG = "v2.5 · 20 Sep";
+const BUILD_ID = "am-build-250"; // ASCII-only twin of BUILD_TAG, searched for in the live index.html
 
 // ---------- full screen ----------
 const fsSupported = () => typeof document !== "undefined" && !!(document.fullscreenEnabled || document.webkitFullscreenEnabled) && !(window.navigator && window.navigator.standalone);
@@ -1168,6 +1174,63 @@ const rocketReady = (r) => {
 // a rocket is fuelled with grid coins by default; Dad can build one that takes reward points instead
 const rocketSym = (r) => (r && r.currency === "rp" ? "🏆" : "⚡");
 const ROCKET_AMOUNTS = { gc: [50, 100, 250], rp: [100, 200, 500] };
+
+// ---------- the family station (v2.5) ----------
+// Lives at kumon/station: { plots, grid: { "<slot>": { id, by, at } } }. Shared by the whole family
+// like the rocket, so every device sees the same station, and every write goes through a transaction
+// so two kids placing at the same moment can't overwrite each other.
+// v2.5 has no economy on purpose: parts are free and unlimited, and PLOTS are the only scarce thing.
+// They come from the map — crowns cleared and sectors left behind, both tracks — so the only way to
+// build bigger is to practise. Power, adjacency and production are the next versions' job.
+const STATION_PLOTS = 12;
+const STATION_MODULES = [
+  { id: "sm_solar", emoji: "☀️", name: "Solar Array", color: "#FFB020", blurb: "catches the light" },
+  { id: "sm_reactor", emoji: "🔋", name: "Power Core", color: "#2DFFB3", blurb: "powers the hull" },
+  { id: "sm_garden", emoji: "🌱", name: "Hydroponics", color: "#2DFF6B", blurb: "grows the food" },
+  { id: "sm_scope", emoji: "🔭", name: "Observatory", color: "#35E0FF", blurb: "watches the sky" },
+  { id: "sm_dish", emoji: "📡", name: "Comms Dish", color: "#8A5CFF", blurb: "calls home" },
+  { id: "sm_quarters", emoji: "🛏️", name: "Crew Quarters", color: "#FF2DA8", blurb: "where the crew sleeps" },
+];
+const stationPath = () => `families/${FAMILY_TOKEN}/kumon/station`;
+const localLoadStation = () => { try { const s = localStorage.getItem("kumon-station"); return s ? JSON.parse(s) : null; } catch (e) { return null; } };
+const localSaveStation = (v) => { try { localStorage.setItem("kumon-station", JSON.stringify(v)); } catch (e) {} };
+async function cloudLoadStation() {
+  if (!fbdb) return null;
+  await fbAuthReady;
+  try { const snap = await dbGet(dbRef(fbdb, stationPath())); return snap.exists() ? snap.val() : null; } catch (e) { return null; }
+}
+function subscribeStation(cb) {
+  if (!fbdb) return () => {};
+  return whenAuthed(() => onValue(dbRef(fbdb, stationPath()), (snap) => cb(snap.exists() ? snap.val() : null)));
+}
+async function updateStation(fn) {
+  if (!fbdb) { const next = fn(localLoadStation()); localSaveStation(next); return next; }
+  await fbAuthReady;
+  try {
+    const res = await runTransaction(dbRef(fbdb, stationPath()), (cur) => fn(cur === undefined ? null : cur));
+    const v = res.snapshot.val(); localSaveStation(v); return v;
+  } catch (e) { return null; }
+}
+// 3 plots to start — a brand-new player has something to build on day one — then one per 👑 check
+// point and one per sector left behind, on both tracks. The station keeps the highest figure any
+// player has reached (`plots`), so the hull never shrinks when a different kid opens it.
+const stationPlotsFor = (p) => {
+  if (!p) return 3;
+  const e = trk(p, "engine"), n = trk(p, "nav");
+  return Math.max(3, Math.min(STATION_PLOTS, 3 + (e.bossCleared || 0) + (n.bossCleared || 0) + (e.level || 0) + (n.level || 0)));
+};
+const stationPlots = (s) => Math.max(3, Math.min(STATION_PLOTS, (s && s.plots) || 3));
+const stationGrid = (s) => (s && s.grid) || {};
+const stationUsed = (s) => Object.keys(stationGrid(s)).length;
+const stationModule = (id) => STATION_MODULES.find((m) => m.id === id) || null;
+// Where each plot sits: three staggered rows of four, pointy-top hexes. Percentages of the board box,
+// which carries an aspect-ratio so the honeycomb keeps its shape at any width. A pointy-top hex is
+// 1.1547× as tall as it is wide and rows overlap by a quarter, which lands the row step on exactly 30%.
+const PLOT_W = 100 / 4.5; // four hexes across plus the half-hex stagger
+const HEX_SLOTS = Array.from({ length: STATION_PLOTS }, (_, i) => {
+  const r = Math.floor(i / 4), c = i % 4;
+  return { left: (c + (r % 2) * 0.5) * PLOT_W, top: r * 30 };
+});
 // ---------- admin-gate watch ----------
 // Every wrong admin PIN is recorded at kumon/security for Dad to see. Three in a row (within ten
 // minutes) lock the gate for ten minutes and raise an alert that stays on the player-selection
@@ -1600,6 +1663,13 @@ export default function AutoMathtics() {
   const [rocketBoom, setRocketBoom] = useState(0);
   const rocketPrev = useRef(null);
   const [rk, setRk] = useState({ emoji: "🎬", name: "", currency: "gc", goal: "2000", minEach: "300", crew: [] }); // admin build form
+  // family station
+  const [station, setStation] = useState(null);
+  const [stPick, setStPick] = useState(null);  // module id picked up from the tray
+  const [stSel, setStSel] = useState(null);    // slot of the placed module being inspected
+  const [stMsg, setStMsg] = useState(null);
+  const [stBusy, setStBusy] = useState(false);
+  const stBumpRef = useRef(0);                 // highest plot count this device has already written
   const [security, setSecurity] = useState(null); // admin-gate watch: fails, lock, alert
   const [creditMsg, setCreditMsg] = useState(null);
   useEffect(() => {
@@ -1693,11 +1763,34 @@ export default function AutoMathtics() {
     (async () => { const r = (await cloudLoadRocket()) || localLoadRocket(); if (r) setRocket(r); })();
     return subscribeRocket((r) => { setRocket(r); localSaveRocket(r); });
   }, []);
+  // the station is shared too, and the home screen previews it, so it loads with the app
+  useEffect(() => {
+    (async () => { const v = (await cloudLoadStation()) || localLoadStation(); if (v) setStation(v); })();
+    return subscribeStation((v) => { setStation(v); localSaveStation(v); });
+  }, []);
   // admin-gate watch: live everywhere, so the alert shows on whichever device Dad opens next
   useEffect(() => {
     const l = localLoadSec(); if (l) setSecurity(l);
     return subscribeSecurity((v) => { setSecurity(v); localSaveSec(v); });
   }, []);
+  // Declared here rather than beside placeModule: the ratchet effect below names stationOn in its
+  // dependency array, and a dep array is read as the component body runs, not when the effect fires.
+  const stationOn = !settings || settings.station !== false;
+  const stPlots = stationPlots(station);
+  const stGrid = stationGrid(station);
+  // The hull keeps the highest plot count anyone has earned. Whoever opens the app with more crowns
+  // than the station has seen bumps it — once per figure per device, so this can't loop on itself.
+  useEffect(() => {
+    if (!prog || !user || !stationOn) return;
+    const want = stationPlotsFor(prog);
+    if (want <= stationPlots(station) || want <= stBumpRef.current) return;
+    stBumpRef.current = want;
+    (async () => {
+      const next = await updateStation((cur) => ({ ...(cur || {}), plots: Math.max(stationPlots(cur), want) }));
+      if (next) setStation(next);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prog, user, station, stationOn]);
   // lift-off moment: the tank filled while this screen was watching
   useEffect(() => {
     const was = rocketPrev.current; rocketPrev.current = rocket ? rocket.status : null;
@@ -1949,6 +2042,55 @@ export default function AutoMathtics() {
     setGuideIdx(0); setScreen("guide");
   }
   // ----- family rocket -----
+  // ----- the family station -----
+  // Placing and removing both go through the same transaction the rocket uses, because the station
+  // is shared. Nothing here touches a wallet — v2.5 has no economy.
+  async function placeModule(slot, modId) {
+    if (!user || stBusy || slot >= stPlots || stGrid[String(slot)]) return;
+    const mod = stationModule(modId);
+    if (!mod) return;
+    setStBusy(true);
+    const key = user.name.toLowerCase();
+    const next = await updateStation((cur) => {
+      const g = { ...stationGrid(cur) };
+      if (g[String(slot)]) return cur;                      // another device got the plot first
+      g[String(slot)] = { id: modId, by: key, at: Date.now() };
+      return { ...(cur || {}), plots: Math.max(stationPlots(cur), stPlots), grid: g };
+    });
+    setStBusy(false);
+    if (!next || !stationGrid(next)[String(slot)]) { setStMsg("⚠ that plot was just taken — pick another"); return; }
+    setStation(next);
+    setStPick(null); setStSel(null);
+    setStMsg(`✓ ${mod.emoji} ${mod.name} online`);
+    playCorrect();
+  }
+  async function removeModule(slot) {
+    if (!user || stBusy) return;
+    const key = user.name.toLowerCase();
+    const cell = stGrid[String(slot)];
+    if (!cell || cell.by !== key) return;                   // you can only take down what you put up
+    setStBusy(true);
+    const next = await updateStation((cur) => {
+      const g = { ...stationGrid(cur) };
+      if (!g[String(slot)] || g[String(slot)].by !== key) return cur;
+      delete g[String(slot)];
+      return { ...(cur || {}), grid: g };
+    });
+    setStBusy(false);
+    if (next) setStation(next);
+    setStSel(null);
+    setStMsg("✓ plot cleared");
+  }
+
+  async function clearStation() {
+    setStBusy(true);
+    const next = await updateStation((cur) => ({ ...(cur || {}), grid: {} }));
+    setStBusy(false);
+    if (next) setStation(next);
+    setStSel(null); setStPick(null);
+    setStMsg("✓ every plot cleared");
+  }
+
   async function fuelRocket(amt) {
     if (!user || !prog || !rocket || rocket.status !== "fueling") return;
     const key = user.name.toLowerCase();
@@ -2612,7 +2754,7 @@ export default function AutoMathtics() {
                 if (adminLocked(security)) { setPin(""); return; }
                 if (pin === ADMIN_PIN) {
                   adminUnlocked();
-                  setDraft(draftWithNavScales(settings)); setSettingsSaved(false); setScreen("admin");
+                  setDraft(draftWithNavScales(settings)); setSettingsSaved(false); setStMsg(null); setScreen("admin");
                   setRk((f) => ({ ...f, crew: f.crew.length ? f.crew : roster.filter((u) => !u.test).map((u) => u.name.toLowerCase()) }));
                   Promise.all(roster.map((u) => loadProgress(u.name))).then((ps) => {
                     const m = {}; roster.forEach((u, i) => { m[u.name.toLowerCase()] = ps[i]; }); setAdminKids(m);
@@ -2862,6 +3004,22 @@ export default function AutoMathtics() {
             )}
           </div>
 
+          <div style={{ textAlign: "left", margin: "0 0 16px" }}>
+            <div style={{ ...st.logTitle, marginBottom: 6, color: "#35E0FF" }}>🛰️ FAMILY STATION</div>
+            <label style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13.5, fontWeight: 700, color: "#EAF2FF", cursor: "pointer" }}>
+              <input type="checkbox" checked={draft.station !== false} onChange={(e) => setDraft({ ...draft, station: e.target.checked })} />
+              show the station on the home screen
+            </label>
+            <div style={{ ...st.subtle, textAlign: "left" }}>
+              One station for the whole family, built from parts that cost nothing — plots are what has to be
+              earned: 3 to start, then one more for every 👑 check point and every sector left behind, either
+              track, whoever gets there first. It holds {stationUsed(station)} of {stPlots}.
+            </div>
+            <button style={{ ...st.tinyBtn, marginTop: 8, color: "#FF3B5C", borderColor: "#FF3B5C" }} disabled={stBusy || stationUsed(station) === 0}
+              onClick={() => { if (window.confirm("Take every part off the station? The plots stay earned — only what's been built is cleared.")) clearStation(); }}>🧹 clear every plot</button>
+            {stMsg && <span style={{ fontSize: 12.5, fontWeight: 700, color: "#2DFFB3", marginLeft: 8 }} className="pop2">{stMsg}</span>}
+          </div>
+
           <label style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: "center", fontSize: 14, fontWeight: 700, color: "#EAF2FF", margin: "4px 0 14px", cursor: "pointer" }}>
             <input
               type="checkbox"
@@ -3046,9 +3204,30 @@ export default function AutoMathtics() {
                 </div>
               );
             })()}
+            {stationOn && (() => {
+              const used = stationUsed(station);
+              const built = HEX_SLOTS.map((_, i) => stGrid[String(i)]).filter(Boolean);
+              return (
+                <button
+                  onClick={() => { setStMsg(null); setScreen("station"); }}
+                  style={{ display: "block", width: "100%", textAlign: "left", cursor: "pointer", margin: "14px 0 0", padding: "10px 12px", borderRadius: 12, background: "#0B0E23", border: "1.5px solid #35E0FF", boxShadow: "0 0 14px rgba(53,224,255,.22)" }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 11, letterSpacing: 2, color: "#35E0FF", fontFamily: "'Orbitron', sans-serif" }}>🛰️ FAMILY STATION</span>
+                    <span style={{ marginLeft: "auto", fontSize: 10.5, color: "#8A93C9", fontFamily: "Consolas, monospace", fontWeight: 700 }}>{used} / {stPlots} plots</span>
+                  </div>
+                  <div style={{ marginTop: 6, minHeight: 26, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                    {built.length
+                      ? built.slice(0, 10).map((c, i) => <span key={i} style={{ fontSize: 20, lineHeight: 1 }} aria-hidden="true">{(stationModule(c.id) || {}).emoji}</span>)
+                      : <span style={{ fontSize: 12.5, color: "#8A93C9", fontWeight: 700 }}>nothing built yet — tap to put the first part down</span>}
+                  </div>
+                </button>
+              );
+            })()}
             <div style={{ marginTop: 14, display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
               <button style={st.ghostBtn} onClick={() => setScreen("shop")}>🛒 Shop</button>
               <button style={st.ghostBtn} onClick={() => { setMapTrack(track); setScreen("map"); }}>🗺 Map</button>
+              {stationOn && <button style={st.ghostBtn} onClick={() => { setStMsg(null); setScreen("station"); }}>🛰️ Station</button>}
               <button style={st.ghostBtn} onClick={() => openHowTo(false, track)}>📖 How to</button>
               <button style={st.ghostBtn} onClick={() => { setGuideIdx(0); setScreen("guide"); }}>🎓 Guide</button>
             </div>
@@ -3547,6 +3726,108 @@ export default function AutoMathtics() {
         );
       })()}
 
+      {/* ---------- the family station ---------- */}
+      {screen === "station" && user && prog && (() => {
+        const mine = user.name.toLowerCase();
+        const picked = stPick ? stationModule(stPick) : null;
+        const sel = stSel != null ? stGrid[String(stSel)] : null;
+        const selMod = sel ? stationModule(sel.id) : null;
+        const selBy = sel ? roster.find((u) => u.name.toLowerCase() === sel.by) : null;
+        const used = stationUsed(station);
+        const free = stPlots - used;
+        const hint = free === 0
+          ? "every plot is full — take one of yours down to rearrange"
+          : picked
+            ? `tap a glowing plot to set the ${picked.emoji} ${picked.name} down`
+            : "tap a part below, then tap a plot";
+        return (
+          <div style={st.card} className="screen">
+            <div style={st.kicker}>🛰️ FAMILY STATION</div>
+            <h1 style={{ ...st.title, fontSize: 22 }}>BUILD THE STATION</h1>
+            <div style={{ fontSize: 13, color: "#EAF2FF", fontWeight: 700, marginTop: 6 }}>
+              {used} of {stPlots} plots built
+              {stPlots < STATION_PLOTS && <span style={{ color: "#8A93C9", fontWeight: 600 }}> · next plot at your next 👑 check point</span>}
+            </div>
+            <div className="stboard" style={{ position: "relative", width: "100%", maxWidth: 340, margin: "14px auto 6px", aspectRatio: "4.5 / 2.8868" }}>
+              {HEX_SLOTS.map((pos, i) => {
+                const open = i < stPlots;
+                const cell = open ? stGrid[String(i)] : null;
+                const mod = cell ? stationModule(cell.id) : null;
+                const by = cell ? roster.find((u) => u.name.toLowerCase() === cell.by) : null;
+                const placeable = open && !cell && !!picked;
+                const chosen = stSel === i;
+                const col = chosen ? "#EAF2FF" : mod ? mod.color : placeable ? "#2DFFB3" : open ? "#3D4796" : "#161B3C";
+                const label = !open ? `locked plot ${i + 1}`
+                  : mod ? `plot ${i + 1}: ${mod.name}, placed by ${by ? by.name : cell.by}`
+                    : `empty plot ${i + 1}`;
+                return (
+                  <button
+                    key={i}
+                    className={"plot" + (placeable ? " plot-open" : "") + (open ? "" : " plot-locked")}
+                    disabled={!open || stBusy || (!cell && !picked)}
+                    onClick={() => {
+                      setStMsg(null);
+                      if (cell) { setStSel(chosen ? null : i); setStPick(null); }
+                      else if (picked) placeModule(i, picked.id);
+                    }}
+                    style={{ left: pos.left + "%", top: pos.top + "%", width: PLOT_W + "%", height: "40%", "--pc": col }}
+                    aria-label={label}
+                  >
+                    <span className="plot-in">
+                      <span className="plot-glyph" aria-hidden="true">{mod ? mod.emoji : open ? "" : "🔒"}</span>
+                      {by && <span className="plot-dot" style={{ background: by.color }} aria-hidden="true" />}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{ minHeight: 20, fontSize: 12.5, fontWeight: 700, color: stMsg && stMsg.startsWith("⚠") ? "#FF3B5C" : stMsg ? "#2DFFB3" : "#8A93C9" }} className={stMsg ? "pop2" : ""} key={stMsg || hint}>
+              {stMsg || hint}
+            </div>
+
+            {sel && selMod && (
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", textAlign: "left", margin: "10px 0 0", padding: "10px 12px", background: "#0B0E23", border: `1.5px solid ${selMod.color}`, borderRadius: 12 }}>
+                <span style={{ fontSize: 26 }} aria-hidden="true">{selMod.emoji}</span>
+                <span>
+                  <b style={{ color: selMod.color, fontFamily: "'Orbitron', sans-serif", fontSize: 13, letterSpacing: 1 }}>{selMod.name.toUpperCase()}</b>
+                  <div style={{ fontSize: 11.5, color: "#8A93C9" }}>{selMod.blurb} · put up by {selBy ? selBy.name : sel.by}</div>
+                </span>
+                {sel.by === mine
+                  ? <button style={{ ...st.tinyBtn, marginLeft: "auto", color: "#FF3B5C", borderColor: "#FF3B5C" }} disabled={stBusy} onClick={() => removeModule(stSel)}>✕ take down</button>
+                  : <span style={{ marginLeft: "auto", fontSize: 11, color: "#8A93C9" }}>only {selBy ? selBy.name : sel.by} can take this one down</span>}
+              </div>
+            )}
+
+            <div style={{ ...st.logTitle, margin: "16px 0 6px", textAlign: "left" }}>🧰 PARTS — free, and you never run out</div>
+            <div style={{ display: "flex", gap: 8, overflowX: "auto", padding: "2px 2px 8px", WebkitOverflowScrolling: "touch" }}>
+              {STATION_MODULES.map((m) => {
+                const on = stPick === m.id;
+                return (
+                  <button
+                    key={m.id} className="shopitem"
+                    onClick={() => { setStMsg(null); setStSel(null); setStPick(on ? null : m.id); }}
+                    style={{ flex: "0 0 auto", width: 94, padding: "8px 4px", cursor: "pointer",
+                      background: on ? `${m.color}1F` : "#0B0E23", border: `1.5px solid ${m.color}`, borderRadius: 12,
+                      boxShadow: on ? `0 0 16px ${m.color}66` : "none", color: "#EAF2FF" }}
+                    aria-pressed={on}
+                  >
+                    <div style={{ fontSize: 26, lineHeight: 1.1 }} aria-hidden="true">{m.emoji}</div>
+                    <div style={{ fontSize: 10, marginTop: 4, color: m.color, fontFamily: "'Orbitron', sans-serif", letterSpacing: 0.5 }}>{m.name.toUpperCase()}</div>
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{ ...st.subtle, textAlign: "left" }}>
+              The station belongs to everyone — whatever you build shows up on every device. The dot on a
+              plot is whoever put it there, and only they can take it down again.
+            </div>
+            <div style={{ marginTop: 14 }}>
+              <button style={st.ghostBtn} onClick={() => { setStPick(null); setStSel(null); setStMsg(null); setScreen("home"); }}>Back</button>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* ---------- restore from save code ---------- */}
       {screen === "restore" && user && (
         <div style={st.card} className="screen">
@@ -3872,7 +4153,8 @@ body { min-height: 100vh; margin: 0; background: #07091A; overflow-x: hidden; }
 body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; text-rendering: optimizeLegibility; }
 button { -webkit-tap-highlight-color: transparent; transition: transform .22s cubic-bezier(.2,.8,.2,1), filter .22s ease, box-shadow .22s ease, background-color .22s ease, border-color .22s ease, opacity .22s ease; }
 @media (hover: hover) and (pointer: fine) {
-  button:not(.player-card):not(:disabled):hover { transform: translateY(-1px); filter: brightness(1.1) saturate(1.05); }
+  button:not(.player-card):not(.plot):not(:disabled):hover { transform: translateY(-1px); filter: brightness(1.1) saturate(1.05); }
+  .plot:not(:disabled):hover { filter: drop-shadow(0 0 12px var(--pc)); }
 }
 /* every screen glides in instead of snapping — the class is on each screen's root, and each root
    only mounts when its screen is shown, so a screen change is exactly one run of this */
@@ -4323,6 +4605,25 @@ body { background: #07091A; }
 @keyframes crateShake { 0%,100% { transform: rotate(0); } 20% { transform: rotate(-14deg); } 40% { transform: rotate(12deg); } 60% { transform: rotate(-10deg); } 80% { transform: rotate(8deg); } }
 @keyframes cratePop { from { transform: scale(.2); opacity: 0; } 70% { transform: scale(1.3); opacity: 1; } to { transform: scale(1); opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .crate-item, .crate-name { opacity: 1; } }
+/* the family station: a honeycomb of plots. Each plot is a clipped hexagon whose BACKGROUND is the
+   border — a real border would be clipped away with the corners — and .plot-in sits 2px inside it
+   with the fill. Rows are laid out in percentages by HEX_SLOTS, so the board scales with the card. */
+.plot { position: absolute; padding: 0; border: 0; background: var(--pc); cursor: pointer;
+  clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+  filter: drop-shadow(0 0 5px var(--pc));
+  transition: background-color .25s ease, filter .25s ease, transform .16s ease; }
+.plot:disabled { cursor: default; }
+.plot-locked { filter: none; opacity: .5; }
+.plot-in { position: absolute; inset: 2px; background: #0B0E23; display: flex; align-items: center; justify-content: center;
+  clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%); }
+.plot-glyph { font-size: clamp(16px, 6.4vw, 26px); line-height: 1; }
+.plot-dot { position: absolute; bottom: 15%; width: 6px; height: 6px; border-radius: 50%; box-shadow: 0 0 4px currentColor; }
+.plot:not(:disabled):active { transform: scale(.93); }
+/* an empty plot you can drop the picked part into breathes until you do */
+.plot-open { animation: plotPulse 1.4s ease-in-out infinite; }
+@keyframes plotPulse { 0%, 100% { filter: drop-shadow(0 0 3px #2DFFB3); } 50% { filter: drop-shadow(0 0 13px #2DFFB3); } }
+@media (prefers-reduced-motion: reduce) { .plot-open { animation: none; } }
+
 /* add-player + guide */
 .add-player { position: relative; z-index: 2; margin: 6px auto 4px; padding: 10px 20px; border-radius: 999px; background: rgba(8,10,30,.62); border: 1.5px dashed rgba(138,147,201,.55); color: #EAF2FF; font: 700 13px 'Orbitron', sans-serif; letter-spacing: .08em; cursor: pointer; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
 .add-player:hover { border-style: solid; border-color: #2DFFB3; color: #2DFFB3; box-shadow: 0 0 18px rgba(45,255,179,.35); }

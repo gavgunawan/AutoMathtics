@@ -1,4 +1,4 @@
-# AutoMathtics — source & build notes (v1.15, 20 Sep 2026)
+# AutoMathtics — source & build notes (v1.16, 20 Sep 2026)
 
 The deployed page is `index.html` at the repo root — GitHub Pages serves that one file and nothing else.
 It is **generated**; never hand-edit it. Everything lives in `src/`:
@@ -76,6 +76,33 @@ the real-world comparisons. A question is `{ display: { layout: "word", text, ch
 { type: int|dec|choice, v }, read }` — `dec` adds a "." key, `choice` replaces the keypad with buttons,
 and `read` is spoken aloud by the browser (`speak`, 🔊 in the status row). Fuzz the generators with
 `node node_modules/.harness/navfuzz.mjs`-style checks before changing templates.
+
+## The family station (v2.5)
+
+One station the whole family builds, at `kumon/station`: `{ plots, grid: { "<slot>": { id, by, at } } }`.
+Shared like the rocket, so `updateStation` wraps every write in a `runTransaction` and two kids placing
+at the same moment can't clobber each other; `subscribeStation` keeps every device live.
+
+**v2.5 deliberately has no economy.** Parts (`STATION_MODULES`, six of them) are free and unlimited —
+**plots** are the only scarce thing, and they come from the map: `stationPlotsFor(p)` is 3 to start,
+plus one per 👑 check point and one per sector left behind, across *both* tracks, capped at
+`STATION_PLOTS` (12). The station stores the highest figure any player has reached, so the hull never
+shrinks when a different kid opens it; an effect ratchets `plots` up (guarded by `stBumpRef` so it
+can't loop on itself). Power budgets, adjacency bonuses and production are the next versions' job —
+ship this, see whether it holds them for a week, then build the economy.
+
+The board is 12 pointy-top hexagons in three staggered rows of four. `HEX_SLOTS` holds each plot's
+`left`/`top` as percentages of a board box carrying `aspect-ratio: 4.5 / 2.8868`, so the honeycomb
+keeps its shape at any width — a pointy-top hex is 1.1547× as tall as it is wide and rows overlap by
+a quarter, which lands the row step on exactly 30%. A plot's `background` **is** its border (`.plot`,
+clipped to a hexagon, with `.plot-in` inset 2px carrying the fill) because a real border would be
+clipped away with the corners.
+
+Interaction is tap-select-then-tap-place, never drag: tap a part in the tray, legal plots pulse, tap
+one to set it down. Tapping a placed module opens an info strip; only the player who put it up can
+take it down (Dad can clear the lot from the admin panel). `settings.station === false` hides the
+whole feature. No timers, no callbacks, no "your crops are ready" — collect-and-place is meant to take
+under a minute and send them back to the maths.
 
 ## Players
 
