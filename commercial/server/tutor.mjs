@@ -117,7 +117,7 @@ export class Tutor {
     // 2. the model, outside any transaction
     let reply;
     try { reply = clean(await this.model({ system: asked.system, messages: asked.messages, maxTokens: this.limits.replyTokens })).slice(0, this.limits.replyChars); }
-    catch (error) { this.log({ event: 'tutor_failed', status: error?.status || null }); fail(503, 'TUTOR_UNAVAILABLE'); }
+    catch (error) { this.log({ event: 'tutor_failed', status: error?.status || null, name: error?.name || null, body: typeof error?.body === 'string' ? error.body : String(error?.message || '').slice(0, 200) }); fail(503, 'TUTOR_UNAVAILABLE'); } // the cause in the log (20 Sep 2026: the owner's first tap answered "could not answer" and the log said only 'status')
     if (!reply) fail(503, 'TUTOR_UNAVAILABLE');
     // 3. keep the turn and count it; the session may have ended meanwhile (the clock), in which case the reply is still shown once
     const kept = await this.store.transaction(async (tx) => {

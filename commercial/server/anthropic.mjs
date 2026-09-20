@@ -12,7 +12,7 @@ export function createModel({ apiKey, model = TUTOR_MODEL, fetchFn = globalThis.
       headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({ model, max_tokens: maxTokens, system, messages }),
     });
-    if (!res.ok) { const e = Error(`anthropic ${res.status}`); e.status = res.status; throw e; }
+    if (!res.ok) { const text = typeof res.text === 'function' ? await res.text().catch(() => '') : ''; const e = Error(`anthropic ${res.status}`); e.status = res.status; e.body = String(text).slice(0, 300); throw e; } // the API's own words on a refusal (a wrong key, no credit, an unknown model), for the log — never the key
     const j = await res.json();
     return (Array.isArray(j.content) ? j.content : []).filter((c) => c && c.type === 'text' && typeof c.text === 'string').map((c) => c.text).join('').trim();
   };
