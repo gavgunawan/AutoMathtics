@@ -388,7 +388,7 @@ const geP2 = (y) => {
       ], 'A tile covers 2 squares, so divide the number of squares by 2.');
     }
     if (kind === 2) {
-      const l = pick([2, 3]), w = pick([2, 3]), h = pick([2, 3]), placed = ri(1, l * w * h - 2);
+      const l = pick([2, 3]), w = pick([2, 3]), h = pick([2, 3]), placed = ri(2, l * w * h - 2); // from 2, so "cubes are in place" is never "1 cubes"
       return explain(int('geometry · solids', `Unit cubes are stacked to build a block ${l} cubes long, ${w} cubes wide and ${h} cubes tall. ${placed} cubes are in place. How many more cubes are needed?`, l * w * h - placed), [
         `The full block needs ${l} × ${w} × ${h} = ${l * w * h} cubes.`,
         `${l * w * h} − ${placed} = ${l * w * h - placed}.`,
