@@ -6,7 +6,7 @@
 // geometry, then counting and probability, then data, number theory and algebra (the AoPS wiki's papers and keys; the source
 // check of 20 Sep 2026). A heat is ten of them, five options each, in three
 // climbing bands; Year 4 sits the warm-up and the middle, Years 5–6 the closing problems too.
-import { ri, pick, shuffle, sum, names, thing, money, int, frac, mcOnly, withFigure, grid, bars, buildHeat, slots, factorsOf, digitsOf, lcm, cap } from './common.mjs';
+import { ri, pick, shuffle, sum, names, thing, money, int, frac, mcOnly, withFigure, grid, bars, buildHeat, slots, phase, explain, bar, factorsOf, digitsOf, lcm, cap } from './common.mjs';
 
 const choose = (n, k) => { let r = 1; for (let i = 1; i <= k; i++) r = (r * (n - k + i)) / i; return Math.round(r); };
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -77,8 +77,10 @@ const H = [['dice', diceSum], ['two marbles', twoMarbles], ['arrangements', arra
   ['midpoints', midpointRect], ['pair averages', pairAverages], ['rising digits', risingDigits], ['factor triples', factorTriples]];
 // Year 4's closing band is the middle kinds again; Years 5–6 get the real closing problems
 const pool = (y) => [...E.map(([cat, gen]) => ({ cat, gen, sections: ['E'] })), ...M.map(([cat, gen]) => ({ cat, gen, sections: y <= 4 ? ['M', 'H'] : ['M'] })), ...(y >= 5 ? H.map(([cat, gen]) => ({ cat, gen, sections: ['H'] })) : [])];
-const SHAPE = slots([['E', 'mc', 4], ['M', 'mc', 3], ['H', 'mc', 3]]);
-export const heat = (year) => buildHeat(SHAPE, pool(year), year, { options: 5 });
+// the real paper (the MAA's Teacher's Manual): 25 multiple choice of five options in 40 minutes, climbing from problem 1 to 25.
+// AoPS's bands (1–10, 11–20, 21–25) are the three sittings; the 40 minutes split 12 + 14 + 14 (the owner, 20 Sep 2026)
+export const PHASES = [phase('alpha', 'Problems 1–10', 1, 12, slots([['E', 'mc', 10]])), phase('beta', 'Problems 11–20', 1, 14, slots([['M', 'mc', 10]])), phase('gamma', 'Problems 21–25', 1, 14, slots([['H', 'mc', 5]]))];
+export const build = (shape, year) => buildHeat(shape, pool(year), year, { options: 5 });
 export const TOPICS = [
   { band: 'Grade 4 · problems 1–15', lines: ['warm-up: unit prices, percentages, means, order of operations, a line graph, a formula, tagged fish', 'consecutive numbers, perimeter from area, fractions of fractions, equally spaced numbers', 'middle: ratios, divisors, units digits, handshakes, rectangles in a grid, coordinates, stamps for a sum', 'Pythagorean triples, polygon angles, calendars, circles in terms of π, letters of a word, a frog\'s net jumps'] },
   { band: 'Grades 5–6 · the full paper', lines: ['all of Grade 4 for the first seven', 'closing: dice and marbles as fractions, arrangements and committees, a telescoping product', 'paths on a grid, L-shaped areas, inclusion-exclusion, shifting means, midpoints of a rectangle', 'remainders, clock angles, average speed there and back, pair averages, rising digits, factor triples'] },

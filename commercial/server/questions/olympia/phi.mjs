@@ -6,7 +6,7 @@
 // choice — one from each strand — then three three-mark and two five-mark typed answers drawn across the strands, every strand
 // carrying a kind for each tier; the kinds are the staples of the 2025 papers and the Malaysian mock: tiling and stacked cubes,
 // rule machines and symbol equations, remainders and LCM, frogs in wells, pie charts, pigeonholes, two dice (20 Sep 2026).
-import { ri, pick, shuffle, sum, names, int, dec, frac, mcOnly, withFigure, grid, table, bars, buildHeat, slots, gcd, lcm, cap, factorsOf, isPrime, digitsOf, ord } from './common.mjs';
+import { ri, pick, shuffle, sum, names, int, dec, frac, mcOnly, withFigure, grid, table, bars, buildHeat, slots, phase, explain, bar, gcd, lcm, cap, factorsOf, isPrime, digitsOf, ord } from './common.mjs';
 
 const low = (y) => y <= 2, mid = (y) => y >= 3 && y <= 4;
 // four things of very different lengths, from a window of a long table (shortest first), so the longest and the shortest of the four
@@ -162,8 +162,10 @@ const spP3 = (y) => {
 // each strand carries a kind for each tier: Part 1 two-mark multiple choice, then three-mark and five-mark typed answers
 const T = (cat, gen, ...sections) => ({ cat, gen, sections });
 const POOL = [T('number sense', nsP1, 'P1'), T('number sense · 3', nsP2, 'P2'), T('number sense · 5', nsP3, 'P3'), T('geometry', geP1, 'P1'), T('geometry · 3', geP2, 'P2'), T('geometry · 5', geP3, 'P3'), T('pattern and algebra', paP1, 'P1'), T('pattern and algebra · 3', paP2, 'P2'), T('pattern and algebra · 5', paP3, 'P3'), T('measurement', meP1, 'P1'), T('measurement · 3', meP2, 'P2'), T('measurement · 5', meP3, 'P3'), T('statistics and probability', spP1, 'P1'), T('statistics and probability · 3', spP2, 'P2'), T('statistics and probability · 5', spP3, 'P3')];
-const SHAPE = slots([['P1', 'mc', 5], ['P2', 'sa', 3], ['P3', 'sa', 2]]);
-export const heat = (year) => buildHeat(SHAPE, POOL, year, { options: 5, none: true }); // five choices with "None of the above", as the 2025 paper's Part 1 (the source check of 20 Sep 2026)
+// the real heat paper (the 2025 papers): 25 questions in 90 minutes — Part 1 ten 2-mark multiple choice of five options with
+// "None of the above", Part 2 fifteen typed answers, 3 marks then 5. Split 25 + 35 + 30 (the owner, 20 Sep 2026)
+export const PHASES = [phase('alpha', 'Part 1', 2, 25, slots([['P1', 'mc', 10]])), phase('beta', 'Part 2 · 3 marks', 3, 35, slots([['P2', 'sa', 10]])), phase('gamma', 'Part 2 · 5 marks', 5, 30, slots([['P3', 'sa', 5]]))];
+export const build = (shape, year) => buildHeat(shape, POOL, year, { options: 5, none: true }); // five choices with "None of the above", as the 2025 paper's Part 1 (the source check of 20 Sep 2026)
 export const TOPICS = [
   { band: 'Grades 1–2', lines: ['Part 1, 2 marks: more than, remainders, a quarter of a pizza, sides altogether, patterns, o\'clock, picture graphs with a scale', 'Part 2, 3 marks: balloons in a repeating pattern, tiles on a board, stacked cubes, rule machines, a frog in a well, two of a colour', 'Part 2, 5 marks: tens and ones taken away, pages with a digit, rectangles in a grid, three sums, floors, three of a colour', 'five options, one of them “None of the above”'] },
   { band: 'Grades 3–4', lines: ['Part 1, 2 marks: fractions of a number, remainders, ratio, perimeter, angles, growing patterns, minutes, bar graphs, pie charts', 'Part 2, 3 marks: halves of quarters, meeting days, doubling, cupcakes, surface area, symbol equations, frogs, fence posts, cards of every colour', 'Part 2, 5 marks: four numbers and their sums, shares by height, painted cubes, star rules, trees along a road, every colour', 'five options, one of them “None of the above”'] },

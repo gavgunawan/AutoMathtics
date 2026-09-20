@@ -9,7 +9,7 @@
 // three-mark middles, four- and five-mark closers — so the heat is five two-mark questions (the two multiple choice among
 // them), three three-mark and two four-mark, every kind tagged with the tiers it may fill in each band; the kinds after "the
 // paper's tiers" are the staples of the 2023 papers the first build lacked (20 Sep 2026).
-import { ri, pick, shuffle, sum, names, thing, money, int, dec, frac, mcOnly, withFigure, bars, buildHeat, slots, cap, gcd, lcm, digitsOf } from './common.mjs';
+import { ri, pick, shuffle, sum, names, thing, money, int, dec, frac, mcOnly, withFigure, bars, buildHeat, slots, phase, explain, bar, cap, gcd, lcm, digitsOf } from './common.mjs';
 import { genSingapore } from '../singapore.mjs';
 
 const band = (y) => (y <= 2 ? 1 : y <= 4 ? 2 : 3);
@@ -111,9 +111,15 @@ const POOL_3 = [R('syllabus', syllabus, 'M2', 'M3'), R('syllabus 2', syllabus, '
   T('graph money', graphMoney, 'M3'), T('change', changeFromNotes, 'M2'), T('spacing', spacing, 'M3'), T('units and parts', twoQuantities, 'M3'), T('short of', shortOf, 'M3'), T('repeating patterns', cycleStars, 'M2'), T('ages', agesQ, 'M2'),
   T('ratio with a change', ratioChange, 'M4'), T('averages', avgLeavers, 'M4'), T('discount and tax', discountGST, 'M4'), T('work rate', workTogether, 'M4'), T('common multiples', shelvesLCM, 'M3', 'M4'), T('ratio and fractions', fruitRatio, 'M4'), T('spending twice', spendTwice, 'M4'), T('meeting', meetOnTrack, 'M4')];
 const POOL = (y) => (band(y) === 1 ? POOL_1 : band(y) === 2 ? POOL_2 : POOL_3);
-// the paper's climb: five two-mark questions (the two multiple choice among them), three three-mark, two four-mark — all but the two typed
-const SHAPE = slots([['M2', 'mc', 2], ['M2', 'sa', 3], ['M3', 'sa', 3], ['M4', 'sa', 2]]);
-export const heat = (year) => buildHeat(SHAPE, POOL(year), year, { options: 4 });
+// the real paper (the 2023 contest papers): 90 minutes for 40 questions at Grades 1–2, 45 at Grades 3–4 and 32 at Grades 5–6,
+// 100 marks, almost all typed on an answer sheet with a few four-option items at Grades 2–4 and none at 5–6, climbing from 2
+// to 4 marks. Three sections by marks, the 90 minutes split 30 + 30 + 30 (the owner, 20 Sep 2026)
+const n = (y, a, b, c) => (band(y) === 1 ? a : band(y) === 2 ? b : c);
+export const PHASES = [
+  phase('alpha', '2 marks', 2, 30, (y) => slots([['M2', 'mc', band(y) === 3 ? 0 : 2], ['M2', 'sa', n(y, 14, 15, 12)]])),
+  phase('beta', '3 marks', 3, 30, (y) => slots([['M3', 'sa', n(y, 14, 16, 11)]])),
+  phase('gamma', '4 marks', 4, 30, (y) => slots([['M4', 'sa', n(y, 10, 12, 9)]]))];
+export const build = (shape, year) => buildHeat(shape, POOL(year), year, { options: 4 });
 export const TOPICS = [
   { band: 'Grades 1–2', lines: ['2 marks: the Singapore-standard word problems, sum and difference, coins round a square, halves and quarters', '3 marks: towers and lists, chickens and rabbits, working backwards, before and after, pages with a digit', '4 marks: ages that add up, a repeating row of stars, the harder heuristics', 'almost all typed, as the real paper: only two multiple choice'] },
   { band: 'Grades 3–4', lines: ['2 marks: the word problems, two-digit numbers from digits, change from notes, orders in a row', '3 marks: a bar graph then money, before and after, repeating patterns, ages, composite figures', '4 marks: gaps between bins, a wallet and its pouches, short of the price, bent wire', 'almost all typed, as the real paper: only two multiple choice'] },

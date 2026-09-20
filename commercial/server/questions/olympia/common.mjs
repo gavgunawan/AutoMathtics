@@ -1,10 +1,14 @@
-// 🪐 OLYMPIA — what every moon shares (19 Sep 2026). A moon is a module that exports heat(year): ten questions in that
-// competition's own shape, built from "seeds". A seed is a question before its answer style is fixed:
-//   { cat, text, read?, figure?, answer: { type: "int"|"dec"|"frac", … } | null, right?: string, decoys?: string[], mcOnly?: true }
+// 🪐 OLYMPIA — what every moon shares (19 Sep 2026). A moon is a module that exports its paper's PHASES — the sections of the
+// real paper, each a shape of slots — and build(shape, year): that many questions in the competition's own shape, built from
+// "seeds". A seed is a question before its answer style is fixed:
+//   { cat, text, read?, figure?, answer: { type: "int"|"dec"|"frac", … } | null, right?: string, decoys?: string[], mcOnly?: true,
+//     steps?: string[], tip?: string }
 // finish(seed, "sa") keeps the typed answer; finish(seed, "mc") offers it among distractors — the seed's own, or ones made
 // near a whole number — with SEAMO's fifth option "None of the above" where a moon asks for it. Every question that comes
 // out is the shape the client already draws and the server already marks (progress.mjs grade):
-//   { display: { layout: "word", text, choices, figure? }, answer, read, cat, section }
+//   { display: { layout: "word", text, choices, figure? }, answer, read, cat, section, steps, tip }
+// `steps` is the worked solution in the simplest child's method (STEPS.md, 20 Sep 2026): what 💡 Explain to me shows without
+// any call to the AI tutor, and what the reveal shows under every question. It never leaves the server before then.
 
 export const ri = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
 export const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
@@ -37,6 +41,10 @@ export const mcOnly = (cat, text, right, decoys, extra = {}) => seed(cat, text, 
 // a figure on a seed. The client draws bars, pie, table, line (see singapore.mjs) and, for the moons, a grid of cells:
 //   { kind: "grid", title, rows: [{ cells: ["", "", ""] }] }   2–8 rows and columns; a cell is a short string (a letter, a digit, an emoji) or ""
 export const withFigure = (s, figure) => ({ ...s, figure });
+// the worked solution on a seed: the lines a child follows, then the one-line trick worth remembering (STEPS.md)
+export const explain = (s, steps, tip = null) => ({ ...s, steps: steps.filter((l) => typeof l === 'string' && l.trim()).map((l) => l.trim()), ...(tip ? { tip } : {}) });
+// one row of a bar model in text, for the steps: `bar('Adi', 3, '?')` → "Adi      ▭▭▭  ?" — equal boxes are equal units, and the client sets any line with a ▭ in a monospace face
+export const bar = (label, units, note = '') => `${String(label).padEnd(8)} ${'▭'.repeat(Math.max(0, Math.min(24, Math.round(units))))}${note !== '' && note !== null && note !== undefined ? `  ${note}` : ''}`;
 export const grid = (title, rows, cols, at = {}) => ({ kind: 'grid', title, rows: Array.from({ length: rows }, (_, r) => ({ cells: Array.from({ length: cols }, (_, c) => at[`${r},${c}`] || '') })) });
 export const bars = (title, unit, pairs) => ({ kind: 'bars', title, unit, bars: pairs.map(([label, value]) => ({ label, value })) });
 export const table = (title, head, rows) => ({ kind: 'table', title, head, rows: rows.map((cells) => ({ cells: cells.map(String) })) });
@@ -64,7 +72,8 @@ const decoysFor = (a, n) => (a.type === 'frac' ? fracNear(a.n, a.d, n) : a.type 
  */
 export function finish(s, kind, { options = 4, none = false, section = null } = {}) {
   if (!s) return null;
-  const base = { cat: s.cat, section, display: { layout: 'word', text: s.text, choices: null, ...(s.figure ? { figure: s.figure } : {}) }, read: s.read || s.text };
+  const base = { cat: s.cat, section, display: { layout: 'word', text: s.text, choices: null, ...(s.figure ? { figure: s.figure } : {}) }, read: s.read || s.text,
+    steps: Array.isArray(s.steps) ? s.steps : [], ...(typeof s.tip === 'string' && s.tip ? { tip: s.tip } : {}) };
   if (kind === 'sa') { if (!s.answer) return null; return { ...base, answer: s.answer }; }
   const right = s.right ?? (s.answer ? answerString(s.answer) : null); if (right === null) return null;
   const want = options - (none ? 1 : 0) - 1;
@@ -80,25 +89,31 @@ export function finish(s, kind, { options = 4, none = false, section = null } = 
 }
 
 /**
- * Ten questions for a moon: `shape` says each slot's section and style; `pool(year)` gives the categories a year may be asked,
- * each { cat, gen, sections? }. A category is used once while others remain; a seed that will not fit is dropped and the slot
- * draws again, so a paper never has a hole.
+ * One section of a moon's paper: `shape` says each slot's section code and style; `pool(year)` gives the categories a year may
+ * be asked, each { cat, gen, sections? }. A category is used once while others remain; a seed that will not fit is dropped and
+ * the slot draws again, so a paper never has a hole. A section longer than its families (SMC's forty questions) repeats a
+ * family with new numbers once every family has been used, as the real paper does.
  */
 export function buildHeat(shape, pool, year, opts = {}) {
   const out = [], used = new Set(), seen = new Set(); // pool entries used, and the seed families they produced (two entries can reach one)
   for (const slot of shape) {
     const fits = pool.filter((c) => !c.sections || c.sections.includes(slot.section));
-    let q = null;
-    for (let t = 0; t < 120 && !q; t++) { // a slot whose kinds mostly answer in the other style needs many draws before it is a hole
-      const fresh = fits.filter((c) => !used.has(c.cat)), c = pick(fresh.length ? fresh : fits);
-      const s = c.gen(year); if (!s) continue;
-      if (seen.has(s.cat) && !c.repeatable && t < 60) continue; // the same family twice in a heat only when nothing else fits the slot, unless the entry says it may repeat (SG-Moon's syllabus pool)
-      if (slot.kind === 'sa' && (s.mcOnly || !s.answer)) continue;
-      q = finish(s, slot.kind, { ...opts, section: slot.section }); if (q) { used.add(c.cat); seen.add(s.cat); }
+    let q = null; const why = { none: 0, seen: 0, style: 0, unfinished: 0 };
+    for (let t = 0; t < 600 && !q; t++) { // a slot whose kinds mostly answer in the other style needs many draws before it is a hole; a long section more still
+      const fresh = fits.filter((c) => !used.has(c.cat)), c = pick(fresh.length && t < 40 ? fresh : fits); // unused kinds first; when the unused ones only answer in the other style, any kind
+      const s = c.gen(year); if (!s) { why.none++; continue; }
+      if (seen.has(s.cat) && !c.repeatable && t < 60) { why.seen++; continue; } // the same family twice in a section only when nothing else fits the slot, unless the entry says it may repeat (SG-Moon's syllabus pool)
+      if (slot.kind === 'sa' && (s.mcOnly || !s.answer)) { why.style++; continue; }
+      q = finish(s, slot.kind, { ...opts, section: slot.section }); if (q) { used.add(c.cat); seen.add(s.cat); } else why.unfinished++;
     }
-    if (!q) throw Error(`no question for ${slot.section}/${slot.kind} at year ${year}`);
+    if (!q) throw Error(`no question for ${slot.section}/${slot.kind} at year ${year} (${fits.length} kinds fit; draws: ${JSON.stringify(why)})`);
     out.push(q);
   }
   return out;
 }
 export const slots = (spec) => spec.flatMap(([section, kind, n]) => Array.from({ length: n }, () => ({ section, kind })));
+/**
+ * A section of the real paper as the child sits it: its Greek name in the app (α Alpha, β Beta, γ Gamma), the paper's own title
+ * for it, the marks a question carries there, the minutes it gets (the paper's total split by us), and its shape for a year.
+ */
+export const phase = (id, title, marks, minutes, shape) => Object.freeze({ id, title, marks, minutes, shape: typeof shape === 'function' ? shape : () => shape });

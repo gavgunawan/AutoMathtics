@@ -6,7 +6,7 @@
 // Info Pack 2025, the source check of 20 Sep 2026) — so a heat is six three-mark multiple choice then two five-mark and two
 // six-mark typed answers, every kind tagged with the tiers it may fill in each band, and the kinds after "the paper's tiers" are
 // the staples the Info Pack's worked examples ask that the first build lacked.
-import { ri, pick, shuffle, sum, names, thing, money, int, frac, mcOnly, withFigure, grid, table, buildHeat, slots, digitsOf, gcd, ord } from './common.mjs';
+import { ri, pick, shuffle, sum, names, thing, money, int, frac, mcOnly, withFigure, grid, table, buildHeat, slots, phase, explain, bar, digitsOf, gcd, ord } from './common.mjs';
 
 const upper = (y) => y >= 5;
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -109,9 +109,10 @@ const POOL = [
   P('elapsed time', elapsed, ['M3', 'M5'], ['M3']), P('symbol equations', symbols, ['M3', 'M5'], ['M3']), P('common multiples', commonMult, ['M5'], ['M3', 'M5']), P('sums', sums, ['M5', 'M6'], ['M3', 'M5']), P('sum of squares', sumSquares, ['M6'], ['M5', 'M6']), P('rate', rate, ['M5', 'M6'], ['M3', 'M5']), P('wages', wages, ['M6'], ['M5', 'M6']), P('fraction of a remainder', fracRemainder, ['M5'], ['M3', 'M5']), P('fractions of a whole', marbleFractions, [], ['M5', 'M6']), P('ratio with a transfer', ratioTransfer, [], ['M5', 'M6']), P('factor count', factorCount, [], ['M6']), P('digit arrangements', digitArrange, ['M5'], ['M3', 'M5']), P('adjacent sums', adjacentSums, [], ['M5', 'M6']), P('grid steps', gridSteps, ['M5'], ['M3']), P('square into rectangles', squareRects, ['M6'], ['M5', 'M6']), P('mean and count', meanCount, [], ['M6']), P('average speed', avgSpeed, [], ['M6']), P('halving', halving, [], ['M5', 'M6']), P('composite figures', compositePerimeter, ['M5'], ['M3']),
 ];
 const pool = (y) => POOL.map((e) => ({ cat: e.cat, gen: e.gen, sections: upper(y) ? e.up : e.low })).filter((e) => e.sections.length);
-// the paper's ramp: six three-mark multiple choice, then two five-mark and two six-mark open answers, typed
-const SHAPE = slots([['M3', 'mc', 6], ['M5', 'sa', 2], ['M6', 'sa', 2]]);
-export const heat = (year) => buildHeat(SHAPE, pool(Math.max(2, year)), Math.max(2, year), { options: 5 });
+// the real paper (SIU's AMO InfoPack): 25 questions in 90 minutes — fifteen 3-mark multiple choice of five options, then five
+// 5-mark and five 6-mark open answers, typed. The 90 minutes are ours to split: 40 + 25 + 25 (the owner, 20 Sep 2026)
+export const PHASES = [phase('alpha', 'Questions 1–15', 3, 40, slots([['M3', 'mc', 15]])), phase('beta', 'Questions 16–20', 5, 25, slots([['M5', 'sa', 5]])), phase('gamma', 'Questions 21–25', 6, 25, slots([['M6', 'sa', 5]]))];
+export const build = (shape, year) => buildHeat(shape, pool(Math.max(2, year)), Math.max(2, year), { options: 5 });
 export const TOPICS = [
   { band: 'Grades 2–4', lines: ['3 marks: the model method, cryptarithms, divisibility, patterns, elapsed time, symbol equations', '5 marks, typed: equal after giving, common multiples, fractions of a remainder, digit arrangements, grid steps', '6 marks, typed: sticks in a line, apples in boxes, children making boats, wages with a fixed part', 'five options, no “None of the above”; from Year 2, as the real paper'] },
   { band: 'Grades 5–6', lines: ['3 marks: fractions of a remainder, rates, sums, digit arrangements, L-shaped perimeters', '5 marks, typed: marbles by fractions, a ratio with a transfer, adjacent sums, painted cubes, a spray that halves the germs', '6 marks, typed: the factors of a million, mean times count, average speed there and back', 'squares cut into rectangles, wages with a fixed part, apples in boxes'] },

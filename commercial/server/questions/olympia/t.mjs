@@ -6,7 +6,7 @@
 // two eight-mark logic questions, then five applications, one paper per grade as WMI has it; the kinds after "the paper's
 // tiers" are the staples of those papers the first build lacked — sequences that interleave, rule machines, positions in a
 // row, the assumption method, three balances, symbol equations, order of operations, unit traps, remainders, decimals.
-import { ri, pick, shuffle, sum, names, thing, int, dec, mcOnly, withFigure, grid, table, bars, buildHeat, slots, isPrime, gcd, lcm, cap } from './common.mjs';
+import { ri, pick, shuffle, sum, names, thing, int, dec, mcOnly, withFigure, grid, table, bars, buildHeat, slots, phase, explain, bar, isPrime, gcd, lcm, cap } from './common.mjs';
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const money = (n) => `Rp${n.toLocaleString('en-US')}`;
@@ -121,9 +121,10 @@ const B = (y) => {
   if (y >= 6) rows.push(['speed', speedQ], ['negative numbers', negative], ['exponents', exponents], ['percentages', percentQ]);
   return rows.map(([cat, gen]) => ({ cat, gen, sections: ['B'] }));
 };
-// the paper's shape in miniature: three six-mark and two eight-mark logic questions, then five ten-mark applications, all four-option
-const SHAPE = slots([['A6', 'mc', 3], ['A8', 'mc', 2], ['B', 'mc', 5]]);
-export const heat = (year) => buildHeat(SHAPE, [...A(year), ...B(year)], year, { options: 4 });
+// the real preliminary paper (wminv.org): 25 multiple choice of four options in two 40-minute sittings — Section A fifteen logical
+// reasoning (ten 6-mark, five 8-mark) and Section B ten 10-mark applications. Its 80 minutes split 25 + 15 + 40 (the owner, 20 Sep 2026)
+export const PHASES = [phase('alpha', 'Section A · 6 marks', 6, 25, slots([['A6', 'mc', 10]])), phase('beta', 'Section A · 8 marks', 8, 15, slots([['A8', 'mc', 5]])), phase('gamma', 'Section B', 10, 40, slots([['B', 'mc', 10]]))];
+export const build = (shape, year) => buildHeat(shape, [...A(year), ...B(year)], year, { options: 4 });
 export const TOPICS = [
   { band: 'Grades 1–2', lines: ['A, 6 marks: who is second in the line, the next shape, the odd one out, balance puzzles, two sequences woven together', 'A, 8 marks: a rule machine, the centre of a row, shamrocks and clovers, three balances, squares in a grid', 'B: adding and taking away in words, the longest length, picture graphs, what time a film ends', 'B: equal groups, sides of shapes'] },
   { band: 'Grades 3–4', lines: ['A, 6 marks: four in a line, sequences woven together, rule machines, order of operations, calendars', 'A, 8 marks: ages, who is lying, the centre of a row, quiz scores, three balances, symbol equations, adjacent sums', 'B: metres and centimetres, a rope between two lengths, bar charts then money, brackets', 'B: rupiah left after shopping, fractions of a set, perimeter and area, rounding, mean and median'] },

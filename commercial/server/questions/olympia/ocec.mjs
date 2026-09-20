@@ -8,7 +8,7 @@
 // own progression by primary year. The kinds under "the papers' staples" (20 Sep 2026) are what the 2025 heat papers ask that the
 // first build lacked: cryptarithms, work and rest, give and take, defined operations, sums and multiples, telescoping sums, unit
 // digits of sums of powers, three remainders at once, pyramids and prisms, exterior angles, compound routes, arrangements.
-import { ri, pick, shuffle, sum, names, thing, int, withFigure, grid, buildHeat, slots, isPrime, factorsOf, digitsOf, gcd, lcm, ord } from './common.mjs';
+import { ri, pick, shuffle, sum, names, thing, int, withFigure, grid, buildHeat, slots, phase, explain, bar, isPrime, factorsOf, digitsOf, gcd, lcm, ord } from './common.mjs';
 
 const choose = (n, k) => { let r = 1; for (let i = 1; i <= k; i++) r = (r * (n - k + i)) / i; return Math.round(r); };
 const fact = (n) => (n <= 1 ? 1 : n * fact(n - 1));
@@ -169,8 +169,10 @@ function pool(year, lean) {
   }
   return out;
 }
-const SHAPE = slots([['LT', 'sa', 2], ['AR', 'sa', 2], ['NT', 'sa', 2], ['GE', 'sa', 2], ['CO', 'sa', 2]]);
-/** Ten short answers, two a category in the real order; `lean` names the moon whose signature kinds come up three times as often. */
-export function ocecHeat(year, lean) {
-  return buildHeat(SHAPE, pool(year, lean), year).map((q) => ({ ...q, cat: q.cat.replace(/^[A-Z]{2}:/, `${CATEGORIES[q.section].toLowerCase()} · `) }));
+// the real heat paper: 25 short answers in 90 minutes, five a category in the order Logical Thinking, Arithmetic, Number Theory,
+// Geometry, Combinatorics, 4 marks each. Three sittings of ours: two categories, two categories, then the last (the owner, 20 Sep 2026)
+export const PHASES = [phase('alpha', 'Logical thinking · Arithmetic', 4, 36, slots([['LT', 'sa', 5], ['AR', 'sa', 5]])), phase('beta', 'Number theory · Geometry', 4, 36, slots([['NT', 'sa', 5], ['GE', 'sa', 5]])), phase('gamma', 'Combinatorics', 4, 18, slots([['CO', 'sa', 5]]))];
+/** A section of short answers in the real order; `lean` names the moon whose signature kinds come up three times as often. */
+export function ocecBuild(shape, year, lean) {
+  return buildHeat(shape, pool(year, lean), year).map((q) => ({ ...q, cat: q.cat.replace(/^[A-Z]{2}:/, `${CATEGORIES[q.section].toLowerCase()} · `) }));
 }

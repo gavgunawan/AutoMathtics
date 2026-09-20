@@ -4,7 +4,7 @@
 // C = 5–6. A heat is eight multiple-choice and two short-answer questions; every paper's choices carry the real paper's fifth
 // option, "None of the above", which is sometimes the right one: the 2018 Papers A, B and C all have it, only the official
 // sample Paper A shows four options (the source check of 20 Sep 2026, against seamo-official.org's samples and syllabi).
-import { ri, pick, shuffle, sum, names, thing, money, int, frac, mcOnly, withFigure, grid, bars, buildHeat, slots, isPrime, factorsOf, digitsOf, cap, ord } from './common.mjs';
+import { ri, pick, shuffle, sum, names, thing, money, int, frac, mcOnly, withFigure, grid, bars, buildHeat, slots, phase, explain, bar, isPrime, factorsOf, digitsOf, cap, ord } from './common.mjs';
 // Tiers (20 Sep 2026): the real paper climbs — Q1–10 three marks, Q11–20 four, Q21–25 six and free response — so a heat is four
 // three-mark and four four-mark multiple choice then two six-mark typed answers, and every kind is tagged with the tiers it may
 // fill in each paper (T(...) below); the kinds under "the paper's tiers" are the staples the source check found missing.
@@ -213,9 +213,11 @@ const POOL_C = [T('working backwards', workBack, 'M3'), T('number patterns', pat
   T('defining new operations', definedOp, 'M3'), T('excess and deficiency', excessDeficiency, 'M4'), T('clock angles', clockAngle, 'M4', 'M6'), T('catching up', catchUp, 'M4', 'M6'), T('meeting', meetOffset, 'M6'), T('cryptarithm', cryptarithm, 'M3', 'M4'), T('worst case', worstCaseColours, 'M4', 'M6'), T('assumption method', penaltyScore, 'M3'), T('counting digits', digitCount, 'M4'),
   T('ones digit of a sum', unitDigitSum, 'M4', 'M6'), T('telescoping sums', telescoping, 'M6'), T('routes through a point', pathsVia, 'M6'), T('coprime pairs', coprimePairs, 'M6'), T('two draws', drawTwo, 'M6'), T('angles', isosceles, 'M4'), T('mixtures', mixture, 'M4', 'M6'), T('truth and lies', truthChests, 'M4')];
 const pool = (y) => (band(y) === 1 ? POOL_A : band(y) === 2 ? POOL_B : POOL_C);
-// the paper's ramp: four three-mark and four four-mark multiple choice, then two six-mark free-response answers, typed
-const SHAPE = slots([['M3', 'mc', 4], ['M4', 'mc', 4], ['M6', 'sa', 2]]);
-export const heat = (year) => buildHeat(SHAPE, pool(year), year, { options: 5, none: true }); // five options with "None of the above" on every paper, as the real ones
+// the real paper (seamo-official.org guidelines): 25 questions in 90 minutes — Section A ten 3-mark and Section B ten 4-mark
+// multiple choice of five options with "None of the above", then Section C five 6-mark free-response answers, typed. The 90
+// minutes are ours to split: 25 + 35 + 30 (the owner, 20 Sep 2026: the format and the number of questions follow the paper)
+export const PHASES = [phase('alpha', 'Section A', 3, 25, slots([['M3', 'mc', 10]])), phase('beta', 'Section B', 4, 35, slots([['M4', 'mc', 10]])), phase('gamma', 'Section C', 6, 30, slots([['M6', 'sa', 5]]))];
+export const build = (shape, year) => buildHeat(shape, pool(year), year, { options: 5, none: true }); // five options with "None of the above" on every paper, as the real ones
 export const TOPICS = [
   { band: 'Paper A · Years 1–2', lines: ['3 marks: working backwards, patterns, sums, queues, time, odd and even', '4 marks: chicken and rabbit, counting digits, repeating patterns, calendars, floors', '6 marks, typed: ages, stamps, pyramid sums, pigeonholes, routes on a grid', 'five options, one of them “None of the above”'] },
   { band: 'Paper B · Years 3–4', lines: ['3 marks: Paper A with bigger numbers, trees along a road, bar charts', '4 marks: defined operations, cryptarithms, quiz scores, division with a remainder', '6 marks, typed: excess and deficiency, clock angles, catching up and meeting, worst cases', 'five options, one of them “None of the above”'] },
