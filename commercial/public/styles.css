@@ -823,6 +823,32 @@ html[data-mode=site] .masthead,html[data-mode=site] footer{max-width:760px}
 .tutor-input{flex:1;min-width:140px;padding:9px 10px;border-radius:10px;border:1.5px solid var(--v2line);background:var(--panel);color:var(--txt);font:500 15px var(--ui)}
 .tutor-left{font:600 10.5px var(--mono);color:var(--dim)}
 .tutor-note{margin:0;font-size:13px;color:var(--mint)}
+/* the three phases of a moon's paper on its card (20 Sep 2026): each a row with its shape, the child's best, its log under a tap, and Start */
+.phase-list{display:flex;flex-direction:column;gap:6px;margin:10px 0 0}
+.phase-row{padding:8px 10px;border-radius:12px;background:var(--panel);border:1px solid var(--v2line)}
+.phase-words{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 6px;font-size:12.5px;line-height:1.4;color:var(--txt)}
+.phase-name{font:700 13px var(--display);color:var(--c)}
+.phase-title{color:var(--txt)}
+.phase-shape,.phase-stats{flex-basis:100%;font:600 11px var(--mono);color:var(--dim)}
+.phase-stats{color:var(--muted)}
+.phase-acts{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin-top:6px}
+.phase-acts .text-button{margin:0;padding:0;font-size:12px}
+.phase-note{font:600 10.5px var(--mono);color:var(--dim)}
+.phase-log{margin:6px 0 0;padding:6px 8px;border-radius:8px;background:var(--void)}
+.olympia-foot{margin:8px auto 0}
+.skip-btn{padding:10px 8px;border-radius:12px;border:2px solid var(--v2line);background:var(--void);color:var(--muted);font:700 13px var(--ui)}
+/* the worked solution (STEPS.md): one line a step, a bar model kept in a monospace face so its boxes line up, then the tip and the answer */
+.steps{display:flex;flex-direction:column;gap:4px;margin:4px 0 0}
+.step{margin:0;padding:6px 10px;border-radius:8px;background:var(--panel);font-size:14px;line-height:1.5;color:var(--txt)}
+.step.model{font:600 13px/1.5 var(--mono);white-space:pre;overflow-x:auto}
+.step-tip{margin:6px 0 0;font-size:13px;line-height:1.45;color:var(--gold)}
+.step-answer{margin:6px 0 0;font:700 13.5px var(--mono);color:var(--mint)}
+.tutor-follow{margin-top:8px}
+.reveal-item{display:flex;flex-direction:column;gap:2px}
+.reveal-toggle{align-self:flex-start;margin:0 0 0 10px;padding:0;font-size:12px}
+.reveal-work{margin:2px 0 6px;padding:8px 10px;border-radius:10px;background:var(--void);border:1px dashed var(--v2line)}
+.reveal-q{margin:0 0 4px;font-size:13px;line-height:1.45;color:var(--muted)}
+.reveal-row.blank{border-color:var(--v2line);opacity:.8}.reveal-row.blank .reveal-mark{color:var(--dim)}
 .tiny.mic{font-size:16px;padding:6px 10px}
 .fig-grid{border-collapse:collapse;margin:6px auto}
 .fig-grid td{width:34px;height:34px;border:1.5px solid var(--cyan);text-align:center;font:700 14px var(--mono);color:var(--gold);background:rgba(53,224,255,.05)}

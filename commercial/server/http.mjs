@@ -358,10 +358,13 @@ export function createApp(service, cfg, { publicDir = new URL('../public/', impo
       if (learning && path === '/api/learn/session') return json(200, await learning.start(ctx, data));
       if (learning && path === '/api/learn/answer') return json(200, await learning.answer(ctx, data));
       if (learning && path === '/api/learn/quit') return json(200, await learning.quit(ctx, data));
-      // Olympia (server/olympia.mjs): a visit to a moon, its answers (unmarked until the end) and its quit
+      // Olympia (server/olympia.mjs): a visit to one phase of a moon's paper, its answers (unmarked until the end), the paper handed in
+      // at the bell or early, its quit, and the worked solution behind Explain to me (which costs the visit its medal, as the tutor does)
       if (olympia && path === '/api/olympia/visit') return json(200, await olympia.start(ctx, data));
       if (olympia && path === '/api/olympia/answer') return json(200, await olympia.answer(ctx, data));
+      if (olympia && path === '/api/olympia/finish') return json(200, await olympia.finish(ctx, data));
       if (olympia && path === '/api/olympia/quit') return json(200, await olympia.quit(ctx, data));
+      if (olympia && path === '/api/olympia/explain') return json(200, await olympia.explain(ctx, data));
       // Explain to me (server/tutor.mjs): every cap is the tutor's own; this instance adds a ceiling of its own so a burst from many
       // sessions cannot turn one instance into a relay, and the route exists only where a tutor was built (a key in the environment)
       if (tutor && path === '/api/tutor/explain') { throttle('tutor:all', 600, 60 * 60_000); return json(200, await tutor.explain(ctx, data)); }
