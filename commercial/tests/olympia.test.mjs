@@ -239,6 +239,29 @@ test('💡 Explain to me on a moon question: the worked solution comes from the 
   assert.equal([...f.store.data.keys()].filter((p) => p.includes('/ledger/')).length, 0, 'no row: nothing was paid');
   await assert.rejects(f.olympia.explain(k.childCtx, { visitId: s.visit.id, index: 0 }), rejected('SESSION_OVER'));
 });
+test('a year below the child\'s own is a warm-up (the owner, 20 Sep 2026): a Year 3 child may sit Year 1 or 2 on a moon, sees the medal level, but nothing is paid, nothing counted, and the log says so; a year above is refused, as is a year the moon does not serve', async () => {
+  const f = fixture(), k = await withChild(f, 9, 3);
+  const st = await f.olympia.state(k.childCtx); assert.equal(st.year, 3);
+  const sea = st.moons.find((m) => m.id === 'sea'); assert.deepEqual(Object.keys(sea.byYear), ['1', '2', '3']); assert.equal(sea.byYear[3].own, true); assert.equal(sea.byYear[1].own, false); assert.equal(sea.byYear[1].band, 'Paper A'); assert.equal(sea.byYear[3].band, 'Paper B');
+  assert.deepEqual(Object.keys(st.moons.find((m) => m.id === 'us').byYear), ['2', '3'], 'AMO has no Year 1 paper'); assert.deepEqual(Object.keys(st.moons.find((m) => m.id === 'dc').byYear), [], 'DC-Moon is not open to a Year 3 at all');
+  assert.deepEqual(st.moons.find((m) => m.id === 'sg').byYear[1].phases.map((p) => p.count), [16, 14, 10], 'the lower year\'s own shape'); assert.deepEqual(st.moons.find((m) => m.id === 'sg').byYear[3].phases.map((p) => p.count), [17, 16, 12]);
+  await assert.rejects(f.olympia.start(k.childCtx, { moon: 'sea', phase: 'alpha', year: 4 }), rejected('YEAR_ABOVE_OWN'));
+  await assert.rejects(f.olympia.start(k.childCtx, { moon: 'sea', phase: 'alpha', year: 7 }), rejected('INVALID_REQUEST'));
+  await assert.rejects(f.olympia.start(k.childCtx, { moon: 'sea', phase: 'alpha', year: '2' }), rejected('INVALID_REQUEST'));
+  await assert.rejects(f.olympia.start(k.childCtx, { moon: 'us', phase: 'alpha', year: 1 }), rejected('MOON_NOT_FOR_YEAR'));
+  const s = await f.olympia.start(k.childCtx, { moon: 'sea', phase: 'alpha', year: 1 });
+  assert.equal(s.visit.year, 1); assert.equal(s.visit.below, true); assert.equal(s.visit.band, 'Paper A'); assert.equal(s.visit.count, 10);
+  const last = await play(f, k, s, 10); const r = last.result;
+  assert.deepEqual([r.year, r.ownYear, r.below, r.score, r.medal, r.rewarded, r.trainingRun, r.omEarned, r.gcEarned], [1, 3, true, 10, 'gold', false, false, 0, 0], 'the medal level is shown, nothing paid');
+  assert.deepEqual(r.medals, { gold: 0, silver: 0, bronze: 0, merit: 0, best: null }, 'not counted'); assert.equal(r.wallet.om, 0);
+  const prog = normalizeProgress(await f.store.get(progPath(k)));
+  assert.deepEqual([prog.olympia.moons.sea.visits, prog.olympia.moons.sea.gold], [0, 0]); const pt = prog.olympia.phases['sea:alpha'];
+  assert.deepEqual([pt.visits, pt.best, pt.bestScore, pt.log.length, pt.log[0].year, pt.log[0].below, pt.log[0].medal, pt.log[0].score], [0, null, 0, 1, 1, true, 'gold', 10]);
+  assert.deepEqual([prog.olympia.history[0].year, prog.olympia.history[0].below, prog.olympia.history[0].rewarded], [1, true, false]);
+  assert.equal([...f.store.data.keys()].filter((p) => p.includes('/ledger/')).length, 0, 'no row: nothing was paid');
+  const own = await play(f, k, await sit(f, k, 'sea'), 9); assert.equal(own.result.year, 3); assert.equal(own.result.below, false); assert.equal(own.result.rewarded, true); assert.equal(own.result.wallet.om, 30, 'the child\'s own year pays as before');
+  const st2 = await f.olympia.state(k.childCtx); assert.deepEqual([st2.moons.find((m) => m.id === 'sea').phases[0].visits, st2.moons.find((m) => m.id === 'sea').phases[0].log.length], [1, 2]);
+});
 test('the parent view: each child\'s moons and medals, the family\'s Olympia access and the tutor switch', async () => {
   const f = fixture(), k = await f.childSession();
   await play(f, k, await sit(f, k, 't'), 9);

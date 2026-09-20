@@ -68,6 +68,19 @@ test('a phase: SEAMO Section A on its 25-minute clock, the hint, ten questions w
   await h.click('🪐 Gateway jump'); assert.ok(text(h).includes('🥈 1') && text(h).includes('best 7/10 🥈 · 1 visit · gold from 8/10') && text(h).includes('Your visits'), text(h).slice(0, 900));
   await h.click('Log · 1'); assert.ok(/\d{4}-\d\d-\d\d · 7\/10 · \d+:\d\d · 🥈 SILVER/.test(text(h)), 'the phase\'s log: when, the score, the clock, the medal');
 });
+test('sit as a lower year: the hub offers Allison (Year 3) Years 1, 2 and 3 on SEA-Moon, a lower year is marked a warm-up, its Start sends the year, and the paper says it pays nothing', async (t) => {
+  const { h } = await kidIn(t);
+  await h.click('🪐 Gateway jump');
+  assert.ok(text(h).includes('Sit as') && h.nodes('BUTTON').some((b) => b.textContent === 'Year 3 ✓') && h.nodes('BUTTON').some((b) => b.textContent === 'Year 1'), text(h).slice(0, 700));
+  assert.ok(!h.nodes('BUTTON').some((b) => b.textContent === 'Year 4'), 'never a year above');
+  await h.nodes('BUTTON').find((b) => b.textContent === 'Year 2').onclick(); await h.idle(); // SEA-Moon's card comes first
+  assert.ok(text(h).includes('A Year 2 paper (Paper A), below your Year 3: a warm-up — no minerals, no medal count'), text(h).slice(0, 900));
+  await h.nodes('BUTTON').find((b) => b.textContent === 'Start α · Year 2 ▶').onclick(); await h.idle();
+  assert.ok(text(h).includes('SEA-Moon · α Section A · 1/10') && text(h).includes('🧭 a Year 2 warm-up (Paper A), below your year — no minerals, no medal count'), text(h).slice(0, 400));
+  await h.click('Hand in ✓');
+  assert.ok(text(h).includes('🧭 Year 2 warm-up — SEA-Moon · α Alpha') && text(h).includes('0/10') && text(h).includes('A warm-up on a Year 2 paper, below your Year 3: nothing is paid and no medal is counted'), text(h).slice(0, 500));
+  assert.ok(!text(h).includes('+💎'));
+});
 test('the moon wares: bought with Olyminerals and worn, refused without them; the Grid Shop keeps them out of its sections', async (t) => {
   const { h, kid } = await kidIn(t);
   const path = learning(h, kid);

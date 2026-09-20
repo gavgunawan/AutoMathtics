@@ -834,6 +834,12 @@ html[data-mode=site] .masthead,html[data-mode=site] footer{max-width:760px}
 .phase-acts{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin-top:6px}
 .phase-acts .text-button{margin:0;padding:0;font-size:12px}
 .phase-note{font:600 10.5px var(--mono);color:var(--dim)}
+.phase-note.warm{margin:0;padding:6px 8px;border-radius:8px;background:rgba(255,176,32,.1);border:1px dashed rgba(255,176,32,.45);font:600 11px/1.4 var(--mono);color:var(--gold)}
+/* sit as: the child's own year, or a year below it as a warm-up (20 Sep 2026) */
+.year-pick{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:10px 0 0}
+.year-pick-label{font:600 10.5px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--dim)}
+.year-btn{padding:4px 9px;border-radius:999px;border:1.5px solid var(--v2line);background:var(--void);color:var(--muted);font:700 11.5px var(--ui)}
+.year-btn.on{border-color:var(--c);color:var(--c);box-shadow:0 0 8px rgba(53,224,255,.25)}
 .phase-log{margin:6px 0 0;padding:6px 8px;border-radius:8px;background:var(--void)}
 .olympia-foot{margin:8px auto 0}
 .skip-btn{padding:10px 8px;border-radius:12px;border:2px solid var(--v2line);background:var(--void);color:var(--muted);font:700 13px var(--ui)}

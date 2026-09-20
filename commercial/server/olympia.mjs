@@ -85,7 +85,7 @@ export class Olympia {
   async child(tx, ctx) { const a = await this.foundation.authorize(tx, ctx, ['child']); const p = this.paths(a.s); return { ...a, p, prog: normalizeProgress(await tx.get(p.doc)) }; }
   publicVisit(v, now) {
     const m = moonById(v.moon), ph = m ? phaseById(m, v.phase) : null;
-    return { id: v.id, moon: v.moon, moonName: m?.name || v.moon, emoji: m?.emoji || '🌑', year: v.year, band: m ? bandOf(m, v.year) : null, phase: v.phase, ...(PHASE_NAMES[v.phase] || { name: v.phase, sym: '' }), title: ph?.title || '', marks: ph?.marks ?? null,
+    return { id: v.id, moon: v.moon, moonName: m?.name || v.moon, emoji: m?.emoji || '🌑', year: v.year, below: v.below === true, band: m ? bandOf(m, v.year) : null, phase: v.phase, ...(PHASE_NAMES[v.phase] || { name: v.phase, sym: '' }), title: ph?.title || '', marks: ph?.marks ?? null,
       count: v.questions.length, index: v.index, status: v.status, tutored: v.tutored === true, seconds: v.seconds, left: Math.max(0, Math.round((v.deadline - now) / 1000)), thresholds: thresholds(v.questions.length) };
   }
   publicQuestion(v, i) { const q = v.questions[i]; return q ? { index: i, moon: v.moon, section: q.section, cat: q.cat, display: q.display, read: q.read, answerType: q.answer.type, explains: Array.isArray(q.steps) && q.steps.length > 0 } : null; }
@@ -97,7 +97,9 @@ export class Olympia {
         const key = phaseKey(m.id, ph.id), pt = { ...freshPhase(), ...(prog.olympia.phases[key] || {}) }, days = prog.olympia.rewardDays[key] || {}, pub = phasePublic(m, ph, year);
         return { ...pub, thresholds: thresholds(pub.count), visits: pt.visits, best: pt.best, bestScore: pt.bestScore, log: pt.log.slice(0, PHASE_LOG), rewardedToday: days.date === date ? days.n : 0, rewardedPerDay: REWARDED_VISITS_PER_DAY };
       });
-      return { ...moonPublic(m, year), available, why: !m.open ? 'soon' : year < m.years[0] ? `opens at Year ${m.years[0]}` : null, band: bandOf(m, year),
+      // the years the child may sit: their own, which is rewarded and counted, and any below it the moon serves, which are warm-ups (the owner, 20 Sep 2026)
+      const byYear = {}; for (let y = m.years[0]; y <= Math.min(year, m.years[1]); y++) byYear[y] = { year: y, band: bandOf(m, y), own: y === year, phases: m.phases.map((ph) => { const pub = phasePublic(m, ph, y); return { ...pub, thresholds: thresholds(pub.count) }; }) };
+      return { ...moonPublic(m, year), available, why: !m.open ? 'soon' : year < m.years[0] ? `opens at Year ${m.years[0]}` : null, band: bandOf(m, year), byYear,
         medals: { gold: t.gold, silver: t.silver, bronze: t.bronze, merit: t.merit }, visits: t.visits, best: t.best, bestScore: t.bestScore, phases };
     });
   }
@@ -117,24 +119,27 @@ export class Olympia {
         active: active ? { visit: this.publicVisit(active, now), question: this.publicQuestion(active, active.index) } : null };
     });
   }
+  // `year`, when given, is a year BELOW the child's own: a warm-up on an easier paper, shown and logged but never rewarded or counted
+  // (the owner, 20 Sep 2026: an 8-year-old in Year 3 may sit Year 2 or Year 1, and only Year 3 pays). Never a year above.
   async start(ctx, body) {
-    object(body, ['moon', 'phase']); const moon = moonById(typeof body.moon === 'string' ? body.moon : ''); if (!moon) fail(400, 'INVALID_REQUEST');
+    object(body, ['moon', 'phase', 'year']); const moon = moonById(typeof body.moon === 'string' ? body.moon : ''); if (!moon) fail(400, 'INVALID_REQUEST');
     const ph = phaseById(moon, typeof body.phase === 'string' ? body.phase : ''); if (!ph) fail(400, 'INVALID_REQUEST');
+    if (body.year !== undefined && !(Number.isInteger(body.year) && body.year >= 1 && body.year <= 6)) fail(400, 'INVALID_REQUEST');
     const id = randomUUID();
     return this.store.transaction(async (tx) => {
       const a = await this.child(tx, ctx); const { p, s, family, child } = a; const now = this.now();
       if (!olympiaAccess(family, now).open) fail(403, 'OLYMPIA_LOCKED');
       const { prog, active } = await this.collectOverdue(tx, a, now);
       if (active) return { visit: this.publicVisit(active, now), question: this.publicQuestion(active, active.index), resumed: true }; // one visit at a time: a second start resumes it
-      const year = yearOf(child, prog);
-      if (!moon.open) fail(409, 'MOON_NOT_OPEN'); if (year < moon.years[0] || year > moon.years[1]) fail(409, 'MOON_NOT_FOR_YEAR');
+      const own = yearOf(child, prog), year = body.year === undefined ? own : body.year;
+      if (!moon.open) fail(409, 'MOON_NOT_OPEN'); if (year > own) fail(409, 'YEAR_ABOVE_OWN'); if (own < moon.years[0] || year < moon.years[0] || year > moon.years[1]) fail(409, 'MOON_NOT_FOR_YEAR');
       const commitRate = await this.foundation.rateIn(tx, `olympia-start:${s.familyId}:${s.childId}`, STARTS_PER_HOUR, HOUR)
         .catch((e) => { if (e instanceof Fault && e.code === 'TOO_MANY_ATTEMPTS') fail(429, 'TOO_MANY_PAPERS'); throw e; });
       const pace = prog.pacePercent / 100, seconds = Math.max(60, Math.round(ph.minutes * 60 * pace)); // the section's clock, stretched by the child's pace setting
       const questions = buildVisit(moon, year, ph.id);
-      const visit = { id, kind: 'olympia', childId: s.childId, moon: moon.id, phase: ph.id, year, questions, results: [], index: 0, askedAt: now, seconds, deadline: now + seconds * 1000, status: 'active', tutored: false, createdAt: now, expireAt: now + 24 * HOUR, lastAttempt: null };
+      const visit = { id, kind: 'olympia', childId: s.childId, moon: moon.id, phase: ph.id, year, ownYear: own, below: year < own, questions, results: [], index: 0, askedAt: now, seconds, deadline: now + seconds * 1000, status: 'active', tutored: false, createdAt: now, expireAt: now + 24 * HOUR, lastAttempt: null };
       commitRate(); tx.set(p.session(id), visit); tx.set(p.doc, { ...prog, olympia: { ...prog.olympia, activeVisit: id } });
-      this.foundation.audit(tx, 'olympia.visit_started', s.uid, s.familyId, s.childId, { moon: moon.id, phase: ph.id });
+      this.foundation.audit(tx, 'olympia.visit_started', s.uid, s.familyId, s.childId, { moon: moon.id, phase: ph.id, year, below: year < own });
       return { visit: this.publicVisit(visit, now), question: this.publicQuestion(visit, 0), resumed: false };
     });
   }
@@ -179,9 +184,9 @@ export class Olympia {
       if (v.status !== 'active') return { ok: true, status: v.status }; const now = this.now(), date = dayISO(now, family.timeZone || DEFAULT_TIME_ZONE);
       tx.set(p.session(v.id), { ...v, status: 'quit', finishedAt: now });
       const score = v.results.filter((r) => r.r === 'correct').length, secs = Math.max(0, Math.round((now - v.createdAt) / 1000));
-      const row = { id: v.id, ts: now, date, moon: v.moon, phase: v.phase, year: v.year, score, total: v.questions.length, answered: v.results.length, medal: null, tutored: v.tutored === true, rewarded: false, quit: true, secs };
+      const row = { id: v.id, ts: now, date, moon: v.moon, phase: v.phase, year: v.year, below: v.below === true, score, total: v.questions.length, answered: v.results.length, medal: null, tutored: v.tutored === true, rewarded: false, quit: true, secs };
       const key = phaseKey(v.moon, v.phase), pt = { ...freshPhase(), ...(prog.olympia.phases[key] || {}) };
-      const phases = { ...prog.olympia.phases, [key]: { ...pt, log: [{ ts: now, date, score, total: v.questions.length, secs, medal: null, tutored: row.tutored, rewarded: false, quit: true }, ...pt.log].slice(0, PHASE_LOG) } };
+      const phases = { ...prog.olympia.phases, [key]: { ...pt, log: [{ ts: now, date, year: v.year, below: v.below === true, score, total: v.questions.length, secs, medal: null, tutored: row.tutored, rewarded: false, quit: true }, ...pt.log].slice(0, PHASE_LOG) } };
       tx.set(p.doc, { ...prog, olympia: { ...prog.olympia, activeVisit: prog.olympia.activeVisit === v.id ? null : prog.olympia.activeVisit, phases, history: [row, ...prog.olympia.history].slice(0, HISTORY_MAX) } });
       this.foundation.audit(tx, 'olympia.visit_quit', s.uid, s.familyId, s.childId, { moon: v.moon, phase: v.phase }); return { ok: true, status: 'quit' };
     });
@@ -218,22 +223,23 @@ export class Olympia {
   score(value, v, now, tz, how = 'end') {
     const prog = normalizeProgress(value), moon = moonById(v.moon), ph = moon ? phaseById(moon, v.phase) : null, total = v.questions.length, score = v.results.filter((r) => r.r === 'correct').length;
     const medal = medalFor(score, total), date = dayISO(now, tz), key = phaseKey(v.moon, v.phase), days = prog.olympia.rewardDays[key] || {}, paidToday = days.date === date ? days.n : 0;
-    const tutored = v.tutored === true, rewarded = Boolean(medal) && !tutored && paidToday < REWARDED_VISITS_PER_DAY;
+    const tutored = v.tutored === true, below = v.below === true, counts = !tutored && !below; // a warm-up on a lower year, like a tutored visit, pays nothing and joins no tally
+    const rewarded = Boolean(medal) && counts && paidToday < REWARDED_VISITS_PER_DAY;
     const reward = rewarded ? { gc: medal.gc, rp: medal.rp, om: medal.om } : { gc: 0, rp: 0, om: 0 };
-    const t = { ...freshMoon(), ...(prog.olympia.moons[v.moon] || {}) }; t.visits++;
-    const pt = { ...freshPhase(), ...(prog.olympia.phases[key] || {}) }; pt.visits++;
-    if (medal && !tutored) { t[medal.id]++; if (!t.best || RANK[medal.id] > RANK[t.best]) t.best = medal.id; t.bestScore = Math.max(t.bestScore, score); if (!pt.best || RANK[medal.id] > RANK[pt.best]) pt.best = medal.id; }
-    if (!tutored) pt.bestScore = Math.max(pt.bestScore, score);
+    const t = { ...freshMoon(), ...(prog.olympia.moons[v.moon] || {}) }, pt = { ...freshPhase(), ...(prog.olympia.phases[key] || {}) };
+    if (!below) { t.visits++; pt.visits++; } // a warm-up is in the log but is not a sitting of the child's own paper
+    if (medal && counts) { t[medal.id]++; if (!t.best || RANK[medal.id] > RANK[t.best]) t.best = medal.id; t.bestScore = Math.max(t.bestScore, score); if (!pt.best || RANK[medal.id] > RANK[pt.best]) pt.best = medal.id; }
+    if (counts) pt.bestScore = Math.max(pt.bestScore, score);
     const secs = Math.max(0, Math.min(v.seconds || Infinity, Math.round((now - v.createdAt) / 1000))); // the clock's reading when the paper closed; never past the bell
-    const logRow = { ts: now, date, score, total, secs, medal: tutored ? null : medal?.id || null, tutored, rewarded, quit: false, how };
+    const logRow = { ts: now, date, year: v.year, below, score, total, secs, medal: tutored ? null : medal?.id || null, tutored, rewarded, quit: false, how };
     pt.log = [logRow, ...pt.log].slice(0, PHASE_LOG);
-    const row = { id: v.id, ts: now, date, moon: v.moon, phase: v.phase, year: v.year, score, total, medal: tutored ? null : medal?.id || null, tutored, rewarded, secs, how };
+    const row = { id: v.id, ts: now, date, moon: v.moon, phase: v.phase, year: v.year, below, score, total, medal: tutored ? null : medal?.id || null, tutored, rewarded, secs, how };
     const progress = { ...prog, olympia: { ...prog.olympia, activeVisit: prog.olympia.activeVisit === v.id ? null : prog.olympia.activeVisit, moons: { ...prog.olympia.moons, [v.moon]: t }, phases: { ...prog.olympia.phases, [key]: pt },
       history: [row, ...prog.olympia.history].slice(0, HISTORY_MAX), rewardDays: { ...prog.olympia.rewardDays, [key]: { date, n: rewarded ? paidToday + 1 : paidToday } } } };
     const at = moon ? moon.phases.findIndex((x) => x.id === v.phase) : -1, nextPh = moon && at >= 0 ? moon.phases[at + 1] || null : null;
     const result = { visitId: v.id, moon: v.moon, moonName: moon?.name || v.moon, emoji: moon?.emoji || '🌑', year: v.year, band: moon ? bandOf(moon, v.year) : null, phase: v.phase, ...(PHASE_NAMES[v.phase] || { name: v.phase, sym: '' }), title: ph?.title || '', marks: ph?.marks ?? null,
-      score, total, blank: v.results.filter((r) => r.r === 'blank').length, medal: tutored ? null : medal?.id || null, tutored, rewarded, how, thresholds: thresholds(total),
-      trainingRun: !rewarded && !tutored && Boolean(medal), gcEarned: reward.gc, rpEarned: reward.rp, omEarned: reward.om, secs, seconds: v.seconds, medals: { gold: t.gold, silver: t.silver, bronze: t.bronze, merit: t.merit, best: t.best },
+      score, total, blank: v.results.filter((r) => r.r === 'blank').length, medal: tutored ? null : medal?.id || null, tutored, below, ownYear: v.ownYear ?? v.year, rewarded, how, thresholds: thresholds(total),
+      trainingRun: !rewarded && counts && Boolean(medal), gcEarned: reward.gc, rpEarned: reward.rp, omEarned: reward.om, secs, seconds: v.seconds, medals: { gold: t.gold, silver: t.silver, bronze: t.bronze, merit: t.merit, best: t.best },
       phaseLog: pt.log, next: nextPh ? { id: nextPh.id, ...PHASE_NAMES[nextPh.id], title: nextPh.title } : null,
       questions: v.results.map((r, i) => { const q = v.questions[i]; return { index: i, section: q.section, cat: q.cat, text: q.display.text, r: r.r, expected: answerText(q), given: r.given ?? null, secs: r.secs, steps: Array.isArray(q.steps) ? q.steps : [], ...(q.tip ? { tip: q.tip } : {}) }; }) };
     return { progress, result, reward };

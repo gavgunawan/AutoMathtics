@@ -2193,7 +2193,7 @@ const PHASE_SYM = { alpha: 'α', beta: 'β', gamma: 'γ' };
 const KIND_WORDS = { mc: 'tap the answer', sa: 'type the answer', mixed: 'tap or type' };
 function medalChips(m) { const row = el('span', null, 'medal-row'); for (const id of ['gold', 'silver', 'bronze', 'merit']) if (m?.[id]) row.append(el('span', `${MEDAL[id][0]} ${m[id]}`, 'medal-chip')); return row; }
 // a row of a phase's log: when, the score, how long the clock read, and what it earned
-const logLine = (r) => `${r.date} · ${r.score}/${r.total} · ${mmss(r.secs)}${r.quit ? ' · left early' : r.medal ? ` · ${MEDAL[r.medal][0]} ${MEDAL[r.medal][1]}${r.rewarded ? '' : ' (training)'}` : r.tutored ? ' · 💡 practice' : ' · no medal'}${r.how === 'bell' ? ' · ⏰ bell' : ''}`;
+const logLine = (r) => `${r.date} · ${r.score}/${r.total} · ${mmss(r.secs)}${r.quit ? ' · left early' : r.medal ? ` · ${MEDAL[r.medal][0]} ${MEDAL[r.medal][1]}${r.below ? ` (Year ${r.year} warm-up)` : r.rewarded ? '' : ' (training)'}` : r.tutored ? ' · 💡 practice' : r.below ? ` · Year ${r.year} warm-up` : ' · no medal'}${r.how === 'bell' ? ' · ⏰ bell' : ''}`;
 async function olympiaScreen() {
   transientView = true; const st = await api('/olympia/state');
   const box = panel('🪐 OLYMPIA · PLANETARY SYSTEM', `${model.child.nickname} · Year ${st.year}${st.yearLifted ? ` · reached Sector ${st.sector}` : ''}`, '', 'olympia');
@@ -2212,21 +2212,29 @@ async function olympiaScreen() {
     if (m.visits) tally.append(medalChips(m.medals), `${m.visits} visit${m.visits === 1 ? '' : 's'}`); else tally.append('no visits yet');
     card.append(tally);
     if (!m.available) card.append(el('p', m.why === 'soon' ? '🔒 opens later' : `🔒 ${m.why}`, 'moon-note'));
-    else { // the three phases: what each is, how the child has done on it, its log of the last ten, and the way in
-      const list = el('div', null, 'phase-list');
-      for (const ph of m.phases) {
-        const row = el('div', null, 'phase-row'), words = el('div', null, 'phase-words');
-        words.append(el('b', `${ph.sym} ${ph.name}`, 'phase-name'), el('span', ` · ${ph.title}`, 'phase-title'),
-          el('span', `${ph.count} questions · ${ph.marks} mark${ph.marks === 1 ? '' : 's'} each · ${ph.minutes} min · ${KIND_WORDS[ph.kind] || ph.kind}`, 'phase-shape'),
-          el('span', ph.visits ? `best ${ph.bestScore}/${ph.count}${ph.best ? ` ${MEDAL[ph.best][0]}` : ''} · ${ph.visits} visit${ph.visits === 1 ? '' : 's'} · gold from ${ph.thresholds.gold}/${ph.count}` : `gold from ${ph.thresholds.gold}/${ph.count} · not sat yet`, 'phase-stats'));
-        row.append(words);
-        const acts = el('div', null, 'phase-acts');
-        if (st.access.open && !st.active) { const spent = ph.rewardedToday >= ph.rewardedPerDay; acts.append(button(`Start ${ph.sym} ▶`, () => olympiaStart(m.id, ph.id), `tiny primary${spent ? ' done' : ''}`)); if (spent) acts.append(el('span', 'training runs today', 'phase-note')); }
-        if (ph.log.length) { const log = el('div', null, 'phase-log'); for (const r of ph.log) log.append(el('p', logLine(r), 'olympia-row')); const more = el('div'); acts.append(button(`Log · ${ph.log.length}`, () => more.replaceChildren(more.children.length ? '' : log), 'text-button')); row.append(acts, more); }
-        else row.append(acts);
-        list.append(row);
-      }
-      card.append(list);
+    else { // the three phases: what each is, how the child has done on it, its log of the last ten, and the way in — at the child's own year, or a year below as a warm-up (20 Sep 2026)
+      const years = Object.values(m.byYear || {}), own = years.find((y) => y.own) || { year: st.year, phases: m.phases, own: true }; let picked = own.year;
+      const pickRow = el('div', null, 'year-pick'), holder = el('div');
+      const drawPick = () => { pickRow.replaceChildren(el('span', 'Sit as', 'year-pick-label')); for (const yv of years) pickRow.append(button(yv.own ? `Year ${yv.year} ✓` : `Year ${yv.year}`, () => { picked = yv.year; drawPick(); drawPhases(); }, `tiny year-btn${yv.year === picked ? ' on' : ''}`)); };
+      const drawPhases = () => {
+        const yv = m.byYear?.[picked] || own, below = !yv.own, list = el('div', null, 'phase-list');
+        if (below) list.append(el('p', `A Year ${yv.year} paper (${yv.band}), below your Year ${own.year}: a warm-up — no minerals, no medal count. Your own year is the one that pays.`, 'phase-note warm'));
+        yv.phases.forEach((ph, i) => {
+          const mine = m.phases[i] || ph, row = el('div', null, 'phase-row'), words = el('div', null, 'phase-words');
+          words.append(el('b', `${ph.sym} ${ph.name}`, 'phase-name'), el('span', ` · ${ph.title}`, 'phase-title'),
+            el('span', `${ph.count} questions · ${ph.marks} mark${ph.marks === 1 ? '' : 's'} each · ${ph.minutes} min · ${KIND_WORDS[ph.kind] || ph.kind}`, 'phase-shape'),
+            el('span', below ? `warm-up at Year ${yv.year} · gold from ${ph.thresholds.gold}/${ph.count}` : mine.visits ? `best ${mine.bestScore}/${mine.count}${mine.best ? ` ${MEDAL[mine.best][0]}` : ''} · ${mine.visits} visit${mine.visits === 1 ? '' : 's'} · gold from ${ph.thresholds.gold}/${ph.count}` : `gold from ${ph.thresholds.gold}/${ph.count} · not sat yet`, 'phase-stats'));
+          row.append(words);
+          const acts = el('div', null, 'phase-acts');
+          if (st.access.open && !st.active) { const spent = !below && mine.rewardedToday >= mine.rewardedPerDay; acts.append(button(below ? `Start ${ph.sym} · Year ${yv.year} ▶` : `Start ${ph.sym} ▶`, () => olympiaStart(m.id, ph.id, below ? yv.year : undefined), `tiny primary${spent || below ? ' done' : ''}`)); if (spent) acts.append(el('span', 'training runs today', 'phase-note')); }
+          if (mine.log.length) { const log = el('div', null, 'phase-log'); for (const r of mine.log) log.append(el('p', logLine(r), 'olympia-row')); const more = el('div'); acts.append(button(`Log · ${mine.log.length}`, () => more.replaceChildren(more.children.length ? '' : log), 'text-button')); row.append(acts, more); }
+          else row.append(acts);
+          list.append(row);
+        });
+        holder.replaceChildren(list);
+      };
+      if (years.length > 1) { drawPick(); card.append(pickRow); }
+      drawPhases(); card.append(holder);
     }
     if (m.topics) { // what the moon asks, band by band, under a tap
       const topics = el('div', null, 'moon-topics'); for (const t of m.topics) { topics.append(el('b', t.band)); for (const l of t.lines) topics.append(el('p', `• ${l}`)); }
@@ -2244,7 +2252,7 @@ async function olympiaScreen() {
 }
 // the phase clock: the server says how many seconds are left; this device counts down from there and, at zero, asks the server to collect the paper
 const withClock = (visit) => ({ ...visit, endsAt: Date.now() + Math.max(0, visit.left || 0) * 1000 });
-async function olympiaStart(moon, phase) { const r = await api('/olympia/visit', { moon, phase }); olympiaPlay(withClock(r.visit), r.question); }
+async function olympiaStart(moon, phase, year) { const r = await api('/olympia/visit', { moon, phase, ...(year === undefined ? {} : { year }) }); olympiaPlay(withClock(r.visit), r.question); } // a year is sent only for a warm-up below the child's own
 function startPhaseClock(visit, { clock, fill, skin, onZero }) {
   const total = Math.max(1, visit.seconds || 1);
   const paint = () => {
@@ -2278,7 +2286,7 @@ function olympiaPlay(visit, q) {
   row.append(where, clock);
   const bar = el('div', null, 'timer-track'), fill = el('div', null, 'timer-fill'), skin = lookup(TBAR_CLASS, w.activeTimer); bar.append(fill);
   const slot = el('div', null, 'flash-slot'); slot.setAttribute('role', 'status');
-  slot.append(el('p', visit.tutored ? '💡 a practice visit — no medal, no minerals' : `🤫 no marks until the end — the score and the working are revealed after question ${visit.count}, or when the bell goes`, 'olympia-hint'));
+  slot.append(el('p', visit.tutored ? '💡 a practice visit — no medal, no minerals' : visit.below ? `🧭 a Year ${visit.year} warm-up (${visit.band}), below your year — no minerals, no medal count · nothing is marked until the end` : `🤫 no marks until the end — the score and the working are revealed after question ${visit.count}, or when the bell goes`, 'olympia-hint'));
   const tutorHost = el('div', null, 'tutor-host'), explains = Boolean(q.explains) || Boolean(model?.tutor?.on);
   const { form, input } = answerForm(q, submit, { timeUp: () => timeUp(), actions: [
     button('Skip →', () => submit(null), 'skip-btn'),
@@ -2325,11 +2333,12 @@ async function olympiaResult(r) {
   const w = gameModel?.wallet || r.wallet || {}, medal = r.medal ? MEDAL[r.medal] : null;
   const box = panel('', '', '', 'summary olympia-summary'); box.replaceChildren(); onBack = olympiaScreen; applyLook(w);
   const where = `${r.moonName} · ${r.sym} ${r.name}`;
-  const head = r.tutored ? `💡 A practice visit — ${where}: Explain to me was used, so no medal this time` : medal ? `${medal[0]} ${medal[1]} MEDAL — ${where}` : `${r.emoji} ${where} — no medal this time`;
+  const head = r.tutored ? `💡 A practice visit — ${where}: Explain to me was used, so no medal this time` : r.below ? `🧭 Year ${r.year} warm-up — ${where}${medal ? ` · ${medal[0]} ${medal[1]} level, not counted` : ''}` : medal ? `${medal[0]} ${medal[1]} MEDAL — ${where}` : `${r.emoji} ${where} — no medal this time`;
   box.append(el('h2', head, `summary-head ${medal && !r.tutored ? 'c-gold' : 'c-cyan'}`), el('div', `${r.score}/${r.total}`, 'big-score'),
     el('p', `${r.title} · ${r.band} · ${mmss(r.secs)} of ${mmss(r.seconds)} min${r.how === 'bell' ? ' · collected at the bell' : r.how === 'handin' ? ' · handed in early' : ''}${r.blank ? ` · ${r.blank} blank` : ''}`, 'subtle'));
   if (r.rewarded) { const earn = el('div', null, 'earn-box pop2'); earn.append(`+💎${r.omEarned}`, ...(r.gcEarned ? [el('span', ` +⚡${r.gcEarned} +🏆${r.rpEarned}`)] : [])); box.append(moneySplash('pass'), earn); setTimeout(() => sound('kaching'), 350); }
   else if (r.trainingRun) box.append(el('p', 'A training run: two sittings of a phase a day are rewarded, and today\'s are done. The medal still counts!', 'subtle'));
+  else if (r.below) box.append(el('p', `A warm-up on a Year ${r.year} paper, below your Year ${r.ownYear}: nothing is paid and no medal is counted. Sit Year ${r.ownYear} for the real thing!`, 'subtle'));
   else if (!r.tutored) box.append(el('p', `A medal starts at ${r.thresholds.merit}/${r.total} right, gold at ${r.thresholds.gold}/${r.total}. Every sitting is a fresh paper — try again!`, 'subtle'));
   const list = el('div', null, 'reveal');
   for (const q of r.questions) {
@@ -2342,8 +2351,9 @@ async function olympiaResult(r) {
   box.append(el('p', 'The reveal', 'log-title c-violet'), list);
   const mini = el('p', null, 'mini-wallet'); mini.append('💎 ', el('b', String(w.om ?? 0)), ' · ⚡ ', el('b', String(w.gc ?? 0)), ' · 🏆 ', el('b', String(w.rp ?? 0))); box.append(mini);
   const row = el('div', null, 'row-buttons');
-  if (r.next) row.append(button(`Next: ${r.next.sym} ${r.next.name} ▶`, () => olympiaStart(r.moon, r.next.id), 'primary'));
-  row.append(button(`Sit ${r.sym} again ▶`, () => olympiaStart(r.moon, r.phase), r.next ? 'ghost' : 'primary'), button('🪐 Olympia', olympiaScreen, 'ghost'), button('Home', refresh, 'ghost')); box.append(row);
+  const yr = r.below ? r.year : undefined; // a warm-up carries on at the same lower year
+  if (r.next) row.append(button(`Next: ${r.next.sym} ${r.next.name} ▶`, () => olympiaStart(r.moon, r.next.id, yr), 'primary'));
+  row.append(button(`Sit ${r.sym} again ▶`, () => olympiaStart(r.moon, r.phase, yr), r.next ? 'ghost' : 'primary'), button('🪐 Olympia', olympiaScreen, 'ghost'), button('Home', refresh, 'ghost')); box.append(row);
 }
 // the Olympia shop: the moon wares, Olyminerals only, bought and worn through the same shop routes as the Grid Shop's
 async function olympiaShopScreen() {
