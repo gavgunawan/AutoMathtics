@@ -1,0 +1,29 @@
+# The three jobs in secure-foundation.yml — unit, emulator, container-build — are required status checks
+# on main, but that workflow only runs when commercial/** changes. A pull request that touches only the
+# game (index.html, src/) therefore never reports them and sits at "waiting for status" forever.
+# This is GitHub's documented answer to exactly that: a sibling workflow with the SAME job names,
+# triggered on precisely the paths the real one ignores, whose jobs succeed because nothing of theirs
+# was touched. Keep the paths-ignore list identical to the paths list in secure-foundation.yml.
+# A pull request that touches both sides runs both workflows; the real jobs finish minutes after these
+# and GitHub keeps the most recent result for a name, so the real verdict is the one that counts.
+name: AutoMathtics v3.0 checks (not applicable)
+on:
+  pull_request:
+    paths-ignore: ['commercial/**', '.github/workflows/secure-foundation.yml']
+permissions: {}
+concurrency:
+  group: foundation-skip-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "commercial/ untouched — nothing to unit-test"
+  emulator:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "commercial/ untouched — nothing to run in the emulator"
+  container-build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "commercial/ untouched — no image to build"
