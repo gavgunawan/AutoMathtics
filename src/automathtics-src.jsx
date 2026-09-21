@@ -3,6 +3,7 @@ import { initializeApp } from "firebase/app";
 import { getDatabase, ref as dbRef, get as dbGet, set as dbSet, onValue, runTransaction } from "firebase/database";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 import { genNavigator, navSecondsFor, NAV_TOPICS } from "./navigator.js";
+import { spriteURL, crewURL } from "./station-art.js";
 
 // ================= AUTOMATHTICS — THE MATH GRID =================
 // Papers 1–100 per level · session = 5 papers · one
@@ -140,6 +141,12 @@ const GUIDE_SLIDES = [
     "Pets ride along with you, outfits dress them, backgrounds and rings change your look.",
     "🎁 Surprise Box = a random new thing. 🥚 Mystery Egg = hatches after 5 passes.",
     "🚀 Family Rocket — when Dad builds one, fuel it with ⚡ together. Full tank = a prize you all share.",
+  ] },
+  { emoji: "🛰️", title: "The family station", lines: [
+    "Tap 🛰️ Station on your home screen — one station the whole family builds, floor by floor.",
+    "Everyone who plays is crew and walks about inside. Get a friend to join and they're aboard too.",
+    "Tap + to build a room (⚡250). RECRUIT hires a new crew member (⚡800).",
+    "Every two crew open another floor. Tap anyone to hear what they're saying.",
   ] },
   { emoji: "🎁", title: "Cashing in 🏆 Reward Points", lines: [
     "The 🎁 Reward Store is at the bottom of the Shop — real prizes set up by Dad.",
@@ -1088,8 +1095,8 @@ function playWrong() {
 
 // ---------- shared settings (admin panel), synced via cloud ----------
 const ADMIN_PIN = "1590";
-const BUILD_TAG = "v2.3.1 · 8 Sep";
-const BUILD_ID = "am-build-231"; // ASCII-only twin of BUILD_TAG, searched for in the live index.html
+const BUILD_TAG = "v2.7 · 20 Sep";
+const BUILD_ID = "am-build-270"; // ASCII-only twin of BUILD_TAG, searched for in the live index.html
 
 // ---------- full screen ----------
 const fsSupported = () => typeof document !== "undefined" && !!(document.fullscreenEnabled || document.webkitFullscreenEnabled) && !(window.navigator && window.navigator.standalone);
@@ -1168,6 +1175,70 @@ const rocketReady = (r) => {
 // a rocket is fuelled with grid coins by default; Dad can build one that takes reward points instead
 const rocketSym = (r) => (r && r.currency === "rp" ? "🏆" : "⚡");
 const ROCKET_AMOUNTS = { gc: [50, 100, 250], rp: [100, 200, 500] };
+
+// ---------- the family station (v2.7) ----------
+// A cross-section, Fallout Shelter style: floors stacked down from the dock, three rooms to a floor, a
+// lift shaft on the left, and the crew walking about inside. Lives at kumon/station:
+//   { grid: { "<slot>": { id, by, at } }, recruits: [{ id, name, color, by, at }] }
+// slot = floor × 3 + position; slot 0 is the dock, built into every station and never stored.
+// Shared by the whole family like the rocket — every write is a transaction so two kids building at
+// the same moment can't overwrite each other — and live on every device.
+//
+// The crew is who makes the station grow. Everyone on the roster is crew for free, so "get a friend
+// to join" (the add-player wizard) is literally how the family gets more hands; recruits are hired
+// with ⚡ grid coins. Floors unlock by head-count, the way a vault opens up as dwellers arrive.
+// Rooms cost coins too, and both go through the kid's own ledger like a shop buy or rocket fuel —
+// spent is spent, never refunded, which is why nothing here can be sold back.
+const STATION_FLOORS = 4;
+const ROOMS_PER_FLOOR = 3;
+const STATION_PLOTS = STATION_FLOORS * ROOMS_PER_FLOOR;
+const ROOM_COST = 250;      // five passes
+const RECRUIT_COST = 800;   // sixteen — a saving goal, like a pet
+const MAX_RECRUITS = 10;
+const STATION_MODULES = [
+  { id: "sm_solar", name: "Solar Array", color: "#FFB020", blurb: "catches the light" },
+  { id: "sm_reactor", name: "Power Core", color: "#2DFFB3", blurb: "powers the hull" },
+  { id: "sm_garden", name: "Hydroponics", color: "#2DFF6B", blurb: "grows the food" },
+  { id: "sm_scope", name: "Observatory", color: "#35E0FF", blurb: "watches the sky" },
+  { id: "sm_dish", name: "Comms Dish", color: "#8A5CFF", blurb: "calls home" },
+  { id: "sm_quarters", name: "Crew Quarters", color: "#FF2DA8", blurb: "where the crew sleeps" },
+];
+const DOCK = { id: "dock", name: "Dock", color: "#7E8AA8", blurb: "where new crew come aboard" };
+const RECRUIT_NAMES = ["Pip", "Nova", "Bolt", "Zed", "Luna", "Cosmo", "Rex", "Ivy", "Dot", "Kai", "Mo", "Juno", "Ash", "Ori"];
+const CREW_LINES = ["Nice station!", "All systems go.", "Is it lunch yet?", "I love the view from here.", "Who left the airlock open?", "Beep boop.", "Did you pass today?", "Gravity's on, right?", "Best crew in the sector."];
+// one floor to start; another every two crew. Two kids = one floor, recruit or add a friend = two.
+const floorsFor = (crewCount) => Math.max(1, Math.min(STATION_FLOORS, 1 + Math.floor((Math.max(1, crewCount) - 1) / 2)));
+const crewNeededFor = (floorIdx) => floorIdx * 2 + 1;
+// a stable stroll per crew member from their id, so a re-render never restarts anyone's walk
+const crewMotion = (id) => {
+  let h = 7; for (const ch of String(id)) h = ((h * 31) + ch.charCodeAt(0)) >>> 0;
+  return { dur: 5 + (h % 5), delay: -((h >> 3) % 7), from: 12 + ((h >> 6) % 8), to: 46 + ((h >> 9) % 10) };
+};
+const stationPath = () => `families/${FAMILY_TOKEN}/kumon/station`;
+const localLoadStation = () => { try { const s = localStorage.getItem("kumon-station"); return s ? JSON.parse(s) : null; } catch (e) { return null; } };
+const localSaveStation = (v) => { try { localStorage.setItem("kumon-station", JSON.stringify(v)); } catch (e) {} };
+async function cloudLoadStation() {
+  if (!fbdb) return null;
+  await fbAuthReady;
+  try { const snap = await dbGet(dbRef(fbdb, stationPath())); return snap.exists() ? snap.val() : null; } catch (e) { return null; }
+}
+function subscribeStation(cb) {
+  if (!fbdb) return () => {};
+  return whenAuthed(() => onValue(dbRef(fbdb, stationPath()), (snap) => cb(snap.exists() ? snap.val() : null)));
+}
+async function updateStation(fn) {
+  if (!fbdb) { const next = fn(localLoadStation()); localSaveStation(next); return next; }
+  await fbAuthReady;
+  try {
+    const res = await runTransaction(dbRef(fbdb, stationPath()), (cur) => fn(cur === undefined ? null : cur));
+    const v = res.snapshot.val(); localSaveStation(v); return v;
+  } catch (e) { return null; }
+}
+const stationGrid = (s) => (s && s.grid) || {};
+const stationUsed = (s) => Object.keys(stationGrid(s)).length;
+const stationRecruits = (s) => (s && Array.isArray(s.recruits) ? s.recruits : []);
+const stationModule = (id) => (id === "dock" ? DOCK : STATION_MODULES.find((m) => m.id === id) || null);
+const PLOT_SLOTS = Array.from({ length: STATION_PLOTS }, (_, i) => i);
 // ---------- admin-gate watch ----------
 // Every wrong admin PIN is recorded at kumon/security for Dad to see. Three in a row (within ten
 // minutes) lock the gate for ten minutes and raise an alert that stays on the player-selection
@@ -1600,6 +1671,12 @@ export default function AutoMathtics() {
   const [rocketBoom, setRocketBoom] = useState(0);
   const rocketPrev = useRef(null);
   const [rk, setRk] = useState({ emoji: "🎬", name: "", currency: "gc", goal: "2000", minEach: "300", crew: [] }); // admin build form
+  // family station
+  const [station, setStation] = useState(null);
+  const [stSel, setStSel] = useState(null);    // the slot being built into, or the built room being looked at
+  const [stTalk, setStTalk] = useState(null);  // { name, line } — the crew member last tapped
+  const [stMsg, setStMsg] = useState(null);
+  const [stBusy, setStBusy] = useState(false);
   const [security, setSecurity] = useState(null); // admin-gate watch: fails, lock, alert
   const [creditMsg, setCreditMsg] = useState(null);
   useEffect(() => {
@@ -1693,6 +1770,11 @@ export default function AutoMathtics() {
     (async () => { const r = (await cloudLoadRocket()) || localLoadRocket(); if (r) setRocket(r); })();
     return subscribeRocket((r) => { setRocket(r); localSaveRocket(r); });
   }, []);
+  // the station is shared too, and the home screen previews it, so it loads with the app
+  useEffect(() => {
+    (async () => { const v = (await cloudLoadStation()) || localLoadStation(); if (v) setStation(v); })();
+    return subscribeStation((v) => { setStation(v); localSaveStation(v); });
+  }, []);
   // admin-gate watch: live everywhere, so the alert shows on whichever device Dad opens next
   useEffect(() => {
     const l = localLoadSec(); if (l) setSecurity(l);
@@ -1705,16 +1787,41 @@ export default function AutoMathtics() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rocket]);
 
-  // per-kid admin time scale (percent): question time = base × kid pace × scale
-  const scaleFor = (name) => {
-    const key = name.toLowerCase() + "Scale";
-    const v = settings && typeof settings[key] === "number" ? settings[key] : 100;
+  // per-kid admin time scale (percent), one per track: question time = base × kid pace × scale.
+  // `<name>Scale` is the original key and stays Engine's. Navigator reads `<name>ScaleNav` and falls
+  // back to the Engine value, so a family that set one slider before the split keeps that time on both.
+  const scaleFor = (name, t) => {
+    const key = name.toLowerCase();
+    const eng = settings && typeof settings[key + "Scale"] === "number" ? settings[key + "Scale"] : 100;
+    const v = t === "nav"
+      ? (settings && typeof settings[key + "ScaleNav"] === "number" ? settings[key + "ScaleNav"] : eng)
+      : eng;
     return Math.min(100, Math.max(10, v)) / 100;
   };
-  const scaledSecs = (lvlIdx, tier, u) => Math.max(5, Math.round(secondsFor(lvlIdx, tier, u.mult) * scaleFor(u.name)));
-  const scaledSecsT = (lvlIdx, tier, u, t) => Math.max(5, Math.round((t === "nav" ? navSecondsFor(lvlIdx, tier, u.mult) : secondsFor(lvlIdx, tier, u.mult)) * scaleFor(u.name)));
+  const scaledSecs = (lvlIdx, tier, u) => Math.max(5, Math.round(secondsFor(lvlIdx, tier, u.mult) * scaleFor(u.name, "engine")));
+  const scaledSecsT = (lvlIdx, tier, u, t) => Math.max(5, Math.round((t === "nav" ? navSecondsFor(lvlIdx, tier, u.mult) : secondsFor(lvlIdx, tier, u.mult)) * scaleFor(u.name, t === "nav" ? "nav" : "engine")));
   // everyone who can play on this family's grid: the built-ins plus players added from the selection screen
   const roster = [...USERS, ...(((settings && settings.players) || []).map(playerToUser))];
+  // Opening the admin panel materialises each player's Navigator scale from their Engine one, so the
+  // two sliders move independently from the first drag. Before the split one slider drove both tracks;
+  // copying the value across on the way in keeps every existing player's Navigator time exactly as it was.
+  const draftWithNavScales = (s) => {
+    const d = { ...s };
+    roster.forEach((u) => {
+      const key = u.name.toLowerCase();
+      if (typeof d[key + "ScaleNav"] !== "number") d[key + "ScaleNav"] = typeof d[key + "Scale"] === "number" ? d[key + "Scale"] : 100;
+    });
+    return d;
+  };
+  // the station's derived state sits after `roster`, which the crew list is built from
+  const stationOn = !settings || settings.station !== false;
+  const stGrid = stationGrid(station);
+  // everyone on the roster is crew for free — a friend joining is how the family grows — plus the hires
+  const crew = [
+    ...roster.filter((u) => !u.test).map((u) => ({ id: u.name.toLowerCase(), name: u.name, color: u.color, player: true })),
+    ...stationRecruits(station).map((r) => ({ ...r, player: false })),
+  ];
+  const stFloors = floorsFor(crew.length);
   const qSecs = (q) => scaledSecsT(q && typeof q.qLevel === "number" ? q.qLevel : levelIdx, tierOf(q ? q.paper : startPaper), user, q && q.track === "nav" ? "nav" : "engine");
   const petEmoji = prog && prog.wallet && prog.wallet.activePet
     ? (SHOP_ITEMS.find((it) => it.id === prog.wallet.activePet) || {}).emoji : null;
@@ -1933,6 +2040,76 @@ export default function AutoMathtics() {
     setGuideIdx(0); setScreen("guide");
   }
   // ----- family rocket -----
+  // ----- the family station -----
+  // Building and recruiting both write the shared station through the rocket's transaction, and both
+  // are paid from the kid's own ledger exactly like a shop buy: gcSpent up, a purchases row, saved.
+  async function buildRoom(slot, modId) {
+    if (!user || !prog || stBusy) return;
+    if (slot <= 0 || slot >= stFloors * ROOMS_PER_FLOOR || stGrid[String(slot)]) return;
+    const mod = stationModule(modId);
+    if (!mod || mod === DOCK) return;
+    const bal = balances(prog);
+    if (bal.gcBal < ROOM_COST) { setStMsg(`Need ⚡${ROOM_COST - bal.gcBal} more for a ${mod.name.toUpperCase()}.`); return; }
+    setStBusy(true);
+    const key = user.name.toLowerCase();
+    const next = await updateStation((cur) => {
+      const g = { ...stationGrid(cur) };
+      if (g[String(slot)]) return cur;                      // another device got there first
+      g[String(slot)] = { id: modId, by: key, at: Date.now() };
+      return { ...(cur || {}), grid: g };
+    });
+    setStBusy(false);
+    const got = next && stationGrid(next)[String(slot)];
+    if (!got || got.by !== key) { setStMsg("That spot was just taken — pick another."); return; }
+    const w = { ...prog.wallet, gcSpent: (prog.wallet.gcSpent || 0) + ROOM_COST,
+      purchases: [ledgerRow({ id: "station_room", emoji: "🛰️", name: `Station · ${mod.name}` }, ROOM_COST), ...(prog.wallet.purchases || [])].slice(0, 120) };
+    const np = { ...prog, wallet: w };
+    setProg(np); saveProgress(user.name, np);
+    setStation(next); setStSel(null); setStTalk(null);
+    setStMsg(`${mod.name.toUpperCase()} built on floor ${Math.floor(slot / ROOMS_PER_FLOOR) + 1}!`);
+    playCorrect();
+  }
+  async function recruitCrew() {
+    if (!user || !prog || stBusy) return;
+    const bal = balances(prog);
+    if (bal.gcBal < RECRUIT_COST) { setStMsg(`Need ⚡${RECRUIT_COST - bal.gcBal} more to recruit someone.`); return; }
+    setStBusy(true);
+    const key = user.name.toLowerCase();
+    const id = "r" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const rosterNames = roster.map((u) => u.name.toLowerCase());
+    const next = await updateStation((cur) => {
+      const list = stationRecruits(cur);
+      if (list.length >= MAX_RECRUITS) return cur;
+      const taken = new Set([...list.map((r) => String(r.name).toLowerCase()), ...rosterNames]);
+      const pool = RECRUIT_NAMES.filter((n) => !taken.has(n.toLowerCase()));
+      const name = pool.length ? pool[Math.floor(Math.random() * pool.length)] : "Crew " + (list.length + 1);
+      // the colour the fewest people aboard already wear
+      const worn = {}; [...roster.filter((u) => !u.test).map((u) => u.color), ...list.map((r) => r.color)].forEach((c) => { worn[c] = (worn[c] || 0) + 1; });
+      const color = PLAYER_COLORS.slice().sort((x, y) => (worn[x] || 0) - (worn[y] || 0))[0];
+      return { ...(cur || {}), recruits: [...list, { id, name, color, by: key, at: Date.now() }] };
+    });
+    setStBusy(false);
+    const mine = next && stationRecruits(next).find((r) => r.id === id);
+    if (!mine) { setStMsg("The dock is full — no bunks for anyone else right now."); return; }
+    const w = { ...prog.wallet, gcSpent: (prog.wallet.gcSpent || 0) + RECRUIT_COST,
+      purchases: [ledgerRow({ id: "station_recruit", emoji: "👩‍🚀", name: `Recruit · ${mine.name}` }, RECRUIT_COST), ...(prog.wallet.purchases || [])].slice(0, 120) };
+    const np = { ...prog, wallet: w };
+    setProg(np); saveProgress(user.name, np);
+    setStation(next); setStSel(null); setStTalk(null);
+    const before = floorsFor(crew.length), after = floorsFor(crew.length + 1);
+    setStMsg(`${mine.name.toUpperCase()} has come aboard!` + (after > before ? ` Floor ${after} is open.` : ""));
+    playKaching();
+  }
+  // Dad's reset: the rooms go, the crew stay — recruits cost real coins
+  async function clearStation() {
+    setStBusy(true);
+    const next = await updateStation((cur) => ({ ...(cur || {}), grid: {} }));
+    setStBusy(false);
+    if (next) setStation(next);
+    setStSel(null); setStTalk(null);
+    setStMsg("Every room is cleared. The crew are still aboard.");
+  }
+
   async function fuelRocket(amt) {
     if (!user || !prog || !rocket || rocket.status !== "fueling") return;
     const key = user.name.toLowerCase();
@@ -2596,7 +2773,7 @@ export default function AutoMathtics() {
                 if (adminLocked(security)) { setPin(""); return; }
                 if (pin === ADMIN_PIN) {
                   adminUnlocked();
-                  setDraft({ ...settings }); setSettingsSaved(false); setScreen("admin");
+                  setDraft(draftWithNavScales(settings)); setSettingsSaved(false); setStMsg(null); setScreen("admin");
                   setRk((f) => ({ ...f, crew: f.crew.length ? f.crew : roster.filter((u) => !u.test).map((u) => u.name.toLowerCase()) }));
                   Promise.all(roster.map((u) => loadProgress(u.name))).then((ps) => {
                     const m = {}; roster.forEach((u, i) => { m[u.name.toLowerCase()] = ps[i]; }); setAdminKids(m);
@@ -2630,26 +2807,43 @@ export default function AutoMathtics() {
             Slide to shrink each player's per-question time. 100% = the built-in time,
             70% means a 50-second question becomes 35 seconds. Applies instantly on every device.
           </p>
+          <p style={{ ...st.subtle, textAlign: "left", margin: "-6px 0 14px" }}>
+            Each player has one slider per track: ⚙️ Engine sums and 🧭 Navigator word problems are
+            timed separately, so reading time can be generous while the drills stay tight.
+          </p>
           {roster.map((u) => {
-            const key = u.name.toLowerCase() + "Scale";
-            const val = Math.min(100, Math.max(10, draft[key] ?? 100));
-            const baseNow = secondsFor(0, 3, u.mult);
+            const engKey = u.name.toLowerCase() + "Scale";
+            const engVal = Math.min(100, Math.max(10, draft[engKey] ?? 100));
             return (
               <div key={u.name} style={{ textAlign: "left", margin: "0 0 18px", padding: "12px 14px", background: "#0B0E23", border: `1.5px solid ${u.color}`, borderRadius: 12 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
                   <img src={u.avatar} alt="" style={{ width: 34, height: 34, borderRadius: "50%", objectFit: "cover", border: `2px solid ${u.color}` }} />
                   <b style={{ color: u.color, fontFamily: "'Orbitron', sans-serif", letterSpacing: 1 }}>{u.name.toUpperCase()}</b>
-                  <span style={{ marginLeft: "auto", fontFamily: "Consolas, monospace", fontWeight: 800, fontSize: 20, color: u.color }}>{val}%</span>
                 </div>
-                <input
-                  type="range" min={10} max={100} step={5} value={val}
-                  onChange={(e) => setDraft({ ...draft, [key]: parseInt(e.target.value, 10) })}
-                  style={{ width: "100%", accentColor: u.color }}
-                  aria-label={`${u.name} time percentage`}
-                />
-                <div style={{ ...st.subtle, textAlign: "left", marginTop: 4 }}>
-                  example: a {baseNow}s question becomes <b style={{ color: u.color }}>{Math.max(5, Math.round(baseNow * val / 100))}s</b>
-                </div>
+                {["engine", "nav"].map((t) => {
+                  const T = TRACKS[t];
+                  // Navigator falls back to Engine for a player added since the panel was opened
+                  const key = t === "nav" ? u.name.toLowerCase() + "ScaleNav" : engKey;
+                  const val = t === "nav" ? Math.min(100, Math.max(10, draft[key] ?? engVal)) : engVal;
+                  const baseNow = t === "nav" ? navSecondsFor(0, 3, u.mult) : secondsFor(0, 3, u.mult);
+                  return (
+                    <div key={t} style={{ marginBottom: t === "nav" ? 0 : 12 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                        <span style={{ fontSize: 11, letterSpacing: 2, color: T.color, fontFamily: "'Orbitron', sans-serif" }}>{T.emoji} {T.name}</span>
+                        <span style={{ marginLeft: "auto", fontFamily: "Consolas, monospace", fontWeight: 800, fontSize: 18, color: T.color }}>{val}%</span>
+                      </div>
+                      <input
+                        type="range" min={10} max={100} step={5} value={val}
+                        onChange={(e) => setDraft({ ...draft, [key]: parseInt(e.target.value, 10) })}
+                        style={{ width: "100%", accentColor: T.color }}
+                        aria-label={`${u.name} ${T.label} time percentage`}
+                      />
+                      <div style={{ ...st.subtle, textAlign: "left", marginTop: 2 }}>
+                        example: a {baseNow}s {t === "nav" ? "word problem" : "sum"} becomes <b style={{ color: T.color }}>{Math.max(5, Math.round(baseNow * val / 100))}s</b>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             );
           })}
@@ -2666,7 +2860,7 @@ export default function AutoMathtics() {
               </div>
             ))}
             <div style={{ ...st.logTitle, margin: "10px 0 6px", color: "#FFB020" }}>➕ ADDED PLAYERS</div>
-            {((settings && settings.players) || []).length === 0 && <div style={{ ...st.subtle, textAlign: "left" }}>none yet — players added from the selection screen appear here, with their own time slider, log, PIN reset and manual update above</div>}
+            {((settings && settings.players) || []).length === 0 && <div style={{ ...st.subtle, textAlign: "left" }}>none yet — players added from the selection screen appear here, with their own pair of time sliders, log, PIN reset and manual update above</div>}
             {((settings && settings.players) || []).map((p) => (
               <div key={"ap" + p.name} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", background: "#0B0E23", border: `1px dashed ${p.color || "#2A3170"}`, borderRadius: 12, marginBottom: 8 }}>
                 <span style={{ fontSize: 22 }}>{p.emoji}</span>
@@ -2827,6 +3021,23 @@ export default function AutoMathtics() {
                 )}
               </>
             )}
+          </div>
+
+          <div style={{ textAlign: "left", margin: "0 0 16px" }}>
+            <div style={{ ...st.logTitle, marginBottom: 6, color: "#35E0FF" }}>🛰️ FAMILY STATION</div>
+            <label style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13.5, fontWeight: 700, color: "#EAF2FF", cursor: "pointer" }}>
+              <input type="checkbox" checked={draft.station !== false} onChange={(e) => setDraft({ ...draft, station: e.target.checked })} />
+              show the station on the home screen
+            </label>
+            <div style={{ ...st.subtle, textAlign: "left" }}>
+              One station for the whole family. Everyone on the roster is crew for free; a recruit costs ⚡{RECRUIT_COST}{" "}
+              and a room ⚡{ROOM_COST}, both from that kid's own coins. Every two crew open another floor. Right now:
+              {" "}{crew.length} crew, {stationUsed(station)} room{stationUsed(station) === 1 ? "" : "s"} built,
+              {" "}{stationRecruits(station).length} hired.
+            </div>
+            <button style={{ ...st.tinyBtn, marginTop: 8, color: "#FF3B5C", borderColor: "#FF3B5C" }} disabled={stBusy || stationUsed(station) === 0}
+              onClick={() => { if (window.confirm("Clear every room off the station? The crew stay aboard. Coins already spent on rooms stay spent.")) clearStation(); }}>🧹 clear every room</button>
+            {stMsg && <span style={{ fontSize: 12.5, fontWeight: 700, color: "#2DFFB3", marginLeft: 8 }} className="pop2">{stMsg}</span>}
           </div>
 
           <label style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: "center", fontSize: 14, fontWeight: 700, color: "#EAF2FF", margin: "4px 0 14px", cursor: "pointer" }}>
@@ -3013,9 +3224,29 @@ export default function AutoMathtics() {
                 </div>
               );
             })()}
+            {stationOn && (
+              <button
+                onClick={() => { setStMsg(null); setScreen("station"); }}
+                style={{ display: "block", width: "100%", textAlign: "left", cursor: "pointer", margin: "14px 0 0", padding: "10px 12px", borderRadius: 12, background: "#0B0E23", border: "1.5px solid #35E0FF", boxShadow: "0 0 14px rgba(53,224,255,.22)" }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 11, letterSpacing: 2, color: "#35E0FF", fontFamily: "'Orbitron', sans-serif" }}>🛰️ FAMILY STATION</span>
+                  <span style={{ marginLeft: "auto", fontSize: 10.5, color: "#8A93C9", fontFamily: "Consolas, monospace", fontWeight: 700 }}>{crew.length} crew · {1 + stationUsed(station)} rooms</span>
+                </div>
+                <div className="peek" aria-hidden="true">
+                  {crew.slice(0, 8).map((c) => {
+                    const m = crewMotion(c.id);
+                    return <span key={c.id} className="crew peek-crew" style={{ "--dur": m.dur + "s", "--delay": m.delay + "s", "--from": Math.round(m.from * 1.2) + "%", "--to": Math.min(84, Math.round(m.to * 1.5)) + "%" }}>
+                      <span className="crew-sprite" style={{ backgroundImage: `url(${crewURL(c.color)})`, "--dur": m.dur + "s", "--delay": m.delay + "s" }} />
+                    </span>;
+                  })}
+                </div>
+              </button>
+            )}
             <div style={{ marginTop: 14, display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
               <button style={st.ghostBtn} onClick={() => setScreen("shop")}>🛒 Shop</button>
               <button style={st.ghostBtn} onClick={() => { setMapTrack(track); setScreen("map"); }}>🗺 Map</button>
+              {stationOn && <button style={st.ghostBtn} onClick={() => { setStMsg(null); setScreen("station"); }}>🛰️ Station</button>}
               <button style={st.ghostBtn} onClick={() => openHowTo(false, track)}>📖 How to</button>
               <button style={st.ghostBtn} onClick={() => { setGuideIdx(0); setScreen("guide"); }}>🎓 Guide</button>
             </div>
@@ -3514,6 +3745,108 @@ export default function AutoMathtics() {
         );
       })()}
 
+      {/* ---------- the family station ---------- */}
+      {screen === "station" && user && prog && (() => {
+        const bal = balances(prog);
+        const openSlots = stFloors * ROOMS_PER_FLOOR;
+        // built rooms in slot order, the dock first; the crew spread themselves across them
+        const rooms = [0, ...PLOT_SLOTS.filter((i) => i > 0 && stGrid[String(i)])];
+        const crewIn = {};
+        crew.forEach((c, k) => { const r = rooms[k % rooms.length]; (crewIn[r] = crewIn[r] || []).push(c); });
+        const selCell = stSel != null ? (stSel === 0 ? { id: "dock" } : stGrid[String(stSel)]) : null;
+        const selMod = selCell ? stationModule(selCell.id) : null;
+        const building = stSel != null && stSel > 0 && stSel < openSlots && !stGrid[String(stSel)];
+        const nextFloor = stFloors < STATION_FLOORS ? crewNeededFor(stFloors) : 0;
+        const say = stMsg ? stMsg
+          : stTalk ? `${stTalk.name.toUpperCase()}: "${stTalk.line}"`
+            : building ? `Choose a room for floor ${Math.floor(stSel / ROOMS_PER_FLOOR) + 1}. Rooms cost ⚡${ROOM_COST}.`
+              : selMod ? `${selMod.name.toUpperCase()} — ${selMod.blurb}.` + (selCell.by ? ` Built by ${(roster.find((u) => u.name.toLowerCase() === selCell.by) || { name: selCell.by }).name}.` : "")
+                : `${crew.length} crew aboard, ${rooms.length} room${rooms.length === 1 ? "" : "s"}. Tap + to build.` + (nextFloor ? ` Floor ${stFloors + 1} opens at ${nextFloor} crew.` : "");
+        return (
+          <div style={st.card} className="screen">
+            <div style={st.kicker}>🛰️ FAMILY STATION</div>
+            <h1 style={{ ...st.title, fontSize: 22 }}>THE STATION</h1>
+            <div style={{ display: "flex", justifyContent: "center", gap: 14, fontSize: 12.5, color: "#EAF2FF", fontWeight: 700, marginTop: 6, fontFamily: "Consolas, monospace" }}>
+              <span>👩‍🚀 {crew.length} crew</span><span>🚪 {rooms.length} rooms</span><span style={{ color: "#FFB020" }}>⚡ {bal.gcBal}</span>
+            </div>
+
+            <div className="shelter" role="group" aria-label="the station, floor by floor">
+              {Array.from({ length: STATION_FLOORS }, (_, f) => {
+                const open = f < stFloors;
+                return (
+                  <div key={f} className={"floor" + (open ? "" : " floor-locked")}>
+                    <div className="lift" aria-hidden="true"><span className="lift-car" /></div>
+                    {Array.from({ length: ROOMS_PER_FLOOR }, (_, sl) => {
+                      const i = f * ROOMS_PER_FLOOR + sl;
+                      const cell = i === 0 ? { id: "dock" } : open ? stGrid[String(i)] : null;
+                      const mod = cell ? stationModule(cell.id) : null;
+                      const here = crewIn[i] || [];
+                      if (mod) return (
+                        <div key={i} className={"room room-built" + (stSel === i ? " room-sel" : "")} role="button" tabIndex={0}
+                          aria-label={`${mod.name}, floor ${f + 1}${here.length ? `, ${here.map((c) => c.name).join(" and ")} inside` : ""}`}
+                          onClick={() => { setStMsg(null); setStTalk(null); setStSel(stSel === i ? null : i); }}
+                          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setStMsg(null); setStTalk(null); setStSel(stSel === i ? null : i); } }}>
+                          <span className="room-name">{mod.name}</span>
+                          <img className="room-kit" src={spriteURL(mod.id)} alt="" draggable="false" />
+                          {here.slice(0, 4).map((c) => {
+                            const m = crewMotion(c.id);
+                            return (
+                              <button key={c.id} className="crew" type="button" title={c.name}
+                                style={{ "--dur": m.dur + "s", "--delay": m.delay + "s", "--from": m.from + "%", "--to": m.to + "%" }}
+                                onClick={(e) => { e.stopPropagation(); setStMsg(null); setStSel(null); setStTalk({ name: c.name, line: CREW_LINES[Math.floor(Math.random() * CREW_LINES.length)] }); }}>
+                                <i className="crew-name">{c.name}</i>
+                                <span className="crew-sprite" style={{ backgroundImage: `url(${crewURL(c.color)})`, "--dur": m.dur + "s", "--delay": m.delay + "s" }} />
+                              </button>
+                            );
+                          })}
+                        </div>
+                      );
+                      if (open) return (
+                        <button key={i} className={"room room-empty" + (stSel === i ? " room-sel" : "")} type="button" disabled={stBusy}
+                          aria-label={`empty spot, floor ${f + 1} — build here`}
+                          onClick={() => { setStMsg(null); setStTalk(null); setStSel(stSel === i ? null : i); }}>+</button>
+                      );
+                      return (
+                        <div key={i} className="room room-locked" aria-label={sl === 1 ? `floor ${f + 1} opens at ${crewNeededFor(f)} crew` : undefined}>
+                          {sl === 1 ? `NEEDS ${crewNeededFor(f)} CREW` : ""}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="gbbox gbsay" role="status">{say}</div>
+
+            {building && (
+              <div className="gbbox gbmenu">
+                {STATION_MODULES.map((m) => (
+                  <button key={m.id} className="gbitem" type="button" disabled={stBusy} onClick={() => buildRoom(stSel, m.id)}>
+                    <span className="gbcur" aria-hidden="true">{"\u00a0"}</span>
+                    <img src={spriteURL(m.id)} alt="" draggable="false" />
+                    <span className="gbname">{m.name.toUpperCase()}</span>
+                  </button>
+                ))}
+                <button className="gbitem" type="button" onClick={() => setStSel(null)}>
+                  <span className="gbcur" aria-hidden="true">{"\u00a0"}</span><span className="gbname">CANCEL</span>
+                </button>
+              </div>
+            )}
+
+            <button className="gbbtn" type="button" disabled={stBusy} onClick={recruitCrew}>RECRUIT CREW · ⚡{RECRUIT_COST}</button>
+
+            <div style={{ ...st.subtle, textAlign: "left" }}>
+              One station for the whole family, live on every device. Everyone who plays is crew, so a friend
+              joining the game is a new pair of hands aboard — or hire one. Every two crew open another floor.
+            </div>
+            <div style={{ marginTop: 14 }}>
+              <button style={st.ghostBtn} onClick={() => { setStSel(null); setStTalk(null); setStMsg(null); setScreen("home"); }}>Back</button>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* ---------- restore from save code ---------- */}
       {screen === "restore" && user && (
         <div style={st.card} className="screen">
@@ -3839,7 +4172,7 @@ body { min-height: 100vh; margin: 0; background: #07091A; overflow-x: hidden; }
 body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; text-rendering: optimizeLegibility; }
 button { -webkit-tap-highlight-color: transparent; transition: transform .22s cubic-bezier(.2,.8,.2,1), filter .22s ease, box-shadow .22s ease, background-color .22s ease, border-color .22s ease, opacity .22s ease; }
 @media (hover: hover) and (pointer: fine) {
-  button:not(.player-card):not(:disabled):hover { transform: translateY(-1px); filter: brightness(1.1) saturate(1.05); }
+  button:not(.player-card):not(.room):not(.crew):not(.gbitem):not(.gbbtn):not(:disabled):hover { transform: translateY(-1px); filter: brightness(1.1) saturate(1.05); }
 }
 /* every screen glides in instead of snapping — the class is on each screen's root, and each root
    only mounts when its screen is shown, so a screen change is exactly one run of this */
@@ -4290,7 +4623,72 @@ body { background: #07091A; }
 @keyframes crateShake { 0%,100% { transform: rotate(0); } 20% { transform: rotate(-14deg); } 40% { transform: rotate(12deg); } 60% { transform: rotate(-10deg); } 80% { transform: rotate(8deg); } }
 @keyframes cratePop { from { transform: scale(.2); opacity: 0; } 70% { transform: scale(1.3); opacity: 1; } to { transform: scale(1); opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .crate-item, .crate-name { opacity: 1; } }
-/* add-player + guide */
+/* ---------- the family station: a cross-section, Fallout Shelter style, drawn in pixels ---------- */
+/* Floors stack down from the dock; a lift shaft runs down the left; every room is a lit box with its
+   kit sprite on the right and the crew pacing along the floor in front of it. Sprites are 16×16
+   data-URL PNGs scaled up hard — no smoothing anywhere, or the pixels go soft. */
+.shelter { width: 100%; max-width: 340px; margin: 12px auto 10px; padding: 3px; background: #0B1020; border: 3px solid #0B1020; box-shadow: 0 0 0 3px #3E4F82; }
+.floor { display: flex; gap: 3px; height: 64px; margin-bottom: 3px; }
+.floor:last-child { margin-bottom: 0; }
+.lift { flex: 0 0 18px; position: relative; background: #141B33; box-shadow: inset 0 0 0 1px #3E4F82; }
+.lift-car { position: absolute; left: 3px; right: 3px; bottom: 4px; height: 14px; background: #3E4F82; box-shadow: inset 0 0 0 1px #0B1020; }
+.floor-locked .lift { opacity: .35; }
+.room { flex: 1 1 0; min-width: 0; position: relative; overflow: hidden; border: 0; padding: 0; margin: 0; text-align: left; transition: none; color: #F7F7E8; font: 700 8px 'JetBrains Mono', Consolas, monospace; }
+.room-built { cursor: pointer; background: linear-gradient(#1B2340, #141B33 62%, #0F1426); box-shadow: inset 0 3px 0 #3E4F82, inset 0 -4px 0 #0B1020; }
+.room-built::before { content: ""; position: absolute; left: 22%; right: 22%; top: 4px; height: 2px; background: #F7F7E8; opacity: .55; } /* the ceiling strip light */
+.room-sel { box-shadow: inset 0 0 0 2px #F7F7E8 !important; }
+.room-name { position: absolute; left: 5px; top: 8px; text-transform: uppercase; letter-spacing: .04em; color: #9BE0F7; pointer-events: none; }
+.room-kit { position: absolute; right: 4px; bottom: 7px; width: 28px; height: 28px; image-rendering: pixelated; image-rendering: crisp-edges; pointer-events: none; }
+.room-empty { cursor: pointer; color: #9BE0F7; font-size: 24px; line-height: 1; text-align: center; background: repeating-linear-gradient(45deg, #101828 0 6px, #0D1322 6px 12px); box-shadow: inset 0 0 0 2px #3E4F82; }
+.room-empty:not(:disabled):active { background: #1B2340; }
+.room-locked { display: flex; align-items: center; justify-content: center; text-align: center; color: #3E4F82; font-size: 8px; letter-spacing: .06em; background: repeating-linear-gradient(45deg, #0B1020 0 6px, #0D1322 6px 12px); }
+/* a crew member is a positioned wrapper that paces (left) and a sprite inside that faces the way it
+   walks (a hard flip at each end) and strides (two frames, steps(2)). Two animations on the same
+   clock stay in step; the name rides the wrapper so it never mirrors. */
+.crew { position: absolute; bottom: 5px; left: var(--from, 6%); width: 32px; height: 32px; padding: 0; border: 0; background: transparent; cursor: pointer; transition: none;
+  animation: pace var(--dur, 6s) linear var(--delay, 0s) infinite; }
+.crew-sprite { display: block; width: 32px; height: 32px; background-size: 200% 100%; background-repeat: no-repeat; image-rendering: pixelated; image-rendering: crisp-edges;
+  animation: face var(--dur, 6s) steps(1) var(--delay, 0s) infinite, stride .55s steps(2) infinite; }
+.crew-name { position: absolute; left: 50%; top: -8px; transform: translateX(-50%); font: 700 7px 'JetBrains Mono', Consolas, monospace; font-style: normal; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; color: #F7F7E8; text-shadow: 0 0 2px #0B1020, 0 0 3px #0B1020; pointer-events: none; }
+@keyframes pace { 0%, 100% { left: var(--from, 6%); } 50% { left: var(--to, 60%); } }
+@keyframes face { 0% { transform: scaleX(1); } 50% { transform: scaleX(-1); } 100% { transform: scaleX(1); } }
+@keyframes stride { to { background-position-x: -64px; } }
+.crew:active .crew-sprite { filter: brightness(1.5); }
+@media (prefers-reduced-motion: reduce) { .crew, .crew-sprite { animation: none; } }
+/* the home-screen peek: the crew walking along a strip of dock */
+.peek { position: relative; height: 40px; margin-top: 8px; overflow: hidden; background: linear-gradient(#141B33, #0F1426); box-shadow: inset 0 -3px 0 #0B1020, inset 0 2px 0 #3E4F82; }
+.peek-crew { cursor: inherit; }
+.gbitem img, .stpeek { display: block; image-rendering: pixelated; image-rendering: crisp-edges; }
+
+/* the message box and the part menu are the Pokémon box: white fill, black rule, a grey inner line */
+.gbbox {
+  background: #F7F7E8; color: #0B1020; border: 3px solid #0B1020;
+  box-shadow: inset 0 0 0 2px #F7F7E8, inset 0 0 0 4px #7E8AA8;
+  padding: 10px 12px; margin: 0 auto 10px; max-width: 304px; text-align: left;
+  font: 700 12.5px 'JetBrains Mono', Consolas, monospace; line-height: 1.5;
+}
+.gbsay { min-height: 54px; }
+.gbmenu { display: grid; grid-template-columns: repeat(2, 1fr); gap: 2px 4px; padding: 8px; }
+.gbitem {
+  display: flex; align-items: center; gap: 4px; padding: 3px 2px; cursor: pointer;
+  background: transparent; border: 0; color: #0B1020; text-align: left;
+  font: 700 10px 'JetBrains Mono', Consolas, monospace; letter-spacing: .02em; transition: none;
+}
+.gbitem img { width: 18px; height: 18px; flex: 0 0 18px; }
+.gbcur { width: 9px; flex: 0 0 9px; font-size: 10px; line-height: 1; }
+.gbname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gbitem-on { background: #0B1020; color: #F7F7E8; }
+.gbitem:not(:disabled):active { background: #7E8AA8; }
+.gbbtn {
+  display: block; margin: 0 auto 10px; padding: 7px 14px; cursor: pointer;
+  background: #F7F7E8; color: #0B1020; border: 3px solid #0B1020;
+  box-shadow: inset 0 0 0 2px #F7F7E8, inset 0 0 0 4px #7E8AA8;
+  font: 700 11px 'JetBrains Mono', Consolas, monospace; letter-spacing: .06em; transition: none;
+}
+.gbbtn:active { background: #D64F8F; color: #F7F7E8; }
+.stpeek { width: 22px; height: 22px; }
+
+/* add-player + guide *//* add-player + guide */
 .add-player { position: relative; z-index: 2; margin: 6px auto 4px; padding: 10px 20px; border-radius: 999px; background: rgba(8,10,30,.62); border: 1.5px dashed rgba(138,147,201,.55); color: #EAF2FF; font: 700 13px 'Orbitron', sans-serif; letter-spacing: .08em; cursor: pointer; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
 .add-player:hover { border-style: solid; border-color: #2DFFB3; color: #2DFFB3; box-shadow: 0 0 18px rgba(45,255,179,.35); }
 .pick { cursor: pointer; padding: 0; display: inline-flex; align-items: center; justify-content: center; }

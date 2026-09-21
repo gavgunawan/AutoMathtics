@@ -1,4 +1,4 @@
-# AutoMathtics — source & build notes (v1.14, 2 Sep 2026)
+# AutoMathtics — source & build notes (v1.18, 20 Sep 2026)
 
 The deployed page is `index.html` at the repo root — GitHub Pages serves that one file and nothing else.
 It is **generated**; never hand-edit it. Everything lives in `src/`:
@@ -7,6 +7,7 @@ It is **generated**; never hand-edit it. Everything lives in `src/`:
 | --- | --- |
 | `src/automathtics-src.jsx` | the whole app — React + Firebase, styles, all Stage 1 logic |
 | `src/automathtics-entry.jsx` | the mount |
+| `src/station-art.js` | the station's 16×16 pixel sprites and their palettes |
 | `src/shell-head.html` | HTML shell up to the bundle `<script>`, **including the Firebase config** |
 | `src/shell-tail.html` | closing tags |
 | `build.mjs` | bundles `src/` with esbuild and writes `index.html` |
@@ -27,7 +28,8 @@ and it lives in `src/shell-head.html`.
 
     node harness.mjs     # -> http://localhost:5174
 
-It builds the same app with the Firebase config stripped and the PIN gate off, so it runs local-only
+It copies everything in `src/` (rather than a named list that goes stale the next time the app grows
+a module) and builds the same app with the Firebase config stripped and the PIN gate off, so it runs local-only
 (the player-selection screen says so) and reads/writes nothing but `localStorage`. Seed a state from
 the browser console with
 `localStorage.setItem('kumon-progress:<name>', JSON.stringify({level, paper, bossCleared, history, wallet}))`
@@ -43,6 +45,18 @@ before the jump to the next sector (`trackDone`, `jumpTo`):
 | --- | --- | --- | --- | --- |
 | ⚙️ ENGINE — arithmetic drills | the original `paper` / `bossCleared` | 5 sums | 25 questions | 25 s per question |
 | 🧭 NAVIGATOR — word & logic | `prog.nav = { paper, bossCleared }` | 3 word problems | 15 questions, under ten minutes | 50 s per question |
+
+### One time slider per track (v2.4)
+
+The admin panel gives every player **two** sliders, not one: `<name>Scale` is Engine's (the original
+key, unchanged) and `<name>ScaleNav` is Navigator's. `scaleFor(name, track)` reads the pair and
+Navigator **falls back to the Engine value** whenever `<name>ScaleNav` is absent, so a family that set
+70% before the split still reads and drills at 70% until someone moves the new slider. Nothing seeds
+`<name>ScaleNav` into `DEFAULT_SETTINGS` — a default there would hand Navigator 100% and silently undo
+that setting. Opening the panel runs the draft through `draftWithNavScales`, which copies Engine's
+value into the missing Navigator key so the two sliders are independent from the first drag; the next
+Save writes both. Question time is still `base × kid pace × scale`, with Engine's base from
+`secondsFor` and Navigator's from `navSecondsFor` (50 s + 5 s per sector + 5 s per tier).
 
 Each track has its **own sector** (v2.1): Engine's is `p.level`, Navigator's is `p.nav.level`, which
 starts at A for everyone. `canJump(p, t)`: a track that has finished its sector jumps on once the other
@@ -65,6 +79,46 @@ the real-world comparisons. A question is `{ display: { layout: "word", text, ch
 and `read` is spoken aloud by the browser (`speak`, 🔊 in the status row). Fuzz the generators with
 `node node_modules/.harness/navfuzz.mjs`-style checks before changing templates.
 
+## The family station (v2.7)
+
+A cross-section, Fallout Shelter style: floors stacked down from the dock, three rooms to a floor, a
+lift shaft down the left, and the crew walking about inside. One station the whole family builds, at
+`kumon/station`: `{ grid: { "<slot>": { id, by, at } }, recruits: [{ id, name, color, by, at }] }`,
+slot = floor × 3 + position; slot 0 is the dock, built into every station and never stored. Shared
+like the rocket — `updateStation` wraps every write in a `runTransaction`, so two kids building at the
+same moment can't clobber each other — and `subscribeStation` keeps every device live.
+
+**The crew is what makes it grow.** Everyone on the roster is crew for free, so "get a friend to join"
+(the add-player wizard) is literally how the family gets more hands aboard; `recruitCrew` hires an
+NPC (`RECRUIT_NAMES`, the colour fewest people are wearing) for `RECRUIT_COST` ⚡. Floors unlock by
+head-count — `floorsFor(n)` is one floor plus one for every two crew, so two kids start with one
+floor and the first recruit or friend opens the second. Rooms (`STATION_MODULES`, six kinds) cost
+`ROOM_COST` ⚡. Both are paid from that kid's own ledger exactly like a shop buy or rocket fuel:
+`gcSpent` up, a `purchases` row, saved — spent is spent, never refunded, which is why nothing can be
+sold back. Dad's "clear every room" in the admin panel drops the rooms and keeps the crew.
+
+The crew spread themselves across the built rooms in slot order (dock first); each is the one
+astronaut in `src/station-art.js` (`CREW_FRAMES`, legs apart / legs together — the whole Game Boy
+walk) recoloured through `crewURL(color)`, the way a GBC game recolours one sprite for every trainer.
+A crew member is a positioned wrapper that paces (`left`, from `crewMotion(id)`, hashed from the id
+so a re-render never restarts anyone's walk) with a sprite inside that faces the way it walks (a hard
+`steps(1)` flip at each end) and strides (`steps(2)` over a 32×16 two-frame strip). Tap anyone to
+hear a line from `CREW_LINES`.
+
+Rooms and the kit inside them are the 16×16 sprites: 16 strings of 16 characters, `.` transparent,
+`0`–`3` indexing that sprite's own four-colour palette. `spriteURL(name)` paints one once onto a
+canvas and caches the data URL; **no image files** ship and `index.html` stays the only thing the
+site serves. `checkSprites()` returns every row that isn't 16 characters — a typo shows as a torn
+tile, so run it after editing the tables. The message box and menus are the Pokémon box (`.gbbox`):
+white fill, black rule, grey inner line, and the `.gbsay` box under the station always says something
+— who's aboard, what's selected, what to do next — so the layout never jumps.
+
+Interaction is tap-to-build, never drag: `+` on an empty spot opens the room menu for that spot;
+tap a built room to read what it is and who built it; RECRUIT is always one tap away. No timers, no
+callbacks, no "your crops are ready" — a visit should take under a minute and send them back to the
+maths. `settings.station === false` hides the whole feature. Production and a power budget are the
+next version's job.
+
 ## Players
 
 The built-in `USERS` (Allison, Geralt — photo avatars, a pace multiplier) plus anything in
@@ -73,8 +127,8 @@ screen and the admin panel iterate. "➕ Add player" on the selection screen run
 (`validPlayerName` — 2–12 alphanumerics, not a reserved name, not taken), icon, colour → PIN twice →
 `createPlayer` writes the roster entry to settings and a `newPlayerProgress` (paper 1, empty
 history, PIN) to the player's own node, enters them, and shows the quick guide (`GUIDE_SLIDES`; also
-"🎓 Guide" on the home screen). The name is the storage key exactly as for the built-ins, so time
-scale (`<name>Scale`), log, restore, PIN reset, manual credit and redemptions all just work. Admin
+"🎓 Guide" on the home screen). The name is the storage key exactly as for the built-ins, so both time
+scales (`<name>Scale`, `<name>ScaleNav`), log, restore, PIN reset, manual credit and redemptions all just work. Admin
 "✕ remove" drops the roster entry only — the progress node stays, and adding the same name again
 picks it back up. The admin Save writes `players` from live settings, never from the draft.
 
