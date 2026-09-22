@@ -1114,9 +1114,8 @@ function renderMatrix() {
 
 function renderQueue() {
   const sec = $("queueSec"), box = $("queue");
-  const show = S.isOwner || S.canWrite !== false;
-  sec.hidden = !show;
-  if (!show) return;
+  sec.hidden = false;
+  sec.querySelector("h2").textContent = S.isOwner ? "Antrean review owner" : "Perlu diperbaiki";
   box.textContent = "";
   const found = [];
   for (let i = 0; i < 21; i++) {
@@ -1139,7 +1138,7 @@ function renderQueue() {
       found.push({ day: k, key: key, task: t, tgt: g, r: r, reasons: reasons });
     }));
   }
-  if (!found.length) { box.appendChild(el("div", "empty", "Tidak ada yang perlu review. Semua bukti lolos pemeriksaan otomatis.")); return; }
+  if (!found.length) { box.appendChild(el("div", "empty", S.isOwner ? "Tidak ada yang perlu review — semua bukti lolos pemeriksaan otomatis." : "Tidak ada bukti yang ditandai. Bagus.")); return; }
   found.slice(0, 40).forEach(f => {
     const hard = f.reasons.some(x => /mirip|tidak cocok|belum/.test(x));
     const it = el("div", "qitem" + (hard ? "" : " warn"));
@@ -1157,7 +1156,7 @@ function renderQueue() {
     mid.lastChild.style.fontWeight = "600";
     f.reasons.slice(0, 3).forEach(x => { const d = el("div", null, x); d.style.color = "var(--muted)"; d.style.fontSize = "12.5px"; mid.appendChild(d); });
     it.appendChild(mid);
-    if (S.canWrite !== false) {
+    if (S.isOwner) {
       const act = el("div", "tact");
       const ok = el("button", "btn tiny", "Saya terima");
       ok.onclick = () => patchItemOn(f.day, f.key, { review: { st: "ok", by: S.me.name || S.me.id, at: Date.now() } });
