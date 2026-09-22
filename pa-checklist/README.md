@@ -125,3 +125,29 @@ re-verification is skipped (the page covers this — whenever it is open and Dri
 allowed for it, it re-runs the three checks on load and every 90 minutes and stores each verdict
 in `items[...].auto`, which the report treats as authoritative), and Naurah's email will not send.
 Attaching **Google Drive** and **Gmail** to the Routine in the claude.ai Routines UI fixes both.
+
+## Giving the PA access
+
+The page declares `db`, `assets` and `mcp`, which makes it **organization-internal** — it cannot
+be shared by public link, and a signed-in visitor from outside the owner's claude.ai organization
+only ever holds `view`, which cannot write. So the PA must be a member of the organization first;
+sharing the URL alone is not enough.
+
+Levels, in the Share menu's words:
+
+| Level | Can tick | Can upload proof | Can accept/reject flags |
+|---|---|---|---|
+| Can view | no | no | no |
+| Can interact | yes | no | no |
+| **Can edit** | yes | **yes** | no |
+| Owner | yes | yes | yes |
+
+Asset upload sits with `admin`, which the Share menu calls **"Can edit"** — so that is the level
+the PA needs, otherwise she can tick but not attach the screenshot that unlocks the tick. Signing
+off flags in the review queue stays owner-only regardless (`user.isOwner()`), so "Can edit" does
+not let her clear findings raised against her own uploads.
+
+She should also connect **Google Drive** in her own claude.ai connector settings: the page's three
+Drive checks run with the viewer's credentials, and they are what keeps the daily report's
+verification alive. The Claude vision checks spend the *viewer's* Claude usage, roughly one quick
+call per screenshot.

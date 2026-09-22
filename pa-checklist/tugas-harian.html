@@ -1330,7 +1330,7 @@ async function boot() {
     banner("Halaman ini menyimpan centang dan bukti di penyimpanan bersama Artifact. Buka lewat tautan claude.ai sambil masuk ke akun yang diberi akses — dari salinan file biasa, isian tidak tersimpan.", "err");
     render(); return;
   }
-  if (!S.assets) banner("Akun ini bisa melihat, tapi tidak bisa mengunggah bukti. Minta owner memberi akses “Can interact” atau lebih.", "ok");
+  if (!S.assets) banner("Akun ini bisa mencentang, tapi belum bisa mengunggah bukti. Minta owner menaikkan akses halaman ini ke “Can edit” lewat menu Share.", "ok");
   else if (!S.images) banner("Pemeriksaan gambar oleh Claude tidak aktif di tampilan ini — bukti tetap tersimpan dan tetap dihitung duplikatnya.", "ok");
 
   await loadHashes();
