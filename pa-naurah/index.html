@@ -784,6 +784,9 @@ function startApp() {
     S.days = snap.val() || {};
     render();
     S.ready = true;
+    if (!(S.days[S.dayKey] || {}).callplan) {
+      queue(() => dupdate(path("days/" + S.dayKey), { dayKey: S.dayKey, callplan: callTimes(S.dayKey) }));
+    }
   }, err => {
     $("banner").hidden = false;
     $("banner").textContent = "Data tidak bisa dimuat: " + (err && err.message ? err.message : "cek koneksi") + ". Muat ulang halaman.";

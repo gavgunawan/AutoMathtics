@@ -1,3 +1,8 @@
+> **Retired.** The live checklist is now the website at `../pa-naurah/`
+> (automathtics.net/pa-naurah). Nothing reads or writes this artifact any more.
+> Kept as the reference implementation of the Claude-vision proof check and the
+> in-page Google Drive verification, neither of which a static page can do.
+
 # Tugas Harian Naurah — daily PA checklist
 
 Live page: <https://claude.ai/artifact/6aUymCDeQnr1tWHDpf8VrV>
