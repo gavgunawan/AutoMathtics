@@ -55,14 +55,19 @@ the row to the owner's queue whether or not it is eventually ticked.
 | Screenshot age | no, flags | `File.lastModified` compared to today (WIB). |
 | Deadline | no, records | Tick time vs the card's WIB deadline; minutes late are stored and shown. |
 | Claude vision | no, flags | The image goes to Claude with the task, the target and today's date. Returns a JSON verdict: right screen, right hotel/platform, what date is visible, what looks wrong. |
-| Google Drive | **can satisfy the tick** | Three cards are checked against the real source instead of a screenshot — see below. |
+| Google Drive | **ticks the row itself** | Cards with a machine-readable source are decided by that source, not by a screenshot — see below. |
 
 The hash index (`hashes/YYYY-MM`) is append-only and outlives the images, so deleting an old
 screenshot does not make it reusable.
 
 ## Hard checks wired to Google Drive
 
-Run from the page via the viewer's own Google Drive connector (`mcp` capability), on a click:
+Run from the page via the viewer's own Google Drive connector (`mcp` capability) — on a click, and
+on the background sweep. A result of `ok` or `late` **ticks the row automatically**, stamped
+`by: "sistem"`, `byName: "Otomatis"`, with `at` set to the time the work actually landed in the
+source rather than the time the check ran. Those rows cannot be ticked or unticked by hand and ask
+for no screenshot: the PA chases the department in person, and the source decides whether it
+happened. A result of `missing` leaves the row open and raises it to the owner.
 
 | Card | Source | Verdict |
 |---|---|---|

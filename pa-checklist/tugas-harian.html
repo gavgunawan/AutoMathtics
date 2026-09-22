@@ -687,6 +687,10 @@ function mcpCopy(code) {
   }
 }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+function msOf(dayKey, mins) {
+  const p = dayKey.split("-").map(Number);
+  return Date.UTC(p[0], p[1] - 1, p[2]) - WIB + mins * 60000;
+}
 async function drive(tool, input) {
   let last;
   for (let i = 0; i < 2; i++) {
@@ -729,8 +733,10 @@ async function checkCompset(k) {
     } else {
       const late = got - toMin(t.at);
       out[t.id] = late > GRACE
-        ? { status: "late", detail: "Diisi " + pad(Math.floor(got / 60)) + ":" + pad(got % 60) + " — telat " + late + " menit.", late: late }
-        : { status: "ok", detail: "Diisi " + pad(Math.floor(got / 60)) + ":" + pad(got % 60) + " WIB." };
+        ? { status: "late", at: msOf(k, got), late: late,
+            detail: "Diisi " + pad(Math.floor(got / 60)) + ":" + pad(got % 60) + " — telat " + late + " menit." }
+        : { status: "ok", at: msOf(k, got),
+            detail: "Diisi " + pad(Math.floor(got / 60)) + ":" + pad(got % 60) + " WIB." };
     }
   });
   return out;
@@ -741,7 +747,7 @@ async function checkDrr(k) {
   const mt = Date.parse(r.modifiedTime || "");
   if (isNaN(mt)) return { x: { status: "unknown", detail: "Waktu ubah sheet DRR tidak terbaca." } };
   const d = dayOfMs(mt);
-  if (d === k) return { x: { status: "ok", detail: "Sheet “DRR 2026” diubah " + clockOf(mt) + " WIB hari ini." } };
+  if (d === k) return { x: { status: "ok", at: mt, detail: "Sheet “DRR 2026” diubah " + clockOf(mt) + " WIB hari ini." } };
   return { x: { status: "missing", detail: "Sheet “DRR 2026” belum diubah hari ini. Terakhir: " + longDate(d) + " " + clockOf(mt) + " WIB." } };
 }
 
@@ -765,8 +771,8 @@ async function checkVoucher(k) {
     if (dayOfMs(t) > k) late++;
   });
   const tail = "Folder \u201c" + dName + "\u201d: " + files.length + " file" + (last ? ", upload terakhir " + clockOf(last) + " WIB" : "") + ".";
-  if (late) return { x: { status: "late", detail: tail + " " + late + " file baru masuk setelah lewat tengah malam." } };
-  return { x: { status: "ok", detail: tail } };
+  if (late) return { x: { status: "late", at: last || undefined, detail: tail + " " + late + " file baru masuk setelah lewat tengah malam." } };
+  return { x: { status: "ok", at: last || undefined, detail: tail } };
 }
 
 const CHECKERS = { compset: checkCompset, drr: checkDrr, voucher: checkVoucher };
@@ -788,7 +794,17 @@ async function runAuto(task) {
   for (const t of task.targets) {
     const r = all || res[t.id];
     if (!r) continue;
-    await patchItem(keyFor(task, t), { auto: { status: r.status, detail: r.detail, at: stamp } });
+    const key = keyFor(task, t);
+    const patch = { auto: { status: r.status, detail: r.detail, at: stamp, late: r.late || 0 } };
+    // Naurah mengejar di lapangan; yang dinilai adalah hasilnya di sumber data.
+    // Kalau datanya sudah ada, baris dicentang atas nama sistem — bukan atas namanya.
+    if ((r.status === "ok" || r.status === "late") && !rec(key).done) {
+      patch.done = true;
+      patch.at = r.at || stamp;
+      patch.by = "sistem";
+      patch.byName = "Otomatis";
+    }
+    await patchItem(key, patch);
   }
   render();
 }
@@ -979,6 +995,7 @@ function buildRow(task, tgt) {
   const why = blocked(task, tgt, r);
   tick.disabled = !!why && !r.done;
   if (r.done && !isToday()) tick.disabled = true;
+  if (autoPass(r)) { tick.disabled = true; tick.title = "Diputuskan dari sumber datanya, bukan dari centang"; }
   tick.onclick = () => toggle(task, tgt);
   row.appendChild(tick);
 
@@ -1022,7 +1039,7 @@ function buildRow(task, tgt) {
   });
   act.appendChild(thumbs);
 
-  if (isToday() && S.assets && S.canWrite !== false && (r.proofs || []).length < 4) {
+  if (isToday() && S.assets && S.canWrite !== false && !autoPass(r) && (r.proofs || []).length < 4) {
     const lab2 = el("label", "btn tiny");
     lab2.textContent = (r.proofs || []).length ? "+ bukti" : "Bukti";
     const inp = el("input"); inp.type = "file"; inp.accept = "image/png,image/jpeg,image/webp,image/gif"; inp.hidden = true;
