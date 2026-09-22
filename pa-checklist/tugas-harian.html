@@ -325,19 +325,45 @@ const SRC = {
   compsetSheet: "1ZpHDyyUUeoRF49NSpy2a3pjVvWmhzFHwLhdBdn74j7E",  // "FORM COMPSET OAKTREE (Responses)"
   voucherRoot:  "1onknt6wyijvZ7C3KJwcYtU4RoStCbPiv"              // folder "VERSE CIREBON"
 };
-const GRACE = 30;   // menit toleransi keterlambatan slot compset
-
-/* ============================== tugas ============================== */
 const HOTELS = [
   { id: "oaktree", label: "OAK Tree Urban" },
   { id: "cirebon", label: "Verse Cirebon" },
   { id: "lite",    label: "Verse Lite" },
   { id: "luxe",    label: "Verse Luxe" }
 ];
+const GRACE = 30;   // menit toleransi keterlambatan slot compset
 
+/* Jam test call diacak tiap hari, tapi diturunkan dari tanggalnya — jadi semua
+   yang membuka halaman melihat jam yang sama, dan memuat ulang tidak mengubahnya.
+   Tiap unit jatuh di pita waktu yang berbeda, dan pita itu ditukar-tukar tiap hari
+   supaya FO tidak bisa menghafal "kami selalu ditelepon pagi". */
+const BANDS = [[420, 630], [630, 870], [870, 1110], [1110, 1320]];
+function hash32(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return h >>> 0;
+}
+const _calls = {};
+function callTimes(dayKey) {
+  if (_calls[dayKey]) return _calls[dayKey];
+  const order = HOTELS.map(h => h.id);
+  let h = hash32("band|" + dayKey);
+  for (let i = order.length - 1; i > 0; i--) {
+    h = hash32(String(h));
+    const j = h % (i + 1), t = order[i]; order[i] = order[j]; order[j] = t;
+  }
+  const out = {};
+  order.forEach((id, i) => {
+    const b = BANDS[i], m = b[0] + hash32("jam|" + dayKey + "|" + id) % (b[1] - b[0]);
+    out[id] = pad(Math.floor(m / 60)) + ":" + pad(m % 60);
+  });
+  return (_calls[dayKey] = out);
+}
+
+/* ============================== tugas ============================== */
 const TASKS = [
   {
-    id: "compset", due: "01:00", span: "01.00 → 21.00", tier: "auto", auto: "compset",
+    id: "compset", due: "21:00", slots: 6, tier: "auto", auto: "compset",
     title: "FO isi form compset",
     sub: "6× sehari: 01.00, 09.00, 11.00, 14.00, 17.00, 21.00 WIB",
     sys: "Timestamp tiap slot dibaca langsung dari sheet jawaban Google Form (Oak Tree) — slot kosong dan menit keterlambatan dihitung otomatis.",
@@ -362,9 +388,9 @@ const TASKS = [
     targets: [{ id: "x", label: "DRR harian terkirim ke owner" }]
   },
   {
-    id: "kitchen", due: "11:00", tier: "ai",
+    id: "kitchen", due: "20:30", tier: "ai",
     title: "Video call Bu Endah — dapur bersih & clear",
-    sub: "Konfirmasi lewat video call, bukan chat",
+    sub: "Setelah dapur closing — konfirmasi lewat video call, bukan chat",
     sys: "Log panggilan dibaca: nama kontak, jenis panggilan (video), tanggal dan durasi.",
     mine: "Apakah dapurnya benar-benar bersih sesuai standar Anda. Foto membantu, tapi sudut foto dipilih orang.",
     hint: "a WhatsApp call log or in-call screen showing a VIDEO call with a contact, including the date and the call duration",
@@ -375,7 +401,7 @@ const TASKS = [
     ]
   },
   {
-    id: "bincard", due: "12:00", tier: "ai",
+    id: "bincard", due: "21:00", tier: "ai",
     title: "Bincard",
     sub: "Verse Luxe (bar & kitchen) + Oak Tree",
     sys: "Screenshot dibaca: apakah benar kartu stok/bincard, outlet mana, ada tanggal hari ini dan ada baris mutasi.",
@@ -388,7 +414,7 @@ const TASKS = [
     ]
   },
   {
-    id: "bnl", due: "15:00", tier: "ai",
+    id: "bnl", due: "22:00", tier: "ai",
     title: "Upload log prices Bookandlink",
     sub: "Per hotel, per tipe kamar",
     sys: "Screenshot dibaca: apakah halaman Bookandlink, hotel mana, apakah beberapa tipe kamar terlihat, apakah tanggalnya hari ini.",
@@ -397,7 +423,7 @@ const TASKS = [
     targets: HOTELS.map(h => ({ id: h.id, label: h.label, sub: "semua tipe kamar terlihat" }))
   },
   {
-    id: "ar", due: "17:00", tier: "ai",
+    id: "ar", due: "13:00", tier: "ai",
     title: "AR update semua hotel",
     sub: "Account receivable per hotel",
     sys: "Screenshot dibaca: apakah layar AR/jurnal, hotel mana, tanggalnya.",
@@ -415,16 +441,16 @@ const TASKS = [
     targets: [{ id: "x", label: "Update kunci Oak Tree" }]
   },
   {
-    id: "testcall", due: "20:00", tier: "ai", noteRequired: true,
-    title: "Test call FO",
-    sub: "Telepon ke FO, catat hasilnya",
-    sys: "Log panggilan dibaca: tanggal dan durasi. Catatan hasil wajib diisi sebelum bisa dicentang.",
+    id: "testcall", due: "07:00", random: true, retry: true, tier: "ai", noteRequired: true,
+    title: "Test call acak ke FO",
+    sub: "4 unit, jam diacak tiap hari — 2× kalau tidak diangkat",
+    sys: "Jam dibangkitkan dari tanggalnya, jadi tidak bisa diatur sendiri dan tidak bisa dihafal FO. Log panggilan dibaca untuk tanggal dan durasi. Tandai “tidak diangkat” dan baris menuntut bukti panggilan kedua sebelum bisa dicentang.",
     mine: "Isi percakapannya — greeting, product knowledge, sikap. Hanya Anda yang bisa menilai ini.",
     hint: "a phone call log screen showing an outgoing call with its date, time and duration",
-    targets: [{ id: "x", label: "Test call ke FO", sub: "tulis hasilnya di catatan" }]
+    targets: HOTELS.map(h => ({ id: h.id, label: h.label, sub: "tulis hasilnya di catatan" }))
   },
   {
-    id: "sosmed", due: "21:00", tier: "ai",
+    id: "sosmed", due: "11:00", tier: "ai",
     title: "Cek IG, TikTok & WA hotel",
     sub: "Semua pesan dibalas — terutama enquiry event",
     sys: "Screenshot dibaca: apakah layar inbox platform yang benar, dan apakah masih ada badge/pesan belum dibaca.",
@@ -437,7 +463,7 @@ const TASKS = [
     ]
   },
   {
-    id: "ota", due: "21:00", tier: "ai",
+    id: "ota", due: "16:00", tier: "ai",
     title: "Pesan OTA ter-respond ≤ 2 jam",
     sub: "Booking.com, Trip.com, Tiket.com, Agoda",
     sys: "Screenshot dibaca: apakah inbox extranet yang benar, apakah ada thread belum dibalas, dan jam yang terlihat.",
@@ -451,13 +477,13 @@ const TASKS = [
     ]
   },
   {
-    id: "voucher", due: "23:59", tier: "auto", auto: "voucher", hard: true,
+    id: "voucher", due: "09:00", tier: "auto", auto: "voucher", offset: -1,
     title: "FO input voucher ke folder harian",
-    sub: "Harus masuk sebelum jam 12 malam",
-    sys: "Isi folder Drive hari ini dihitung langsung (Verse Cirebon): jumlah file dan jam uploadnya — file yang masuk lewat tengah malam ketahuan.",
+    sub: "Cek jam 09.00: folder KEMARIN harus sudah lengkap",
+    sys: "Isi folder Drive kemarin dihitung langsung (Verse Cirebon): jumlah file dan jam uploadnya — file yang baru masuk lewat tengah malam ketahuan.",
     mine: "Kelengkapan: apakah SEMUA voucher hari itu masuk. Sistem tahu berapa yang diupload, bukan berapa yang seharusnya.",
     hint: "a Google Drive folder view or a spreadsheet of daily booking vouchers",
-    targets: [{ id: "x", label: "Folder voucher hari ini terisi" }]
+    targets: [{ id: "x", label: "Folder voucher kemarin lengkap", sub: "batasnya tetap sebelum jam 12 malam" }]
   }
 ];
 
@@ -738,7 +764,7 @@ async function checkVoucher(k) {
     if (t > last) last = t;
     if (dayOfMs(t) > k) late++;
   });
-  const tail = files.length + " file" + (last ? ", upload terakhir " + clockOf(last) + " WIB" : "") + ".";
+  const tail = "Folder \u201c" + dName + "\u201d: " + files.length + " file" + (last ? ", upload terakhir " + clockOf(last) + " WIB" : "") + ".";
   if (late) return { x: { status: "late", detail: tail + " " + late + " file baru masuk setelah lewat tengah malam." } };
   return { x: { status: "ok", detail: tail } };
 }
@@ -752,7 +778,7 @@ async function runAuto(task) {
   S.busy[bk] = true; render();
   let res;
   try {
-    res = await CHECKERS[task.auto](S.viewKey);
+    res = await CHECKERS[task.auto](task.offset ? shiftKey(S.viewKey, task.offset) : S.viewKey);
   } catch (e) {
     res = { _all: { status: "error", detail: mcpCopy(e && e.code) } };
   }
@@ -831,6 +857,7 @@ function blocked(task, tgt, r) {
   if (!isToday() || S.canWrite === false) return "kunci";
   if (autoPass(r)) return null;
   if (!hasProof(r)) return "bukti";
+  if (task.retry && r.noanswer && (r.proofs || []).length < 2) return "dua";
   if (task.noteRequired && !(r.note || "").trim()) return "catatan";
   return null;
 }
@@ -838,9 +865,15 @@ const minsOf = ms => { const d = wib(ms); return d.getUTCHours() * 60 + d.getUTC
 
 // Keterlambatan yang berarti: kalau ada pemeriksaan otomatis, yang dihitung adalah kapan
 // pekerjaannya benar-benar masuk di sumbernya — bukan kapan Naurah sempat mencentang.
+function atOf(task, tgt) { return task.random ? callTimes(S.viewKey)[tgt.id] : (tgt.at || task.due); }
+function effMin(task) {
+  if (!task.random) return toMin(task.due);
+  const c = callTimes(S.viewKey);
+  return Math.min.apply(null, task.targets.map(g => toMin(c[g.id])));
+}
 function lateOf(task, tgt, r) {
   if (r.auto) return r.auto.status === "late" ? (r.auto.late || 1) : 0;
-  if (r.done && r.at != null) return Math.max(0, minsOf(r.at) - toMin(tgt.at || task.due));
+  if (r.done && r.at != null) return Math.max(0, minsOf(r.at) - toMin(atOf(task, tgt)));
   return 0;
 }
 
@@ -962,9 +995,11 @@ function buildRow(task, tgt) {
     if (r.byName) chips.appendChild(chip(r.byName));
   } else if (tgt.optional) {
     chips.appendChild(chip("opsional"));
-  } else if (!r.auto && isToday() && nowMins() > toMin(tgt.at || task.due)) {
-    chips.appendChild(chip("lewat " + (tgt.at || task.due), "warn"));
+  } else if (!r.auto && isToday() && nowMins() > toMin(atOf(task, tgt))) {
+    chips.appendChild(chip("lewat " + atOf(task, tgt), "warn"));
   }
+  if (task.random) chips.appendChild(chip("jam " + atOf(task, tgt), r.done ? "" : "acc"));
+  if (r.noanswer) chips.appendChild(chip("tidak diangkat — perlu 2 bukti", "bad"));
   if (r.auto) {
     const m = { ok: "ok", late: "warn", missing: "bad", unknown: "", error: "" };
     chips.appendChild(chip("Drive: " + ({ ok: "terverifikasi", late: "telat", missing: "belum ada", unknown: "tak terbaca", error: "gagal" }[r.auto.status] || r.auto.status), m[r.auto.status]));
@@ -994,6 +1029,11 @@ function buildRow(task, tgt) {
     inp.onchange = e => { const f = e.target.files && e.target.files[0]; e.target.value = ""; if (f) onPick(task, tgt, f); };
     lab2.appendChild(inp);
     act.appendChild(lab2);
+  }
+  if (task.retry && isToday() && S.canWrite !== false) {
+    const na = el("button", "btn tiny", r.noanswer ? "Diangkat kok" : "Tidak diangkat");
+    na.onclick = () => patchItem(k, { noanswer: !r.noanswer });
+    act.appendChild(na);
   }
   row.appendChild(act);
 
@@ -1029,14 +1069,11 @@ function buildRow(task, tgt) {
 function buildCard(task) {
   const card = el("div", "card"), inner = el("div", "cardin");
   const rail = el("div", "rail");
-  rail.appendChild(el("div", "t", task.span ? task.span.split(" ")[0] : task.due));
-  rail.appendChild(el("div", "z", "WIB"));
-  if (task.cadence) {
-    const n = weekCount(task);
-    rail.appendChild(el("div", "cad", n + "/" + task.cadence + " minggu ini"));
-  } else if (task.span) {
-    rail.appendChild(el("div", "cad", "6 slot"));
-  }
+  rail.appendChild(el("div", "t", task.random ? "acak" : task.due));
+  rail.appendChild(el("div", "z", task.random ? "DIUNDI HARIAN" : "WIB"));
+  if (task.cadence) rail.appendChild(el("div", "cad", weekCount(task) + "/" + task.cadence + " minggu ini"));
+  else if (task.slots) rail.appendChild(el("div", "cad", task.slots + " slot"));
+  else if (task.random) rail.appendChild(el("div", "cad", task.targets.length + " unit"));
   inner.appendChild(rail);
 
   const body = el("div", "body");
@@ -1100,7 +1137,7 @@ function renderMatrix() {
   const head = el("div", "mxr mxh");
   ["Tugas", "Diperiksa sistem", "Anda cek sendiri"].forEach(h => head.appendChild(el("div", null, h)));
   m.appendChild(head);
-  TASKS.forEach(t => {
+  TASKS.slice().sort((a, b) => effMin(a) - effMin(b)).forEach(t => {
     const r = el("div", "mxr");
     const a = el("div"); a.appendChild(el("div", "nm", t.title));
     a.appendChild(el("div", null, ({ auto: "otomatis dari sumbernya", ai: "screenshot dibaca Claude", manual: "manual" })[t.tier]));
@@ -1132,6 +1169,7 @@ function renderQueue() {
         });
         if (p.ai && p.ai.st === "bad") reasons.push("Claude: " + (p.ai.kata || "tidak cocok"));
       });
+      if (r.noanswer) reasons.push("hotel tidak mengangkat telepon \u2014 " + ((r.proofs || []).length > 1 ? "dicoba 2\u00d7" : "percobaan kedua belum ada"));
       if (r.auto && r.auto.status === "missing" && !r.done) reasons.push(r.auto.detail);
       if (r.auto && r.auto.status === "late") reasons.push(r.auto.detail);
       if (!reasons.length) return;
@@ -1192,7 +1230,7 @@ function render() {
   if (!isToday()) $("lockedNote").textContent = "Hari ini hanya bisa dilihat. Centang dan bukti hanya bisa diisi pada tanggal berjalan — " + longDate(S.dayKey) + ".";
 
   const board = $("board"); board.textContent = "";
-  TASKS.forEach(t => board.appendChild(buildCard(t)));
+  TASKS.slice().sort((a, b) => effMin(a) - effMin(b)).forEach(t => board.appendChild(buildCard(t)));
   renderHistory(); renderMatrix(); renderQueue();
 
   if (noteKey) {
@@ -1210,6 +1248,7 @@ async function toggle(task, tgt) {
     alert({
       bukti: "Unggah bukti screenshot dulu — centang baru terbuka setelah ada bukti.",
       catatan: "Isi dulu catatan hasilnya.",
+      dua: "Tidak diangkat \u2014 perlu bukti 2\u00d7 percobaan panggilan sebelum bisa dicentang.",
       kunci: "Hari ini sudah terkunci."
     }[why] || "Belum bisa dicentang.");
     return;
@@ -1225,6 +1264,19 @@ function banner(msg, cls) {
 }
 
 const useCap = n => (window.claude && window.claude.use) ? window.claude.use(n).catch(() => null) : Promise.resolve(null);
+
+function ensureCallPlan() {
+  if (!S.db || !isToday() || S.canWrite === false) return;
+  if ((S.days[S.dayKey] || {}).callplan) return;
+  const ref = dayRef(S.dayKey);
+  queue(async () => {
+    const snap = await ref.get();
+    if (snap.exists && (snap.data() || {}).callplan) return;
+    const body = { callplan: callTimes(S.dayKey) };
+    if (!snap.exists) { body.dayKey = S.dayKey; body.createdAt = new Date().toISOString(); await ref.set(body); }
+    else await ref.update(body);
+  });
+}
 
 async function autoSweep() {
   if (!S.mcp || !S.db || !isToday()) return;
@@ -1285,7 +1337,7 @@ async function boot() {
   S.unsub = S.db.collection("days").orderBy("dayKey", "desc").limit(21).onSnapshot(
     snap => {
       const m = {}; snap.docs.forEach(d => { m[d.id] = d.data() || {}; }); S.days = m; render();
-      if (!S.swept) { S.swept = true; autoSweep(); setInterval(autoSweep, 5400000); }
+      if (!S.swept) { S.swept = true; ensureCallPlan(); autoSweep(); setInterval(autoSweep, 5400000); }
     },
     err => { banner(err && err.code === "revoked" ? "Akses ke data halaman ini dicabut. Muat ulang setelah akses dipulihkan."
                                                   : "Data tidak bisa dimuat sekarang. Muat ulang halaman.", "err"); }

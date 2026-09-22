@@ -10,11 +10,43 @@ falls back to the read-only "belum tersambung" state.
 
 ## What it does
 
-One page, eleven duty cards ordered by their WIB deadline, 29 required pieces of proof a day.
-A box cannot be ticked until proof exists for it. The day rolls at **midnight Asia/Jakarta**
-and past days become read-only — there is no way to fill in yesterday.
+One page, eleven duty cards sorted by their WIB deadline, **32 required pieces of proof a day**.
+A box cannot be ticked until proof exists for it. The day rolls at **midnight Asia/Jakarta** and
+earlier days become read-only — there is no way to fill in yesterday.
+
+| WIB | Card | Rows |
+|---|---|---|
+| 09:00 | FO input voucher ke folder harian — checks **yesterday's** folder | 1 |
+| 10:00 | Laporan owner DRR | 1 |
+| 11:00 | Cek IG, TikTok & WA hotel | 3 |
+| 13:00 | AR update semua hotel | 4 |
+| 16:00 | Pesan OTA ter-respond ≤ 2 jam | 4 |
+| 17:00 | Kunci Oak Tree (2× per week) | 1 |
+| acak | Test call acak ke FO — 4 units, random time each | 4 |
+| 20:30 | Video call Bu Endah — dapur bersih | 1 (+1 optional photo) |
+| 21:00 | FO isi form compset — 6 slots at 01:00…21:00 | 6 |
+| 21:00 | Bincard — Luxe bar, Luxe kitchen, Oak Tree | 3 |
+| 22:00 | Upload log prices Bookandlink | 4 |
+
+Two of these deadlines are interpretations worth knowing. **Compset at 21:00** is the card's
+deadline — all six slots chased by 9pm; the individual slot times stay at 01:00/09:00/11:00/
+14:00/17:00/21:00 because those are what the Google Form's own timestamps are measured against.
+**Voucher at 09:00** must mean the previous day's folder, since today's vouchers do not exist at
+9am; the rule that a file created after midnight is late is unchanged, just pointed one day back.
+
+### Random test calls
+
+`callTimes(dayKey)` gives each of the four units a time drawn from an FNV-1a hash of the date, so
+every viewer sees the same times, a reload does not reroll them, and nobody can nudge them. Each
+unit sits in a different band — 07:00–10:30, 10:30–14:30, 14:30–18:30, 18:30–22:00 — and which
+unit lands in which band is shuffled daily, so FO cannot learn "we always get called in the
+morning". The draw is written to `days/<date>.callplan` so the morning report can judge lateness.
+
+**Tidak diangkat** on a row demands a *second* call-attempt proof before the tick opens, and sends
+the row to the owner's queue whether or not it is eventually ticked.
 
 ## How proof is verified
+
 
 | Layer | Blocks the tick? | What it does |
 |---|---|---|
@@ -77,17 +109,19 @@ artifact URL — that is how the daily report reads them.
 
 ## Daily report
 
-Routine `trig_01CYzfsFJ3wb1B1Xv4JQsVZa` — "Laporan harian checklist Naurah", `0 0 * * *`
-UTC = **07:00 WIB daily**, fresh session each fire, delivered by push notification and email.
-It reports on the previous WIB day.
+Routine `trig_01CYzfsFJ3wb1B1Xv4JQsVZa` — "Laporan harian checklist Naurah", `0 0 * * *` UTC =
+**07:00 WIB daily**, fresh session each fire. Reports on the previous WIB day.
+
+Delivered to the owner by push notification and email, and emailed to **pa.versehotels@gmail.com**
+without the CEK SENDIRI section (that list is the owner's) plus a line on what to chase first.
 
 It reads the `days` document, re-verifies against Drive where it can, writes its findings to
-`audit/<YYYY-MM-DD>` so there is a trail independent of anyone ticking anything, and reports
-under four headings: TIDAK BERES, TELAT, BELUM ADA BUKTI, CEK SENDIRI.
+`audit/<YYYY-MM-DD>` so there is a trail independent of anyone ticking anything, and reports under
+four headings: TIDAK BERES, TELAT, BELUM ADA BUKTI, CEK SENDIRI.
 
-Routines created through the API cannot carry connector grants on this organization, so the
-fired session may have no Google Drive access of its own. The page covers this: whenever it is
-open and Drive has already been allowed for it, it re-runs the three Drive checks in the
-background (on load, then every 90 minutes) and stores each verdict in `items[...].auto`. The
-report treats those stored verdicts as authoritative. To make the report verify Drive itself
-as well, attach the Google Drive connector to the Routine from the claude.ai Routines UI.
+**Routines created through the API cannot carry connector grants on this organization**, so the
+fired session may have no Google Drive and no Gmail of its own. Two consequences: the Drive
+re-verification is skipped (the page covers this — whenever it is open and Drive has already been
+allowed for it, it re-runs the three checks on load and every 90 minutes and stores each verdict
+in `items[...].auto`, which the report treats as authoritative), and Naurah's email will not send.
+Attaching **Google Drive** and **Gmail** to the Routine in the claude.ai Routines UI fixes both.
