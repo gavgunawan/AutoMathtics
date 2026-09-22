@@ -471,7 +471,7 @@ const S = {
   me: { id: null, name: "" },
   dayKey: todayKey(), viewKey: todayKey(),
   days: {}, hashes: {},
-  busy: {}, storage: null, unsub: null
+  busy: {}, storage: null, unsub: null, swept: false
 };
 const $ = id => document.getElementById(id);
 const isToday = () => S.viewKey === S.dayKey;
@@ -1226,6 +1226,23 @@ function banner(msg, cls) {
 
 const useCap = n => (window.claude && window.claude.use) ? window.claude.use(n).catch(() => null) : Promise.resolve(null);
 
+async function autoSweep() {
+  if (!S.mcp || !S.db || !isToday()) return;
+  const perms = await useCap("permissions");
+  if (!perms) return;
+  let st = "unavailable";
+  try { st = await perms.state("mcp:Google Drive"); } catch (_) { return; }
+  if (st !== "granted") return;                 // biarkan tombol yang meminta izin
+  const items = (S.days[S.dayKey] || {}).items || {};
+  for (const t of TASKS) {
+    if (!t.auto) continue;
+    const r = items[keyFor(t, t.targets[0])] || {};
+    const fresh = r.auto && r.auto.at && (Date.now() - r.auto.at) < 5400000;
+    if (fresh) continue;
+    await runAuto(t);
+  }
+}
+
 async function boot() {
   render(); tickClock();
   setInterval(tickClock, 1000);
@@ -1266,7 +1283,10 @@ async function boot() {
 
   await loadHashes();
   S.unsub = S.db.collection("days").orderBy("dayKey", "desc").limit(21).onSnapshot(
-    snap => { const m = {}; snap.docs.forEach(d => { m[d.id] = d.data() || {}; }); S.days = m; render(); },
+    snap => {
+      const m = {}; snap.docs.forEach(d => { m[d.id] = d.data() || {}; }); S.days = m; render();
+      if (!S.swept) { S.swept = true; autoSweep(); setInterval(autoSweep, 5400000); }
+    },
     err => { banner(err && err.code === "revoked" ? "Akses ke data halaman ini dicabut. Muat ulang setelah akses dipulihkan."
                                                   : "Data tidak bisa dimuat sekarang. Muat ulang halaman.", "err"); }
   );

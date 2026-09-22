@@ -61,3 +61,33 @@ pruning of old days.
 Task titles, deadlines, targets, the AI prompt hint (`hint`), and the two columns of the
 verification matrix (`sys` = what the system checks, `mine` = what the owner must check) are
 all in the `TASKS` array. Edit, then republish the same file path to the URL above.
+
+## Where the data lives
+
+Nothing is written to Google Drive. The page only *reads* Drive.
+
+- **Screenshots** → the Artifact's own asset store, served back at `/_blob/<id>`. They are not
+  in Drive, not in the repo, and not in any chat.
+- **Ticks, timestamps, Claude verdicts, Drive verdicts, flags, owner decisions** → the
+  Artifact's `db` (see the layout above).
+
+Both are scoped to this one artifact and readable only by accounts the artifact is shared
+with. From a Claude session they are reachable with the `ArtifactData` tool against the
+artifact URL — that is how the daily report reads them.
+
+## Daily report
+
+Routine `trig_01CYzfsFJ3wb1B1Xv4JQsVZa` — "Laporan harian checklist Naurah", `0 0 * * *`
+UTC = **07:00 WIB daily**, fresh session each fire, delivered by push notification and email.
+It reports on the previous WIB day.
+
+It reads the `days` document, re-verifies against Drive where it can, writes its findings to
+`audit/<YYYY-MM-DD>` so there is a trail independent of anyone ticking anything, and reports
+under four headings: TIDAK BERES, TELAT, BELUM ADA BUKTI, CEK SENDIRI.
+
+Routines created through the API cannot carry connector grants on this organization, so the
+fired session may have no Google Drive access of its own. The page covers this: whenever it is
+open and Drive has already been allowed for it, it re-runs the three Drive checks in the
+background (on load, then every 90 minutes) and stores each verdict in `items[...].auto`. The
+report treats those stored verdicts as authoritative. To make the report verify Drive itself
+as well, attach the Google Drive connector to the Routine from the claude.ai Routines UI.
