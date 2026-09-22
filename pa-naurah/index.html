@@ -1,0 +1,846 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#07091A" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Tugas Naurah" />
+<meta name="robots" content="noindex, nofollow" />
+<title>Tugas Harian Naurah — AutoMathtics</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%230B0E23'/><text x='50' y='72' font-size='58' text-anchor='middle'>✅</text></svg>" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600;700&family=Orbitron:wght@500;600;700;800;900&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet" />
+<style>
+:root{
+  --void:#0B0E23; --deep:#07091A;
+  --line:#2A3170; --line2:#3A4490;
+  --cyan:#35E0FF; --magenta:#FF2DA8; --violet:#8A5CFF;
+  --gold:#FFB020; --green:#2DFFB3; --red:#FF3B5C;
+  --txt:#EAF2FF; --dim:#8A93C9;
+  --head:'Orbitron','Rajdhani',sans-serif;
+  --body:'Rajdhani','Trebuchet MS',Verdana,sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,monospace;
+  --card:linear-gradient(155deg, rgba(16,20,46,.96), rgba(10,13,34,.94));
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--deep)}
+body{
+  min-height:100vh; color:var(--txt); font-family:var(--body); font-size:16px; line-height:1.45;
+  background:
+    radial-gradient(circle at 16% 12%, rgba(255,45,168,.16), transparent 29%),
+    radial-gradient(circle at 84% 18%, rgba(53,224,255,.14), transparent 31%),
+    radial-gradient(circle at 52% 96%, rgba(138,92,255,.12), transparent 35%),
+    linear-gradient(145deg,#07091A 0%,#0B0E23 48%,#080A1C 100%);
+  background-attachment:fixed;
+  padding:env(safe-area-inset-top,0) 0 env(safe-area-inset-bottom,0);
+  overflow-x:hidden; -webkit-text-size-adjust:100%;
+}
+h1,h2,h3{margin:0;font-family:var(--head);letter-spacing:.04em;text-wrap:balance}
+button{font:inherit;color:inherit;cursor:pointer}
+:focus-visible{outline:2px solid var(--cyan);outline-offset:2px;border-radius:8px}
+[hidden]{display:none!important}
+.wrap{max-width:660px;margin:0 auto;padding:16px}
+
+/* ---------------- PIN gate ---------------- */
+#gate{min-height:100vh;display:grid;place-items:center;padding:24px 16px}
+.gatecard{
+  background:var(--card); border:1px solid var(--line); border-radius:22px;
+  padding:34px 26px; width:100%; max-width:360px; text-align:center;
+  box-shadow:0 22px 70px rgba(0,0,0,.5), 0 0 40px rgba(53,224,255,.08), inset 0 1px 0 rgba(255,255,255,.04);
+}
+.kicker{font-family:var(--head);font-size:10px;letter-spacing:.22em;color:var(--dim);font-weight:700}
+.gatecard h1{font-size:19px;color:var(--cyan);margin:6px 0 2px}
+.gatesub{font-size:13.5px;color:var(--dim);margin-bottom:20px}
+.dots{display:flex;gap:11px;justify-content:center;margin:4px 0 16px}
+.dots i{
+  width:16px;height:16px;border-radius:50%;border:2px solid var(--cyan);
+  background:transparent;transition:background .12s, box-shadow .12s;
+}
+.dots i.on{background:var(--cyan);box-shadow:0 0 10px var(--cyan)}
+.dots.err i{border-color:var(--red)} .dots.err i.on{background:var(--red);box-shadow:0 0 10px var(--red)}
+.pad{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-top:6px}
+.pad button{
+  background:var(--void); border:1.5px solid var(--line); border-radius:12px;
+  padding:14px 0; font-family:var(--mono); font-size:20px; font-weight:600; color:var(--txt);
+}
+.pad button:active{background:#141A45;border-color:var(--cyan)}
+.pad .wide{grid-column:span 1;font-size:15px;color:var(--dim);font-family:var(--body)}
+.gatemsg{min-height:22px;margin-top:12px;font-size:13px;font-weight:700;color:var(--red)}
+
+/* ---------------- header ---------------- */
+.top{
+  position:sticky; top:0; z-index:30; backdrop-filter:blur(14px);
+  background:linear-gradient(180deg, rgba(7,9,26,.96), rgba(7,9,26,.82));
+  border-bottom:1px solid var(--line);
+  padding-top:env(safe-area-inset-top,0);
+}
+.topin{max-width:660px;margin:0 auto;padding:12px 16px 11px}
+.brandrow{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.brandrow h1{font-size:17px;color:var(--cyan)}
+.dateline{font-family:var(--head);font-size:12.5px;font-weight:600;color:var(--txt);margin-top:3px}
+.clock{font-family:var(--mono);font-size:11.5px;color:var(--dim);font-variant-numeric:tabular-nums}
+.lockin{font-family:var(--mono);font-size:11px;color:var(--gold)}
+
+/* progress meter */
+.meter{margin-top:10px;position:relative;height:16px;border-radius:999px;background:#10143A;border:1px solid var(--line);overflow:hidden}
+.meter i{
+  display:block;height:100%;width:0;border-radius:999px;
+  background:linear-gradient(90deg,var(--violet),var(--cyan) 55%,var(--green));
+  box-shadow:0 0 18px rgba(53,224,255,.55); transition:width .45s cubic-bezier(.2,.8,.2,1);
+}
+.meter b{
+  position:absolute;inset:0;display:grid;place-items:center;
+  font-family:var(--mono);font-size:10.5px;font-weight:700;color:var(--txt);
+  text-shadow:0 1px 3px rgba(4,6,26,.95), 0 0 6px rgba(4,6,26,.8);letter-spacing:.04em;
+}
+.metarow{display:flex;gap:6px 14px;flex-wrap:wrap;margin-top:8px;font-family:var(--mono);font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums}
+.metarow b{color:var(--txt);font-weight:700}
+
+/* streak + bonus */
+.rewards{display:flex;gap:10px;margin-top:11px;flex-wrap:wrap}
+.pill{
+  flex:1 1 150px; background:var(--card); border:1px solid var(--line); border-radius:14px;
+  padding:9px 12px; min-width:0;
+}
+.pill.hot{border-color:var(--gold);box-shadow:0 0 22px rgba(255,176,32,.2)}
+.pill .lab{font-family:var(--head);font-size:9px;letter-spacing:.16em;color:var(--dim);font-weight:700}
+.pill .val{font-family:var(--head);font-size:17px;font-weight:800;color:var(--gold);margin-top:2px}
+.pill .note{font-size:11.5px;color:var(--dim);margin-top:1px;line-height:1.3}
+.segs{display:flex;gap:3px;margin-top:6px}
+.segs i{flex:1;height:5px;border-radius:2px;background:#1A1F4D}
+.segs i.on{background:var(--green);box-shadow:0 0 7px rgba(45,255,179,.6)}
+.segs i.brk{background:var(--red)}
+
+/* ---------------- cards ---------------- */
+.sec{font-family:var(--head);font-size:10.5px;letter-spacing:.18em;color:var(--dim);font-weight:700;margin:22px 0 9px}
+.card{
+  background:var(--card); border:1px solid var(--line); border-radius:16px;
+  margin-bottom:11px; overflow:hidden;
+  box-shadow:0 14px 44px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.035);
+}
+.card.done{border-color:rgba(45,255,179,.4)}
+.chead{display:flex;align-items:flex-start;gap:11px;padding:13px 15px 0}
+.tmark{
+  font-family:var(--mono);font-size:13px;font-weight:700;color:var(--cyan);
+  background:#10143A;border:1px solid var(--line);border-radius:8px;padding:4px 8px;
+  flex:none;font-variant-numeric:tabular-nums;letter-spacing:-.02em;
+}
+.tmark.rnd{color:var(--magenta);border-color:rgba(255,45,168,.45)}
+.ctitle{flex:1;min-width:0}
+.ctitle h3{font-size:15.5px;color:var(--txt);letter-spacing:.01em}
+.ctitle p{margin:2px 0 0;font-size:13px;color:var(--dim)}
+.rows{padding:10px 15px 14px}
+.row{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;padding:9px 0;border-bottom:1px solid rgba(42,49,112,.55)}
+.row:last-child{border-bottom:0;padding-bottom:0}
+.tick{
+  width:30px;height:30px;flex:none;border-radius:9px;border:2px solid var(--line2);
+  background:#0D1233;display:grid;place-items:center;font-size:15px;line-height:1;color:transparent;
+  transition:background .14s,border-color .14s,box-shadow .14s;
+}
+.tick[aria-checked="true"]{background:var(--green);border-color:var(--green);color:#042016;box-shadow:0 0 16px rgba(45,255,179,.5)}
+.tick:disabled{opacity:.4;cursor:not-allowed}
+.rlab{font-size:14.5px;font-weight:600}
+.rlab small{display:block;font-weight:500;font-size:12px;color:var(--dim)}
+.chips{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}
+.chip{font-family:var(--mono);font-size:10px;padding:2px 7px;border-radius:999px;background:#10143A;border:1px solid var(--line);color:var(--dim);white-space:nowrap}
+.chip.ok{color:var(--green);border-color:rgba(45,255,179,.45)}
+.chip.warn{color:var(--gold);border-color:rgba(255,176,32,.45)}
+.chip.bad{color:var(--red);border-color:rgba(255,59,92,.45)}
+.chip.acc{color:var(--cyan);border-color:rgba(53,224,255,.45)}
+.act{display:flex;align-items:center;gap:7px;flex:none}
+.thumbs{display:flex;gap:5px}
+.thumb{width:34px;height:34px;border-radius:7px;overflow:hidden;border:1px solid var(--line2);background:#10143A;padding:0;display:block}
+.thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.btn{background:var(--void);color:var(--cyan);border:1.5px solid var(--cyan);border-radius:10px;padding:6px 11px;font-family:var(--head);font-size:11px;font-weight:700;letter-spacing:.06em;white-space:nowrap}
+.btn:active{background:#141A45}
+.btn.mute{color:var(--dim);border-color:var(--line)}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.note{grid-column:1/-1;margin-top:6px;width:100%;background:#0D1233;border:1px solid var(--line);border-radius:10px;padding:8px 10px;font:inherit;font-size:13.5px;color:var(--txt);resize:vertical;min-height:40px}
+.mine{margin-top:11px;padding-left:10px;border-left:2px solid var(--violet);font-size:12px;color:var(--dim);line-height:1.45}
+.mine b{font-family:var(--head);font-size:9.5px;letter-spacing:.14em;color:var(--violet)}
+
+/* auto section */
+.autocard{background:var(--card);border:1px dashed var(--line2);border-radius:16px;padding:13px 15px;margin-bottom:11px}
+.autocard h3{font-size:14.5px;color:var(--cyan)}
+.autocard p{margin:4px 0 0;font-size:12.5px;color:var(--dim)}
+
+/* history */
+.hgrid{display:flex;gap:5px;flex-wrap:wrap}
+.hcell{width:40px;border:1px solid var(--line);border-radius:9px;background:#0D1233;padding:6px 0 5px;text-align:center}
+.hcell.cur{border-color:var(--cyan);box-shadow:0 0 0 1px var(--cyan)}
+.hcell .hd{font-family:var(--mono);font-size:9.5px;color:var(--dim)}
+.hcell .hn{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--txt);font-variant-numeric:tabular-nums}
+.hcell .hb{height:4px;border-radius:2px;margin:4px 5px 0;background:#1A1F4D}
+
+.banner{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--gold);border-radius:12px;padding:11px 14px;margin-bottom:14px;font-size:13.5px;color:var(--dim)}
+.banner b{color:var(--txt)}
+
+/* burst overlay */
+#burst{position:fixed;inset:0;pointer-events:none;z-index:80}
+#burst span{position:absolute;font-size:24px;will-change:transform,opacity}
+@keyframes fly{to{transform:translate(var(--dx),var(--dy)) rotate(var(--rot));opacity:0}}
+#toast{
+  position:fixed;left:50%;bottom:calc(22px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);
+  z-index:85;background:var(--void);border:1.5px solid var(--gold);border-radius:14px;
+  padding:11px 18px;font-family:var(--head);font-size:13px;font-weight:700;color:var(--gold);
+  box-shadow:0 0 30px rgba(255,176,32,.35);max-width:90vw;text-align:center;
+}
+#lightbox{position:fixed;inset:0;z-index:90;background:rgba(4,6,20,.92);display:grid;place-items:center;padding:20px}
+#lightbox img{max-width:100%;max-height:82vh;border-radius:10px;display:block}
+#lbmeta{font-family:var(--mono);font-size:11px;color:var(--dim);margin-top:10px;text-align:center;max-width:560px}
+@media (max-width:460px){
+  .row{grid-template-columns:auto 1fr}
+  .act{grid-column:2;justify-content:flex-start;margin-top:3px}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+
+<div id="gate">
+  <div class="gatecard">
+    <div class="kicker">AUTOMATHTICS · OPS</div>
+    <h1>TUGAS HARIAN</h1>
+    <div class="gatesub">Masukkan PIN untuk membuka checklist</div>
+    <div class="dots" id="dots"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="pad" id="pad"></div>
+    <div class="gatemsg" id="gatemsg"></div>
+  </div>
+</div>
+
+<div id="app" hidden>
+  <header class="top">
+    <div class="topin">
+      <div class="brandrow">
+        <h1>TUGAS HARIAN</h1>
+        <div class="clock" id="clock">--:--:-- WIB</div>
+      </div>
+      <div class="dateline" id="dateline">—</div>
+      <div class="meter"><i id="meterfill"></i><b id="meterlabel">0%</b></div>
+      <div class="metarow" id="metarow"></div>
+      <div class="rewards">
+        <div class="pill" id="streakPill">
+          <div class="lab">STREAK</div>
+          <div class="val" id="streakVal">—</div>
+          <div class="note" id="streakNote"></div>
+        </div>
+        <div class="pill" id="bonusPill">
+          <div class="lab">BONUS 2 MINGGU</div>
+          <div class="val">Rp 2.000.000</div>
+          <div class="note" id="bonusNote"></div>
+          <div class="segs" id="bonusSegs"></div>
+        </div>
+      </div>
+      <div class="metarow" style="margin-top:8px"><span class="lockin" id="lockin"></span></div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div class="banner" id="banner" hidden></div>
+    <div id="board"></div>
+    <div class="sec">DICEK OTOMATIS DARI SHEET</div>
+    <div id="autoboard"></div>
+    <div class="sec">RIWAYAT 14 HARI</div>
+    <div class="hgrid" id="hgrid"></div>
+    <div style="height:40px"></div>
+  </main>
+</div>
+
+<div id="burst"></div>
+<div id="toast" hidden></div>
+<div id="lightbox" hidden><div><img id="lbimg" alt="Bukti" /><div id="lbmeta"></div></div></div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
+import { getAuth, signInWithEmailAndPassword, setPersistence, browserLocalPersistence, onAuthStateChanged }
+  from "https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
+import { getDatabase, ref as dref, get as dget, update as dupdate, onValue, query, orderByKey, limitToLast }
+  from "https://www.gstatic.com/firebasejs/12.18.0/firebase-database.js";
+import { getStorage, ref as sref, uploadBytes, getDownloadURL }
+  from "https://www.gstatic.com/firebasejs/12.18.0/firebase-storage.js";
+
+/* Sama dengan konfigurasi yang dipakai game — proyek Firebase-nya satu. */
+const FB = {
+  apiKey: "AIzaSyBED-NDwWrpPZRVZgu1QkIxJIS1wr4GpxA",
+  authDomain: "automathtics.firebaseapp.com",
+  databaseURL: "https://automathtics-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "automathtics",
+  storageBucket: "automathtics.firebasestorage.app",
+  messagingSenderId: "960131323657",
+  appId: "1:960131323657:web:d2bb30c8ac9b5e8c6265d8"
+};
+/* PIN-nya BUKAN disimpan di halaman ini. PIN yang diketik dipakai sebagai password
+   Firebase untuk akun di bawah, jadi PIN salah = tidak dapat token = tidak dapat data
+   sama sekali. Mengintip source halaman tidak memberi apa pun. */
+const ACCOUNT = "pa-naurah@automathtics.app";
+const ROOT = "pa/naurah";
+
+const app = initializeApp(FB);
+const auth = getAuth(app), db = getDatabase(app), store = getStorage(app);
+
+/* ============================ waktu WIB ============================ */
+const WIB = 7 * 3600 * 1000;
+const wib = t => new Date((t == null ? Date.now() : t) + WIB);
+const keyOf = d => d.toISOString().slice(0, 10);
+const todayKey = () => keyOf(wib());
+const pad = n => String(n).padStart(2, "0");
+const nowMins = () => { const d = wib(); return d.getUTCHours() * 60 + d.getUTCMinutes(); };
+const minsOf = ms => { const d = wib(ms); return d.getUTCHours() * 60 + d.getUTCMinutes(); };
+const toMin = s => { const p = s.split(":"); return (+p[0]) * 60 + (+p[1]); };
+const clockOf = ms => pad(wib(ms).getUTCHours()) + ":" + pad(wib(ms).getUTCMinutes());
+const dayOfMs = ms => keyOf(wib(ms));
+const HARI = ["Minggu","Senin","Selasa","Rabu","Kamis","Jumat","Sabtu"];
+const HARI3 = ["Min","Sen","Sel","Rab","Kam","Jum","Sab"];
+const BLN = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
+const dtOf = k => { const p = k.split("-").map(Number); return new Date(Date.UTC(p[0], p[1] - 1, p[2])); };
+const longDate = k => { const p = k.split("-").map(Number); return HARI[dtOf(k).getUTCDay()] + ", " + p[2] + " " + BLN[p[1] - 1] + " " + p[0]; };
+const shiftKey = (k, n) => { const d = dtOf(k); d.setUTCDate(d.getUTCDate() + n); return keyOf(d); };
+const durTxt = ms => { const m = Math.max(0, Math.floor(ms / 60000)); return Math.floor(m / 60) + "j " + pad(m % 60) + "m"; };
+
+/* ======================= suara arcade (WebAudio) ======================= */
+let actx = null;
+function ac() {
+  try {
+    if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+    if (actx.state === "suspended") actx.resume();
+    return actx;
+  } catch (e) { return null; }
+}
+function tone(freq, at, dur, type, vol) {
+  const c = ac(); if (!c) return;
+  const o = c.createOscillator(), g = c.createGain();
+  o.type = type; o.frequency.setValueAtTime(freq, c.currentTime + at);
+  g.gain.setValueAtTime(0.0001, c.currentTime + at);
+  g.gain.exponentialRampToValueAtTime(vol, c.currentTime + at + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, c.currentTime + at + dur);
+  o.connect(g); g.connect(c.destination);
+  o.start(c.currentTime + at); o.stop(c.currentTime + at + dur + 0.05);
+}
+// ka-ching: dua lonceng tinggi beruntun plus kilau di atasnya
+function playCoin() {
+  tone(1244.5, 0,     0.11, "triangle", 0.22);
+  tone(1864.7, 0.055, 0.20, "triangle", 0.20);
+  tone(2489.0, 0.075, 0.26, "sine",     0.09);
+  tone(932.3,  0.045, 0.16, "sine",     0.07);
+}
+function playJackpot() {
+  [523.3, 659.3, 784.0, 1046.5, 1318.5, 1568.0].forEach((f, i) => tone(f, i * 0.075, 0.30, "triangle", 0.20));
+  tone(2093, 0.50, 0.55, "sine", 0.13);
+}
+function playThud() { tone(160, 0, 0.16, "sine", 0.16); }
+
+function burst(x, y, big) {
+  const box = document.getElementById("burst"), chars = big ? ["💰","🪙","✨","💵","⭐"] : ["🪙","✨","🪙"];
+  for (let i = 0; i < (big ? 22 : 8); i++) {
+    const s = document.createElement("span");
+    s.textContent = chars[i % chars.length];
+    s.style.left = x + "px"; s.style.top = y + "px";
+    s.style.setProperty("--dx", (Math.random() * 240 - 120) + "px");
+    s.style.setProperty("--dy", (-120 - Math.random() * 220) + "px");
+    s.style.setProperty("--rot", (Math.random() * 720 - 360) + "deg");
+    s.style.animation = "fly " + (0.75 + Math.random() * 0.5) + "s cubic-bezier(.15,.7,.3,1) forwards";
+    box.appendChild(s);
+    setTimeout(() => s.remove(), 1400);
+  }
+}
+let toastT = null;
+function toast(msg, ms) {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.hidden = false;
+  clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, ms || 3200);
+}
+
+/* ============================== tugas ============================== */
+const HOTELS = [
+  { id: "oaktree", label: "OAK Tree Urban" },
+  { id: "cirebon", label: "Verse Cirebon" },
+  { id: "lite",    label: "Verse Lite" },
+  { id: "luxe",    label: "Verse Luxe" }
+];
+const BANDS = [[420, 630], [630, 870], [870, 1110], [1110, 1320]];
+function hash32(str) { let h = 2166136261; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
+const _calls = {};
+function callTimes(k) {
+  if (_calls[k]) return _calls[k];
+  const order = HOTELS.map(h => h.id);
+  let h = hash32("band|" + k);
+  for (let i = order.length - 1; i > 0; i--) { h = hash32(String(h)); const j = h % (i + 1), t = order[i]; order[i] = order[j]; order[j] = t; }
+  const out = {};
+  order.forEach((id, i) => { const b = BANDS[i], m = b[0] + hash32("jam|" + k + "|" + id) % (b[1] - b[0]); out[id] = pad(Math.floor(m / 60)) + ":" + pad(m % 60); });
+  return (_calls[k] = out);
+}
+
+/* sheet:true = diputuskan dari sheet/folder oleh laporan pagi, bukan oleh screenshot.
+   Baris begitu tidak masuk hitungan harian Naurah — dia mengejar orangnya, bukan menyetor bukti. */
+const TASKS = [
+  { id: "voucher", due: "09:00", sheet: true, title: "FO input voucher ke folder harian",
+    sub: "Folder KEMARIN harus sudah lengkap sebelum jam 09.00",
+    mine: "Kelengkapan: apakah SEMUA voucher hari itu masuk.",
+    targets: [{ id: "x", label: "Folder voucher kemarin lengkap" }] },
+
+  { id: "drr", due: "10:00", sheet: true, title: "Laporan owner DRR",
+    sub: "Daily Revenue Report dikirim ke owner",
+    mine: "Angka di dalam DRR — occupancy, ARR, revenue.",
+    targets: [{ id: "x", label: "DRR harian terkirim" }] },
+
+  { id: "sosmed", due: "11:00", title: "Cek IG, TikTok & WA hotel",
+    sub: "Semua pesan dibalas — terutama enquiry event",
+    mine: "Mutu balasannya, terutama enquiry event.",
+    targets: [{ id: "ig", label: "Instagram DM" }, { id: "tiktok", label: "TikTok inbox" }, { id: "wa", label: "WhatsApp hotel" }] },
+
+  { id: "ar", due: "13:00", title: "AR update semua hotel",
+    sub: "Account receivable per hotel",
+    mine: "Kebenaran angka AR — pakai pengecekan AR journal.",
+    targets: HOTELS.map(h => ({ id: h.id, label: h.label })) },
+
+  { id: "ota", due: "16:00", title: "Pesan OTA ter-respond ≤ 2 jam",
+    sub: "Booking.com, Trip.com, Tiket.com, Agoda",
+    mine: "Waktu respons sebenarnya di extranet.",
+    targets: [{ id: "bcom", label: "Booking.com" }, { id: "trip", label: "Trip.com" }, { id: "tiket", label: "Tiket.com" }, { id: "agoda", label: "Agoda" }] },
+
+  { id: "kunci", due: "17:00", cadence: 2, title: "Kunci Oak Tree",
+    sub: "Minimal 2× seminggu",
+    mine: "Kecocokan kunci dibuat vs check-in.",
+    targets: [{ id: "x", label: "Update kunci Oak Tree" }] },
+
+  { id: "testcall", due: "07:00", random: true, retry: true, noteRequired: true,
+    title: "Test call acak ke FO", sub: "4 unit, jam diundi tiap hari — 2× kalau tidak diangkat",
+    mine: "Isi percakapannya — greeting, product knowledge, sikap.",
+    targets: HOTELS.map(h => ({ id: h.id, label: h.label, sub: "tulis hasilnya di catatan" })) },
+
+  { id: "kitchen", due: "20:30", title: "Video call Bu Endah — dapur bersih",
+    sub: "Setelah closing, lewat video call bukan chat",
+    mine: "Apakah dapurnya benar-benar bersih sesuai standar.",
+    targets: [{ id: "call", label: "Bukti video call", sub: "harus video, ada durasi" },
+              { id: "foto", label: "Foto dapur", sub: "opsional", optional: true }] },
+
+  { id: "compset", due: "21:00", sheet: true, slots: 6, title: "FO isi form compset",
+    sub: "6 slot: 01.00, 09.00, 11.00, 14.00, 17.00, 21.00",
+    mine: "Apakah harga yang difoto FO benar (tanggal CI/CO, halaman bayar).",
+    targets: [{ id: "s01", label: "01.00", at: "01:00" }, { id: "s09", label: "09.00", at: "09:00" },
+              { id: "s11", label: "11.00", at: "11:00" }, { id: "s14", label: "14.00", at: "14:00" },
+              { id: "s17", label: "17.00", at: "17:00" }, { id: "s21", label: "21.00", at: "21:00" }] },
+
+  { id: "bincard", due: "21:00", title: "Bincard",
+    sub: "Verse Luxe (bar & kitchen) + Oak Tree",
+    mine: "Fisik stok vs angka di kartu.",
+    targets: [{ id: "luxebar", label: "Verse Luxe — Bar" }, { id: "luxekit", label: "Verse Luxe — Kitchen" }, { id: "oaktree", label: "Oak Tree" }] },
+
+  { id: "bnl", due: "22:00", title: "Upload log prices Bookandlink",
+    sub: "Per hotel, per tipe kamar",
+    mine: "Apakah harganya benar — itu keputusan komersial.",
+    targets: HOTELS.map(h => ({ id: h.id, label: h.label })) }
+];
+const keyFor = (t, g) => t.id + "-" + g.id;
+const HER = TASKS.filter(t => !t.sheet);
+const SHEETY = TASKS.filter(t => t.sheet);
+const atOf = (t, g) => t.random ? callTimes(S.dayKey)[g.id] : (g.at || t.due);
+const effMin = t => t.random ? Math.min.apply(null, t.targets.map(g => toMin(callTimes(S.dayKey)[g.id]))) : toMin(t.due);
+const reqTargets = t => t.targets.filter(g => !g.optional);
+const TOTAL = HER.reduce((a, t) => a + reqTargets(t).length, 0);
+
+/* ============================== state ============================== */
+const S = { dayKey: todayKey(), days: {}, hashes: {}, busy: {}, ready: false, prevDone: -1 };
+const $ = id => document.getElementById(id);
+const el = (tag, cls, txt) => { const n = document.createElement(tag); if (cls) n.className = cls; if (txt != null) n.textContent = txt; return n; };
+const rec = k => ((S.days[S.dayKey] || {}).items || {})[k] || {};
+
+/* ========================= baca / tulis Firebase ========================= */
+const path = p => dref(db, ROOT + "/" + p);
+let chain = Promise.resolve();
+const queue = fn => (chain = chain.catch(() => {}).then(fn), chain);
+
+function patchItem(k, patch) {
+  const base = "days/" + S.dayKey;
+  const body = { dayKey: S.dayKey };
+  Object.keys(patch).forEach(f => { body["items/" + k + "/" + f] = patch[f]; });
+  return queue(() => dupdate(path(base), body));
+}
+function addProof(k, proof) {
+  const body = { dayKey: S.dayKey };
+  body["items/" + k + "/proofs/" + proof.id] = proof;
+  return queue(() => dupdate(path("days/" + S.dayKey), body));
+}
+function recordHash(sha, ph, k) {
+  const month = S.dayKey.slice(0, 7);
+  S.hashes[sha] = { p: ph, d: S.dayKey, i: k };
+  const body = {}; body[sha] = { p: ph, d: S.dayKey, i: k, t: Date.now() };
+  return queue(() => dupdate(path("hashes/" + month), body));
+}
+async function loadHashes() {
+  for (const m of [S.dayKey.slice(0, 7), shiftKey(S.dayKey, -31).slice(0, 7)]) {
+    try { const s = await dget(path("hashes/" + m)); if (s.exists()) Object.assign(S.hashes, s.val() || {}); }
+    catch (e) { /* indeks duplikat opsional */ }
+  }
+}
+const proofsOf = r => r.proofs ? Object.keys(r.proofs).sort().map(i => r.proofs[i]) : [];
+
+/* ======================== sidik jari gambar ======================== */
+async function sha256(buf) {
+  const d = await crypto.subtle.digest("SHA-256", buf);
+  return Array.from(new Uint8Array(d)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+const POP = n => { let c = 0; while (n) { c += n & 1; n >>= 1; } return c; };
+function hamming(a, b) { if (!a || !b || a.length !== b.length) return 64; let d = 0; for (let i = 0; i < a.length; i++) d += POP(parseInt(a[i], 16) ^ parseInt(b[i], 16)); return d; }
+async function fingerprint(file) {
+  const bmp = await createImageBitmap(file), W = 9, H = 8, w0 = bmp.width, h0 = bmp.height;
+  const c = document.createElement("canvas"); c.width = W; c.height = H;
+  const ctx = c.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(bmp, 0, 0, W, H);
+  const d = ctx.getImageData(0, 0, W, H).data;
+  let bits = "";
+  for (let y = 0; y < H; y++) for (let x = 0; x < W - 1; x++) {
+    const i = (y * W + x) * 4, j = (y * W + x + 1) * 4;
+    const a = .299 * d[i] + .587 * d[i + 1] + .114 * d[i + 2];
+    const b = .299 * d[j] + .587 * d[j + 1] + .114 * d[j + 2];
+    bits += a > b ? "1" : "0";
+  }
+  let hex = ""; for (let k = 0; k < 64; k += 4) hex += parseInt(bits.slice(k, k + 4), 2).toString(16);
+  const MAX = 1600, sc = Math.min(1, MAX / Math.max(w0, h0));
+  const c2 = document.createElement("canvas");
+  c2.width = Math.max(1, Math.round(w0 * sc)); c2.height = Math.max(1, Math.round(h0 * sc));
+  c2.getContext("2d").drawImage(bmp, 0, 0, c2.width, c2.height);
+  if (bmp.close) bmp.close();
+  const blob = await new Promise(r => c2.toBlob(r, "image/jpeg", .8));
+  return { hex, w: w0, h: h0, blob };
+}
+function nearestHash(hex) {
+  let best = null;
+  for (const sha in S.hashes) { const e = S.hashes[sha], d = hamming(hex, e.p); if (!best || d < best.d) best = { d, day: e.d }; }
+  return best;
+}
+
+async function onPick(task, tgt, file) {
+  const k = keyFor(task, tgt);
+  if (S.busy[k]) return;
+  S.busy[k] = "Memproses…"; render();
+  try {
+    if (file.size > 25 * 1024 * 1024) throw new Error("File terlalu besar (maks 25 MB).");
+    const sha = (await sha256(await file.arrayBuffer())).slice(0, 24);
+    if (S.hashes[sha]) throw new Error("Screenshot ini sudah pernah dipakai (" + longDate(S.hashes[sha].d) + "). Ambil screenshot baru.");
+    let fp;
+    try { fp = await fingerprint(file); } catch (_) { throw new Error("Gambar tidak terbaca. Pakai PNG atau JPG."); }
+    const flags = [];
+    const near = nearestHash(fp.hex);
+    if (near && near.d <= 5 && near.day !== S.dayKey) flags.push("mirip:" + near.day);
+    if (file.lastModified && dayOfMs(file.lastModified) !== S.dayKey) flags.push("file:" + dayOfMs(file.lastModified));
+
+    S.busy[k] = "Mengunggah…"; render();
+    const id = "p" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+    const dest = sref(store, ROOT + "/" + S.dayKey + "/" + k + "/" + id + ".jpg");
+    await uploadBytes(dest, fp.blob, { contentType: "image/jpeg" });
+    const url = await getDownloadURL(dest);
+
+    await addProof(k, { id, url, name: String(file.name || "bukti").slice(0, 80), w: fp.w, h: fp.h,
+                        sha, ph: fp.hex, fmod: file.lastModified || 0, at: Date.now(), flags });
+    await recordHash(sha, fp.hex, k);
+    S.busy[k] = null; render();
+  } catch (e) {
+    S.busy[k] = null;
+    playThud();
+    alert(e && e.code === "storage/unauthorized"
+      ? "Akun ini belum diizinkan mengunggah. Hubungi owner."
+      : (e && e.message) || "Gagal mengunggah bukti.");
+    render();
+  }
+}
+
+/* ============================ status baris ============================ */
+const hasProof = r => proofsOf(r).length > 0;
+function blocked(task, tgt, r) {
+  if (!hasProof(r)) return "bukti";
+  if (task.retry && r.noanswer && proofsOf(r).length < 2) return "dua";
+  if (task.noteRequired && !(r.note || "").trim()) return "catatan";
+  return null;
+}
+function lateOf(task, tgt, r) {
+  return (r.done && r.at != null) ? Math.max(0, minsOf(r.at) - toMin(atOf(task, tgt))) : 0;
+}
+function statsFor(key) {
+  const items = (S.days[key] || {}).items || {};
+  let done = 0, late = 0, flag = 0;
+  HER.forEach(t => reqTargets(t).forEach(g => {
+    const r = items[keyFor(t, g)] || {};
+    if (!r.done) return;
+    done++;
+    if (proofsOf(r).some(p => (p.flags || []).length)) flag++;
+    else if (r.at != null && minsOf(r.at) > toMin(g.at || t.due)) late++;
+  }));
+  return { done, late, flag, total: TOTAL, perfect: done >= TOTAL };
+}
+function streakRun() {
+  let run = 0, k = S.dayKey;
+  if (!statsFor(k).perfect) k = shiftKey(k, -1);
+  while (S.days[k] && statsFor(k).perfect) { run++; k = shiftKey(k, -1); }
+  return run;
+}
+function weekCount(task) {
+  const dow = (dtOf(S.dayKey).getUTCDay() + 6) % 7;
+  let n = 0;
+  for (let i = 0; i <= dow; i++) {
+    const day = S.days[shiftKey(S.dayKey, -i)]; if (!day) continue;
+    task.targets.forEach(g => { if (((day.items || {})[keyFor(task, g)] || {}).done) n++; });
+  }
+  return n;
+}
+
+/* ============================== tampilan ============================== */
+const chip = (t, c) => el("span", "chip" + (c ? " " + c : ""), t);
+
+function renderHead() {
+  const st = statsFor(S.dayKey), pc = st.total ? Math.round(st.done / st.total * 100) : 0;
+  $("dateline").textContent = longDate(S.dayKey);
+  $("meterfill").style.width = pc + "%";
+  $("meterlabel").textContent = st.done + " / " + st.total + "  ·  " + pc + "%";
+  const mr = $("metarow"); mr.textContent = "";
+  [["tepat waktu", st.done - st.late - st.flag], ["telat", st.late], ["perlu dicek", st.flag], ["belum", st.total - st.done]]
+    .forEach(p => { const s = el("span"); s.appendChild(el("b", null, String(p[1]))); s.appendChild(document.createTextNode(" " + p[0])); mr.appendChild(s); });
+
+  const run = streakRun();
+  $("streakPill").className = "pill" + (run >= 3 ? " hot" : "");
+  $("streakVal").textContent = run >= 3 ? "🔥 " + run + " hari" : "—";
+  $("streakNote").textContent = run >= 3
+    ? "Jangan putus. Satu hari bolong, hitungan balik ke nol."
+    : (run === 0 ? "Selesaikan semua hari ini untuk mulai streak." : run + " hari berjalan — streak muncul di hari ke-3.");
+
+  const segs = $("bonusSegs"); segs.textContent = "";
+  for (let i = 0; i < 14; i++) { const s = el("i"); if (i < Math.min(run, 14)) s.className = "on"; segs.appendChild(s); }
+  $("bonusPill").className = "pill" + (run >= 14 ? " hot" : "");
+  $("bonusNote").textContent = run >= 14
+    ? "🎉 14 hari sempurna — bonus tercapai!"
+    : run + "/14 hari sempurna · kurang " + (14 - run) + " hari lagi";
+}
+function tickClock() {
+  const d = wib();
+  $("clock").textContent = pad(d.getUTCHours()) + ":" + pad(d.getUTCMinutes()) + ":" + pad(d.getUTCSeconds()) + " WIB";
+  const left = 86400000 - (d.getUTCHours() * 3600000 + d.getUTCMinutes() * 60000 + d.getUTCSeconds() * 1000);
+  $("lockin").textContent = "Hari terkunci dalam " + durTxt(left) + " — tidak bisa diisi mundur.";
+}
+
+function buildRow(task, tgt) {
+  const k = keyFor(task, tgt), r = rec(k), row = el("div", "row");
+  const tick = el("button", "tick", "✓");
+  tick.setAttribute("role", "checkbox");
+  tick.setAttribute("aria-checked", r.done ? "true" : "false");
+  tick.setAttribute("aria-label", "Centang " + tgt.label);
+  tick.disabled = !r.done && !!blocked(task, tgt, r);
+  tick.onclick = e => toggle(task, tgt, e.currentTarget);
+  row.appendChild(tick);
+
+  const main = el("div");
+  const lab = el("div", "rlab", tgt.label);
+  if (tgt.sub) lab.appendChild(el("small", null, tgt.sub));
+  main.appendChild(lab);
+  const chips = el("div", "chips");
+  const late = lateOf(task, tgt, r);
+  if (r.done) chips.appendChild(chip("✓ " + (r.at ? clockOf(r.at) : "—") + (late > 0 ? " (telat " + late + "m)" : ""), late > 0 ? "warn" : "ok"));
+  else if (tgt.optional) chips.appendChild(chip("opsional"));
+  else if (nowMins() > toMin(atOf(task, tgt))) chips.appendChild(chip("lewat " + atOf(task, tgt), "warn"));
+  if (task.random) chips.appendChild(chip("jam " + atOf(task, tgt), r.done ? "" : "acc"));
+  if (r.noanswer) chips.appendChild(chip("tidak diangkat — perlu 2 bukti", "bad"));
+  proofsOf(r).forEach(p => (p.flags || []).forEach(f => {
+    if (f.indexOf("mirip:") === 0) chips.appendChild(chip("mirip " + shortDate(f.slice(6)), "bad"));
+    if (f.indexOf("file:") === 0) chips.appendChild(chip("file " + shortDate(f.slice(5)), "warn"));
+  }));
+  if (S.busy[k]) chips.appendChild(chip(S.busy[k], "acc"));
+  main.appendChild(chips);
+  row.appendChild(main);
+
+  const act = el("div", "act"), thumbs = el("div", "thumbs");
+  proofsOf(r).forEach(p => {
+    const b = el("button", "thumb"); b.title = "Lihat bukti";
+    const img = el("img"); img.src = p.url; img.alt = "Bukti"; img.loading = "lazy";
+    b.appendChild(img); b.onclick = () => openLb(task, tgt, p);
+    thumbs.appendChild(b);
+  });
+  act.appendChild(thumbs);
+  if (proofsOf(r).length < 4) {
+    const up = el("label", "btn"); up.textContent = proofsOf(r).length ? "+ BUKTI" : "BUKTI";
+    const inp = el("input"); inp.type = "file"; inp.accept = "image/png,image/jpeg,image/webp"; inp.hidden = true;
+    inp.onchange = e => { const f = e.target.files && e.target.files[0]; e.target.value = ""; if (f) onPick(task, tgt, f); };
+    up.appendChild(inp); act.appendChild(up);
+  }
+  if (task.retry) {
+    const na = el("button", "btn mute", r.noanswer ? "DIANGKAT" : "TAK DIANGKAT");
+    na.onclick = () => patchItem(k, { noanswer: !r.noanswer });
+    act.appendChild(na);
+  }
+  row.appendChild(act);
+
+  if (task.noteRequired && (hasProof(r) || r.done)) {
+    const ta = el("textarea", "note");
+    ta.placeholder = "Catatan hasil (wajib)"; ta.value = r.note || ""; ta.dataset.notekey = k;
+    ta.onchange = e => patchItem(k, { note: String(e.target.value).slice(0, 500) });
+    row.appendChild(ta);
+  }
+  return row;
+}
+const shortDate = k => { const p = k.split("-"); return (+p[2]) + " " + BLN[+p[1] - 1].slice(0, 3); };
+
+function buildCard(task) {
+  const allDone = reqTargets(task).every(g => rec(keyFor(task, g)).done);
+  const card = el("div", "card" + (allDone ? " done" : ""));
+  const head = el("div", "chead");
+  head.appendChild(el("div", "tmark" + (task.random ? " rnd" : ""), task.random ? "ACAK" : task.due));
+  const t = el("div", "ctitle");
+  t.appendChild(el("h3", null, task.title));
+  t.appendChild(el("p", null, task.sub + (task.cadence ? " · " + weekCount(task) + "/" + task.cadence + " minggu ini" : "")));
+  head.appendChild(t);
+  card.appendChild(head);
+  const rows = el("div", "rows");
+  task.targets.forEach(g => rows.appendChild(buildRow(task, g)));
+  const mine = el("div", "mine");
+  mine.appendChild(el("b", null, "DICEK OWNER "));
+  mine.appendChild(document.createTextNode(task.mine));
+  rows.appendChild(mine);
+  card.appendChild(rows);
+  return card;
+}
+
+function renderAuto() {
+  const box = $("autoboard"); box.textContent = "";
+  SHEETY.forEach(t => {
+    const c = el("div", "autocard");
+    c.appendChild(el("h3", null, t.due + " · " + t.title));
+    const items = (S.days[S.dayKey] || {}).items || {};
+    const lines = t.targets.map(g => {
+      const a = (items[keyFor(t, g)] || {}).auto;
+      return g.label + ": " + (a ? a.detail : "menunggu laporan pagi");
+    });
+    c.appendChild(el("p", null, lines.join(" · ")));
+    box.appendChild(c);
+  });
+}
+function renderHistory() {
+  const g = $("hgrid"); g.textContent = "";
+  for (let i = 13; i >= 0; i--) {
+    const k = shiftKey(S.dayKey, -i), st = statsFor(k);
+    const c = el("div", "hcell" + (k === S.dayKey ? " cur" : ""));
+    c.title = longDate(k) + " — " + st.done + "/" + st.total;
+    c.appendChild(el("div", "hd", HARI3[dtOf(k).getUTCDay()]));
+    c.appendChild(el("div", "hn", k.slice(8)));
+    const bar = el("div", "hb");
+    if (st.done) bar.style.background = st.flag ? "var(--red)" : st.perfect ? "var(--green)" : st.done / st.total >= .5 ? "var(--gold)" : "var(--line2)";
+    c.appendChild(bar); g.appendChild(c);
+  }
+}
+function openLb(task, tgt, p) {
+  const lb = $("lightbox");
+  $("lbimg").src = p.url;
+  const bits = [task.title + " — " + tgt.label, "diunggah " + clockOf(p.at) + " WIB", p.w + "×" + p.h + " px", "sidik jari " + p.sha.slice(0, 12)];
+  if (p.fmod) bits.push("file dibuat " + shortDate(dayOfMs(p.fmod)));
+  $("lbmeta").textContent = bits.join(" · ");
+  lb.hidden = false;
+  const close = e => { if (e.target.tagName !== "IMG") { lb.hidden = true; lb.removeEventListener("click", close); } };
+  lb.addEventListener("click", close);
+}
+
+function render() {
+  const af = document.activeElement, nk = af && af.dataset ? af.dataset.notekey : null, caret = nk ? af.selectionStart : null;
+  renderHead();
+  const board = $("board"); board.textContent = "";
+  HER.slice().sort((a, b) => effMin(a) - effMin(b)).forEach(t => board.appendChild(buildCard(t)));
+  renderAuto(); renderHistory();
+  if (nk) { const b = document.querySelector('[data-notekey="' + nk + '"]'); if (b) { b.focus(); try { b.setSelectionRange(caret, caret); } catch (_) {} } }
+
+  const st = statsFor(S.dayKey);
+  if (S.ready && S.prevDone >= 0 && st.done > S.prevDone && st.perfect) {
+    playJackpot();
+    burst(innerWidth / 2, innerHeight * .45, true);
+    const run = streakRun();
+    toast(run >= 14 ? "🎉 14 HARI SEMPURNA — BONUS Rp 2.000.000!" :
+          run >= 3  ? "HARI INI BERSIH! 🔥 streak " + run + " hari" : "HARI INI BERSIH! Semua 32 beres.", 5200);
+  }
+  S.prevDone = st.done;
+}
+
+async function toggle(task, tgt, btn) {
+  const k = keyFor(task, tgt), r = rec(k);
+  if (r.done) { await patchItem(k, { done: false, at: null }); return; }
+  const why = blocked(task, tgt, r);
+  if (why) {
+    playThud();
+    toast({ bukti: "Upload bukti screenshot dulu — centang terkunci sampai ada bukti.",
+            dua: "Tidak diangkat — perlu bukti 2× percobaan panggilan.",
+            catatan: "Isi dulu catatan hasilnya." }[why], 3600);
+    return;
+  }
+  const box = btn.getBoundingClientRect();
+  playCoin(); burst(box.left + box.width / 2, box.top, false);
+  await patchItem(k, { done: true, at: Date.now() });
+}
+
+/* ================================ boot ================================ */
+function startApp() {
+  $("gate").hidden = true; $("app").hidden = false;
+  tickClock(); setInterval(tickClock, 1000);
+  setInterval(() => { const t = todayKey(); if (t !== S.dayKey) { S.dayKey = t; S.hashes = {}; S.prevDone = -1; loadHashes().then(render); render(); } }, 15000);
+  loadHashes();
+  onValue(query(dref(db, ROOT + "/days"), orderByKey(), limitToLast(21)), snap => {
+    S.days = snap.val() || {};
+    render();
+    S.ready = true;
+  }, err => {
+    $("banner").hidden = false;
+    $("banner").textContent = "Data tidak bisa dimuat: " + (err && err.message ? err.message : "cek koneksi") + ". Muat ulang halaman.";
+  });
+}
+
+/* --------------------------- gerbang PIN --------------------------- */
+let pin = "", busyPin = false;
+const dots = () => $("dots").querySelectorAll("i");
+function drawPin(err) {
+  $("dots").className = "dots" + (err ? " err" : "");
+  dots().forEach((d, i) => { d.className = i < pin.length ? "on" : ""; });
+}
+async function submitPin() {
+  if (busyPin) return;
+  busyPin = true; $("gatemsg").textContent = "";
+  try {
+    await setPersistence(auth, browserLocalPersistence);
+    await signInWithEmailAndPassword(auth, ACCOUNT, pin);
+    playCoin();
+  } catch (e) {
+    busyPin = false; playThud();
+    pin = ""; drawPin(true);
+    const code = e && e.code || "";
+    $("gatemsg").textContent =
+      code === "auth/too-many-requests" ? "Terlalu banyak percobaan. Tunggu beberapa menit." :
+      code === "auth/network-request-failed" ? "Tidak ada koneksi internet." :
+      code === "auth/invalid-credential" || code === "auth/wrong-password" || code === "auth/user-not-found" ? "✗ PIN salah" :
+      "Gagal masuk (" + (code || "error") + ")";
+    setTimeout(() => drawPin(false), 900);
+    return;
+  }
+  busyPin = false;
+}
+(function buildPad() {
+  const p = $("pad");
+  ["1","2","3","4","5","6","7","8","9","hapus","0","ok"].forEach(key => {
+    const b = el("button", key === "hapus" || key === "ok" ? "wide" : "", key === "hapus" ? "⌫" : key === "ok" ? "OK" : key);
+    b.onclick = () => {
+      ac();
+      if (key === "hapus") { pin = pin.slice(0, -1); drawPin(false); return; }
+      if (key === "ok") { if (pin.length === 6) submitPin(); return; }
+      if (pin.length < 6) { pin += key; drawPin(false); tone(660 + pin.length * 40, 0, .05, "triangle", .07); }
+      if (pin.length === 6) submitPin();
+    };
+    p.appendChild(b);
+  });
+  drawPin(false);
+})();
+addEventListener("keydown", e => {
+  if (!$("gate").hidden) {
+    if (/^[0-9]$/.test(e.key) && pin.length < 6) { pin += e.key; drawPin(false); if (pin.length === 6) submitPin(); }
+    else if (e.key === "Backspace") { pin = pin.slice(0, -1); drawPin(false); }
+  }
+  if (e.key === "Escape") $("lightbox").hidden = true;
+});
+onAuthStateChanged(auth, u => { if (u && $("app").hidden) startApp(); });
+</script>
+</body>
+</html>
