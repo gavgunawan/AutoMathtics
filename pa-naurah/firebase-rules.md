@@ -64,5 +64,7 @@ service firebase.storage {
 
 ## 4. Authorised domain
 
-Console → **Authentication** → **Settings** → **Authorised domains** → add `automathtics.net`.
-Without it, sign-in from the live site is rejected even with the right PIN.
+Console → **Authentication** → **Settings** → **Authorised domains** → add `gavgunawan.github.io`.
+Without it, sign-in from the live site is rejected even with the right PIN. `automathtics.net` points at
+Firebase Hosting, not GitHub Pages, so it does not serve this page today — add that domain too only
+once the page is actually deployed there.

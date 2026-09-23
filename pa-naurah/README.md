@@ -1,6 +1,6 @@
 # /pa-naurah — the PA checklist as a website
 
-Served at **automathtics.net/pa-naurah** by the same Pages workflow that publishes the game.
+Served at **https://gavgunawan.github.io/AutoMathtics/pa-naurah/** by the same Pages workflow that publishes the game.
 `index.html` is a complete standalone document: no build step, no framework, Firebase loaded as
 ES modules from gstatic.
 
@@ -58,6 +58,16 @@ fourteen segments under the counter. One missed day puts it back to zero.
 
 The workflow triggers on pushes to `main` touching `index.html`, `pa-naurah/index.html` or the
 workflow itself, and stages only those two files. Nothing else in the repository is ever served.
+
+**`automathtics.net` is not this site.** It resolves to 199.36.158.100, a Firebase Hosting address;
+GitHub Pages serves from 185.199.108–111.153. The domain fronts the v3 Cloud Run service described
+in `commercial/DEPLOY_V3.md`, so merging to `main` publishes this page to the Pages URL above and
+nothing appears at automathtics.net. Moving it there later means adding a hosting route in whichever
+Firebase project holds the domain, and adding that domain to the Auth authorised list.
+
+The Pages URL is **public** — anyone who finds it loads the shell. That is fine and intended: the
+shell holds no data and no PIN, and every byte of content arrives only after Firebase authenticates
+the typed PIN. The page also carries `noindex, nofollow` so it stays out of search results.
 
 ## The morning report
 
