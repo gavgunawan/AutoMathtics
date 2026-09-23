@@ -1,11 +1,12 @@
-# Publishes ONLY the built game (index.html) to GitHub Pages, so nothing else in the repository —
-# sources, docs, the v3 commercial tree once it merges — is ever served from the site.
+# Publishes ONLY the built game (index.html) and the PA checklist (pa-naurah/index.html) to
+# GitHub Pages, so nothing else in the repository — sources, docs, the v3 commercial tree once it
+# merges — is ever served from the site.
 # One-time setup: repository Settings → Pages → Build and deployment → Source: "GitHub Actions".
 name: Publish the game to GitHub Pages
 on:
   push:
     branches: ['main']
-    paths: ['index.html', '.github/workflows/pages.yml']
+    paths: ['index.html', 'pa-naurah/index.html', '.github/workflows/pages.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -26,8 +27,9 @@ jobs:
           persist-credentials: false
       - name: Stage only the built game
         run: |
-          mkdir -p _site
+          mkdir -p _site/pa-naurah
           cp index.html _site/index.html
+          cp pa-naurah/index.html _site/pa-naurah/index.html
           touch _site/.nojekyll
       - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
       - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
