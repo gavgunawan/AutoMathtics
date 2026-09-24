@@ -17,8 +17,13 @@ this password — nothing in the code.
 
 ## 2. Realtime Database rules
 
-Console → **Realtime Database** → **Rules**. Merge the `pa` block into the existing rules; do not
-drop the `families` block the game uses.
+Console → **Realtime Database** → **Rules** → Publish. Note that Firestore rules are a *different*
+screen; pasting there leaves this database on its old rules and every read fails with
+`permission_denied at /pa/naurah/days`.
+
+Matched on the account's UID rather than its email: exact, and independent of which claims the
+token happens to carry. The UID is not a credential — a token carrying it still requires the
+password, which is the PIN. Find it under Authentication → Users if the account is ever recreated.
 
 ```json
 {
@@ -33,30 +38,38 @@ drop the `families` block the game uses.
     },
     "pa": {
       "naurah": {
-        ".read":  "auth != null && auth.token.email === 'pa-naurah@automathtics.app'",
-        ".write": "auth != null && auth.token.email === 'pa-naurah@automathtics.app'"
+        ".read":  "auth.uid === 'z2HMZKfuLaZkrUPoe32f6iRPRtn1'",
+        ".write": "auth.uid === 'z2HMZKfuLaZkrUPoe32f6iRPRtn1'"
       }
     }
   }
 }
 ```
 
-Scoping to that one email matters: the game signs players in too, so a bare `auth != null` would
-let any player read the hotel data through the API.
+Scoping to that one account matters: the game signs its players in against the same project, so a
+bare `auth != null` would let any player read the hotel data through the API.
 
 ## 3. Storage rules
 
-Console → **Storage** → **Rules**.
+Console → **Storage** → **Rules** → Publish. A third separate screen again.
+
+`read` and `write` must NOT share one condition. `request.resource` exists only on a write and is
+null on a read, so a combined rule that inspects `request.resource.size` fails every read — uploads
+would succeed and then every thumbnail would come back broken. Keep them split:
 
 ```
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
     match /pa/naurah/{allPaths=**} {
-      allow read, write: if request.auth != null
-        && request.auth.token.email == 'pa-naurah@automathtics.app'
+      allow read: if request.auth != null
+        && request.auth.uid == 'z2HMZKfuLaZkrUPoe32f6iRPRtn1';
+      allow create, update: if request.auth != null
+        && request.auth.uid == 'z2HMZKfuLaZkrUPoe32f6iRPRtn1'
         && request.resource.size < 25 * 1024 * 1024
         && request.resource.contentType.matches('image/.*');
+      allow delete: if request.auth != null
+        && request.auth.uid == 'z2HMZKfuLaZkrUPoe32f6iRPRtn1';
     }
   }
 }
