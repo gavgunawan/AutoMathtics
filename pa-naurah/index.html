@@ -176,6 +176,19 @@ button{font:inherit;color:inherit;cursor:pointer}
 .hcell .hn{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--txt);font-variant-numeric:tabular-nums}
 .hcell .hb{height:4px;border-radius:2px;margin:4px 5px 0;background:#1A1F4D}
 
+.linkbtn{background:none;border:0;padding:0;color:var(--dim);font-family:var(--mono);font-size:11px;text-decoration:underline;cursor:pointer}
+.linkbtn:hover{color:var(--cyan)}
+.diag{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:13px 15px;margin-bottom:14px;scroll-margin-top:200px}
+.diaghead{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:9px}
+.diaghead b{font-family:var(--head);font-size:11px;letter-spacing:.16em;color:var(--cyan)}
+.dline{display:flex;gap:9px;align-items:flex-start;padding:7px 0;border-bottom:1px solid rgba(42,49,112,.5);font-size:13px}
+.dline:last-child{border-bottom:0}
+.dmark{font-family:var(--mono);font-size:12px;font-weight:700;flex:none;width:52px}
+.dok{color:var(--green)} .dbad{color:var(--red)} .drun{color:var(--cyan)}
+.dbody{min-width:0;flex:1}
+.dbody b{display:block;font-weight:600;color:var(--txt)}
+.dbody span{display:block;color:var(--dim);font-size:12px;margin-top:2px;word-break:break-word}
+.dbody a{color:var(--cyan);font-size:12px}
 .banner{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--gold);border-radius:12px;padding:11px 14px;margin-bottom:14px;font-size:13.5px;color:var(--dim)}
 .banner b{color:var(--txt)}
 
@@ -235,12 +248,22 @@ button{font:inherit;color:inherit;cursor:pointer}
           <div class="segs" id="bonusSegs"></div>
         </div>
       </div>
-      <div class="metarow" style="margin-top:8px"><span class="lockin" id="lockin"></span></div>
+      <div class="metarow" style="margin-top:8px">
+        <span class="lockin" id="lockin"></span>
+        <button class="linkbtn" id="diagopen">diagnosa</button>
+      </div>
     </div>
   </header>
 
   <main class="wrap">
     <div class="banner" id="banner" hidden></div>
+    <div class="diag" id="diag" hidden>
+      <div class="diaghead">
+        <b>DIAGNOSA</b>
+        <button class="btn" id="diagrun">JALANKAN</button>
+      </div>
+      <div id="diagout"></div>
+    </div>
     <div id="board"></div>
     <div class="sec">DICEK OTOMATIS DARI SHEET</div>
     <div id="autoboard"></div>
@@ -260,7 +283,7 @@ import { getAuth, signInWithEmailAndPassword, setPersistence, browserLocalPersis
   from "https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
 import { getDatabase, ref as dref, get as dget, update as dupdate, onValue, query, orderByKey, limitToLast }
   from "https://www.gstatic.com/firebasejs/12.18.0/firebase-database.js";
-import { getStorage, ref as sref, uploadBytes, getDownloadURL }
+import { getStorage, ref as sref, uploadBytes, getDownloadURL, deleteObject }
   from "https://www.gstatic.com/firebasejs/12.18.0/firebase-storage.js";
 
 /* Sama dengan konfigurasi yang dipakai game — proyek Firebase-nya satu. */
@@ -779,6 +802,8 @@ function startApp() {
   $("gate").hidden = true; $("app").hidden = false;
   tickClock(); setInterval(tickClock, 1000);
   setInterval(() => { const t = todayKey(); if (t !== S.dayKey) { S.dayKey = t; S.hashes = {}; S.prevDone = -1; loadHashes().then(render); render(); } }, 15000);
+  $("diagrun").onclick = runDiag;
+  $("diagopen").onclick = () => { const d = $("diag"); d.hidden = !d.hidden; if (!d.hidden && !$("diagout").childElementCount) runDiag(); };
   loadHashes();
   onValue(query(dref(db, ROOT + "/days"), orderByKey(), limitToLast(21)), snap => {
     S.days = snap.val() || {};
@@ -789,8 +814,83 @@ function startApp() {
     }
   }, err => {
     $("banner").hidden = false;
-    $("banner").textContent = "Data tidak bisa dimuat: " + (err && err.message ? err.message : "cek koneksi") + ". Muat ulang halaman.";
+    $("banner").textContent = "Data tidak bisa dimuat: " + (err && err.message ? err.message : "cek koneksi") +
+      " \u2014 diagnosa di bawah menunjukkan izin mana yang salah.";
+    $("diag").hidden = false;
+    runDiag();
   });
+}
+
+/* ---------------------- diagnosa sendiri ----------------------
+   Empat izin yang harus benar, diuji satu per satu dengan permintaan
+   sungguhan. Tiap baris menyebut layar konsol yang memperbaikinya, jadi
+   satu kali lihat sudah cukup untuk tahu mana yang salah. */
+const CONSOLE_DB = "https://console.firebase.google.com/project/automathtics/database/automathtics-default-rtdb/rules";
+const CONSOLE_ST = "https://console.firebase.google.com/project/automathtics/storage/rules";
+
+function diagLine(state, title, detail, link, linkText) {
+  const row = el("div", "dline");
+  row.appendChild(el("div", "dmark " + (state === "ok" ? "dok" : state === "run" ? "drun" : "dbad"),
+                     state === "ok" ? "LOLOS" : state === "run" ? "…" : "GAGAL"));
+  const b = el("div", "dbody");
+  b.appendChild(el("b", null, title));
+  if (detail) b.appendChild(el("span", null, detail));
+  if (link) { const a = el("a", null, linkText || "Perbaiki di sini"); a.href = link; a.target = "_blank"; a.rel = "noopener"; b.appendChild(a); }
+  row.appendChild(b);
+  return row;
+}
+const errCode = e => (e && (e.code || e.message)) ? String(e.code || e.message).slice(0, 160) : "tidak diketahui";
+
+async function runDiag() {
+  const out = $("diagout"), btn = $("diagrun");
+  btn.disabled = true; out.textContent = "";
+  const add = (...a) => out.appendChild(diagLine(...a));
+
+  // 1 — baca database: ini yang bikin papan muncul
+  try {
+    await dget(path("days"));
+    add("ok", "Papan bisa dimuat", "Aturan baca Realtime Database benar.");
+  } catch (e) {
+    add("bad", "Papan TIDAK bisa dimuat", "Aturan baca Realtime Database menolak: " + errCode(e) +
+        ". Pastikan blok \u201cpa\u201d ada di Realtime Database \u2014 bukan di Firestore, itu layar lain.", CONSOLE_DB, "Buka aturan Realtime Database");
+  }
+
+  // 2 — tulis database: ini yang bikin centang tersimpan
+  try {
+    const root = dref(db, ROOT);
+    await dupdate(root, { selftest: { ping: Date.now() } });
+    await dupdate(root, { selftest: null });
+    add("ok", "Centang bisa tersimpan", "Aturan tulis Realtime Database benar.");
+  } catch (e) {
+    add("bad", "Centang TIDAK tersimpan", "Aturan tulis Realtime Database menolak: " + errCode(e), CONSOLE_DB, "Buka aturan Realtime Database");
+  }
+
+  // 3 & 4 — unggah lalu baca kembali: dua izin berbeda, gagalnya juga berbeda
+  const c = document.createElement("canvas"); c.width = c.height = 1;
+  c.getContext("2d").fillRect(0, 0, 1, 1);
+  const blob = await new Promise(r => c.toBlob(r, "image/png"));
+  const probe = sref(store, ROOT + "/selftest/probe.png");
+  let uploaded = false;
+  try {
+    await uploadBytes(probe, blob, { contentType: "image/png" });
+    uploaded = true;
+    add("ok", "Bukti bisa diunggah", "Aturan tulis Storage benar.");
+  } catch (e) {
+    add("bad", "Bukti TIDAK bisa diunggah", "Aturan Storage menolak: " + errCode(e) +
+        ". Storage punya layar aturan sendiri, terpisah dari database.", CONSOLE_ST, "Buka aturan Storage");
+  }
+  if (uploaded) {
+    try {
+      await getDownloadURL(probe);
+      add("ok", "Bukti bisa ditampilkan", "Aturan baca Storage benar.");
+    } catch (e) {
+      add("bad", "Bukti TIDAK tampil setelah diunggah", "Aturan baca Storage menolak: " + errCode(e) +
+          ". Biasanya karena read dan write dijadikan satu baris \u2014 request.resource hanya ada saat menulis, jadi setiap pembacaan gagal. Pisahkan read dari create/update.",
+          CONSOLE_ST, "Buka aturan Storage");
+    }
+    try { await deleteObject(probe); } catch (_) { /* sisa probe tidak mengganggu */ }
+  }
+  btn.disabled = false;
 }
 
 /* --------------------------- gerbang PIN --------------------------- */

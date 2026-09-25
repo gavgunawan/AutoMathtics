@@ -94,3 +94,24 @@ The claude.ai artifact version (`../pa-checklist/`) is no longer the live system
 repository as the reference implementation of the Claude-vision and live-Drive checks, which a
 static page cannot do. Nothing reads or writes it any more — delete the artifact from the gallery
 whenever convenient.
+
+## Diagnosing a broken setup
+
+The page diagnoses itself. A `diagnosa` link sits under the countdown, and if the live
+subscription is refused the panel opens and runs on its own.
+
+It tests the four permissions separately, with real requests, because they fail independently and
+for different reasons:
+
+| Line | What it proves | Fix screen |
+|---|---|---|
+| Papan bisa dimuat | Realtime Database **read** | Database rules |
+| Centang bisa tersimpan | Realtime Database **write** | Database rules |
+| Bukti bisa diunggah | Storage **create** | Storage rules |
+| Bukti bisa ditampilkan | Storage **read** | Storage rules |
+
+Each failing line prints the Firebase error code verbatim and links to the console screen that
+fixes it. The database lines name the Firestore mix-up; the storage read line names the
+`request.resource` trap, since those are the two that actually happened.
+
+The probe writes `selftest` to the database and `selftest/probe.png` to storage, then removes both.
