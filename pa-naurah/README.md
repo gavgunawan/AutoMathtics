@@ -115,3 +115,19 @@ fixes it. The database lines name the Firestore mix-up; the storage read line na
 `request.resource` trap, since those are the two that actually happened.
 
 The probe writes `selftest` to the database and `selftest/probe.png` to storage, then removes both.
+
+## Why the Firebase app is named
+
+`initializeApp(FB, "panaurah")` — the second argument matters.
+
+The game is served from `/AutoMathtics/` and this page from `/AutoMathtics/pa-naurah/`: the same
+origin, the same Firebase project, the same API key. Firebase Auth keys its stored session on
+exactly `apiKey + appName`, so with the default app name both pages share one auth state. The game
+signs its players in anonymously, and that session was being picked up here — the page saw a user,
+skipped the PIN gate, and then every rule correctly refused a token belonging to a game player
+rather than to the PA. It looked exactly like broken rules.
+
+A distinct app name gives this page its own storage slot. Belt and braces, `onAuthStateChanged`
+also admits only `pa-naurah@automathtics.app`; any other account is signed out and the gate stays
+up. The diagnosis panel names an anonymous token explicitly, since that is the symptom that
+misleads.
