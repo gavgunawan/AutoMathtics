@@ -189,6 +189,12 @@ button{font:inherit;color:inherit;cursor:pointer}
 .dbody b{display:block;font-weight:600;color:var(--txt)}
 .dbody span{display:block;color:var(--dim);font-size:12px;margin-top:2px;word-break:break-word}
 .dbody a{color:var(--cyan);font-size:12px}
+.whoami{background:#0D1233;border:1px solid var(--line);border-radius:10px;padding:9px 11px;margin-bottom:10px}
+.whoami b{display:block;font-family:var(--head);font-size:9.5px;letter-spacing:.14em;color:var(--cyan);margin-bottom:5px}
+.whoami div{font-family:var(--mono);font-size:12px;line-height:1.6}
+.whoami i{color:var(--dim);font-style:normal}
+.whoami code{color:var(--txt);user-select:all;font-family:var(--mono)}
+.whoami span{display:block;color:var(--dim);font-size:11.5px;margin-top:6px;line-height:1.45;font-family:var(--body)}
 .banner{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--gold);border-radius:12px;padding:11px 14px;margin-bottom:14px;font-size:13.5px;color:var(--dim)}
 .banner b{color:var(--txt)}
 
@@ -845,6 +851,18 @@ async function runDiag() {
   const out = $("diagout"), btn = $("diagrun");
   btn.disabled = true; out.textContent = "";
   const add = (...a) => out.appendChild(diagLine(...a));
+
+  const u = auth.currentUser;
+  const who = el("div", "whoami");
+  if (u) {
+    who.appendChild(el("b", null, "Token yang dipakai sekarang"));
+    const e = el("div"); e.appendChild(el("i", null, "email ")); e.appendChild(el("code", null, u.email || "—")); who.appendChild(e);
+    const i = el("div"); i.appendChild(el("i", null, "UID  ")); i.appendChild(el("code", null, u.uid)); who.appendChild(i);
+    who.appendChild(el("span", null, "UID ini harus sama persis dengan yang ditulis di aturan Realtime Database dan Storage. Kalau berbeda, semua baris di bawah akan GAGAL walaupun PIN-nya benar."));
+  } else {
+    who.appendChild(el("b", null, "Belum ada token \u2014 belum masuk."));
+  }
+  out.appendChild(who);
 
   // 1 — baca database: ini yang bikin papan muncul
   try {
