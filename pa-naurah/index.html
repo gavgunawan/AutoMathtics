@@ -285,7 +285,7 @@ button{font:inherit;color:inherit;cursor:pointer}
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
-import { getAuth, signInWithEmailAndPassword, setPersistence, browserLocalPersistence, onAuthStateChanged }
+import { getAuth, signInWithEmailAndPassword, setPersistence, browserLocalPersistence, onAuthStateChanged, signOut }
   from "https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
 import { getDatabase, ref as dref, get as dget, update as dupdate, onValue, query, orderByKey, limitToLast }
   from "https://www.gstatic.com/firebasejs/12.18.0/firebase-database.js";
@@ -308,7 +308,7 @@ const FB = {
 const ACCOUNT = "pa-naurah@automathtics.app";
 const ROOT = "pa/naurah";
 
-const app = initializeApp(FB);
+const app = initializeApp(FB, "panaurah");
 const auth = getAuth(app), db = getDatabase(app), store = getStorage(app);
 
 /* ============================ waktu WIB ============================ */
@@ -858,7 +858,9 @@ async function runDiag() {
     who.appendChild(el("b", null, "Token yang dipakai sekarang"));
     const e = el("div"); e.appendChild(el("i", null, "email ")); e.appendChild(el("code", null, u.email || "—")); who.appendChild(e);
     const i = el("div"); i.appendChild(el("i", null, "UID  ")); i.appendChild(el("code", null, u.uid)); who.appendChild(i);
-    who.appendChild(el("span", null, "UID ini harus sama persis dengan yang ditulis di aturan Realtime Database dan Storage. Kalau berbeda, semua baris di bawah akan GAGAL walaupun PIN-nya benar."));
+    who.appendChild(el("span", null, u.isAnonymous || !u.email
+      ? "Ini akun ANONIM \u2014 bukan akun checklist. Sesi ini terbawa dari halaman lain di domain yang sama. Muat ulang halaman, lalu masukkan PIN."
+      : "UID ini harus sama persis dengan yang ditulis di aturan Realtime Database dan Storage. Kalau berbeda, semua baris di bawah akan GAGAL walaupun PIN-nya benar."));
   } else {
     who.appendChild(el("b", null, "Belum ada token \u2014 belum masuk."));
   }
@@ -923,6 +925,8 @@ async function submitPin() {
   busyPin = true; $("gatemsg").textContent = "";
   try {
     await setPersistence(auth, browserLocalPersistence);
+    // sisa sesi akun lain harus dibuang dulu, bukan dipakai ulang
+    if (auth.currentUser && auth.currentUser.email !== ACCOUNT) await signOut(auth);
     await signInWithEmailAndPassword(auth, ACCOUNT, pin);
     playCoin();
   } catch (e) {
@@ -961,7 +965,10 @@ addEventListener("keydown", e => {
   }
   if (e.key === "Escape") $("lightbox").hidden = true;
 });
-onAuthStateChanged(auth, u => { if (u && $("app").hidden) startApp(); });
+onAuthStateChanged(auth, u => {
+  if (u && u.email === ACCOUNT) { if ($("app").hidden) startApp(); return; }
+  if (u) { signOut(auth).catch(() => {}); $("gatemsg").textContent = "Sesi akun lain dibersihkan \u2014 masukkan PIN."; }
+});
 </script>
 </body>
 </html>
